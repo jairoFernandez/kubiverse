@@ -1,0 +1,42 @@
+extends SceneTree
+## Headless checks: godot --headless --path game --script res://tests/test_world.gd
+
+func _init() -> void:
+	await process_frame
+	var fails := 0
+	var mock := MockCluster.new()
+	root.add_child(mock)
+	var box := {}
+	mock.state_changed.connect(func(s): box["s"] = s)
+	mock.start()
+	var st: Dictionary = box["s"]
+	var world := World.new()
+	root.add_child(world)
+	world.state = st
+	for level in ["plant", "ns:shop", "power"]:
+		world.set_level(level)
+		if not world.can_stand(world.spawn):
+			print("FAIL %s: spawn not standable" % level); fails += 1
+		if world.can_stand(Vector3(500, 0, 500)):
+			print("FAIL %s: void is standable" % level); fails += 1
+		if world.doors.is_empty():
+			print("FAIL %s: no doors" % level); fails += 1
+		# Walking straight into the void must stop at the edge.
+		var p := world.spawn
+		for i in 2000:
+			p = world.move_player(p, Vector3(0.05, 0, 0.05))
+		if not world.can_stand(p):
+			print("FAIL %s: walked off the map to %s" % [level, p]); fails += 1
+	world.set_level("plant")
+	var b: FactoryBuilding = world.buildings.get("shop")
+	if b == null or world.can_stand(b.target):
+		print("  shop=%s" % b)
+		print("FAIL: can walk inside the shop hall"); fails += 1
+	if world.buildings.size() != st.namespaces.size() + 1:
+		print("FAIL: expected a hall per namespace (+power), got %d" % world.buildings.size()); fails += 1
+	world.set_level("ns:shop")
+	var line: ProductionLine = world.lines.values()[0]
+	if world.can_stand(line.target + Vector3(4, 0, 0)):
+		print("FAIL: can walk through a conveyor"); fails += 1
+	print("world tests: %s" % ("OK" if fails == 0 else "%d FAILED" % fails))
+	quit(fails)
