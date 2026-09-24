@@ -18,6 +18,10 @@ var _hop_cd := 0.0
 var _smoke_cd := 0.0
 var _spawn := 0.0
 var _yaw := 0.0
+var _slump := 0.0     # Terminating: the robot powers down and leans forward
+var _spark_cd := 0.0
+var _flash := 0.0
+var _knock := Vector3.ZERO
 
 
 func _init() -> void:
@@ -75,6 +79,9 @@ func label_sub() -> String:
 	var t := tr("%s  %d/%d ready") % [data.get("status", ""), int(data.get("ready", 0)), int(data.get("total", 0))]
 	if int(data.get("restarts", 0)) > 0:
 		t += tr("  %d restarts") % int(data.restarts)
+	var msg: String = data.get("message", "")
+	if node_name == "" and msg != "":
+		t += "  - " + (msg.left(60) + "..." if msg.length() > 60 else msg)
 	return t
 
 
@@ -86,11 +93,21 @@ func anchor() -> Vector3:
 	return global_position + Vector3(0, top_y + 0.9, 0)
 
 
+## The pod is gone from the cluster: flash and break into voxel pieces.
 func die() -> void:
 	dying = true
-	category = "term"
 	if world:
-		world.poof(global_position + Vector3(0, 0.6, 0), Vox.ns_color(data.get("ns", "")))
+		world.shatter(global_position, top_y, Vox.ns_color(data.get("ns", "")))
+	queue_free()
+
+
+## Hit by the blaster: a white flash and a knock back (the real deletion
+## arrives a moment later through the cluster watch).
+func hit(from: Vector3) -> void:
+	_flash = 0.25
+	var away := global_position - from
+	away.y = 0
+	_knock = away.normalized() * 0.6
 
 
 func _rebuild() -> void:
@@ -164,20 +181,38 @@ func _process(delta: float) -> void:
 			bob = sin(_t * 2.0) * 0.03
 			_yaw += delta * 0.8
 		"term":
-			pass
+			# Powering down: lean forward, twitch now and then, give off sparks.
+			_slump = minf(1.0, _slump + delta * 0.8)
+			if fmod(_t, 1.3) < 0.08:
+				shake = sin(_t * 80.0) * 0.05
+			_spark_cd -= delta
+			if _spark_cd <= 0.0 and world:
+				_spark_cd = randf_range(0.25, 0.6)
+				if randf() < 0.3:
+					world.poof(global_position + Vector3(randf_range(-0.3, 0.3), top_y, randf_range(-0.3, 0.3)), Vox.YELLOW)
+				else:
+					world.smoke(global_position + Vector3(0, top_y, 0), Color("6b6f80"))
 	if _hop > 0.0:
 		_hop = maxf(0.0, _hop - delta * 2.5)
 		bob += sin((1.0 - _hop) * PI) * 0.45
-	if dying or category == "term":
+	if category == "term":
 		_spawn = 1.0
-		var sc := scale.x - delta * (1.6 if dying else 0.3)
-		scale = Vector3.ONE * maxf(0.3 if not dying else 0.0, sc)
-		p.y -= delta * 0.2
-		if dying and scale.x <= 0.01:
-			queue_free()
-			return
+		scale = Vector3.ONE
 	else:
+		_slump = maxf(0.0, _slump - delta * 2.0)
 		scale = Vector3.ONE * s
+	if _body:
+		_body.rotation.x = _slump * 0.45
+		_body.position.y = -_slump * 0.08
+	if _gem:
+		_gem.visible = category != "term" or fmod(_t, 0.5) < 0.3
+	# Blaster hit: knock back and flash
+	if _knock.length() > 0.01:
+		p += _knock * delta * 8.0
+		_knock = _knock.lerp(Vector3.ZERO, clampf(delta * 6.0, 0.0, 1.0))
+	if _flash > 0.0:
+		_flash -= delta
+		scale = Vector3.ONE * (1.0 + _flash * 0.6)
 	position = Vector3(p.x + shake, target.y + bob, p.z)
 	rotation.y = lerp_angle(rotation.y, _yaw, clampf(delta * 3.0, 0.0, 1.0))
 	if _gem:

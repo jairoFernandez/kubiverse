@@ -11,7 +11,7 @@ const DRAG_THRESHOLD := 6.0  # px before a click becomes a drag
 const ZOOM_MIN := 10.0
 const ZOOM_MAX := 70.0
 
-const LEVEL_ZOOM := {"plant": 34.0, "power": 30.0}
+const LEVEL_ZOOM := {"plant": 34.0, "power": 38.0}
 
 var world: World
 var player: Player
@@ -27,6 +27,9 @@ var _fpv := false
 var _fyaw := 0.0
 var _fpitch := 0.0
 var _bob := 0.0
+var _viewmodel: Node3D        # first-person weapon in the corner of the screen
+const VM_POS := Vector3(0.2, -0.17, -0.42)
+var _recoil := 0.0
 # Day/night cycle driven by the cluster clock
 var _env: Environment
 var _sun: DirectionalLight3D
@@ -118,8 +121,11 @@ func _ready() -> void:
 		var back: Vector3 = player.last_safe
 		player.teleport(_standable_near(back) if world.can_stand(back) else world.spawn)
 		world.poof(player.global_position + Vector3(0, 1, 0), Vox.WHITE)
+		Sfx.play("fall")
 		hud.toast(tr("You fell into the void! Back to the hub."), false))
-	player.coin.connect(func(): hud.toast(tr("Coins: %d") % player.coins, true))
+	player.coin.connect(func():
+		Sfx.play("coin")
+		hud.toast(tr("Coins: %d") % player.coins, true))
 
 	_pivot = Node3D.new()
 	_vp.add_child(_pivot)
@@ -137,11 +143,15 @@ func _ready() -> void:
 	_fcam.near = 0.05
 	_fcam.far = 220.0
 	_vp.add_child(_fcam)
+	_viewmodel = Node3D.new()
+	_fcam.add_child(_viewmodel)
+	_build_viewmodel(0)
 
 	hud = Hud.new()
 	hud.world = world
 	add_child(hud)
 	hud.disconnect_requested.connect(func():
+		_need_spawn = true
 		K8s.disconnect_all()
 		hud.show_connect(true))
 	hud.recenter_requested.connect(func(): _pan = Vector3.ZERO)
@@ -154,22 +164,33 @@ func _ready() -> void:
 	hud.missions = missions
 	missions.progress_changed.connect(hud.refresh_missions)
 	missions.completed.connect(func(m):
+		Sfx.play("jingle")
+		for wi in Weapons.LIST.size():
+			if Weapons.LIST[wi].unlock == m.id:
+				hud.banner(tr("NEW WEAPON: %s") % tr(Weapons.LIST[wi].name), tr(Weapons.LIST[wi].desc) + "  " + tr("Press %d to equip it (chaos mode, F to fire).") % (wi + 1))
+		hud.set_weapon(_weapon)
 		hud.toast(tr("MISSION COMPLETE: %s") % tr(m.title), true)
 		for i in 3:
 			world.poof(player.global_position + Vector3(randf_range(-1, 1), 2.0 + i * 0.4, randf_range(-1, 1)), [Vox.YELLOW, Vox.GREEN, Vox.PINK][i]))
 	hud.refresh_missions()
+	hud.set_weapon(0)
 	for m in [hud.map_mini, hud.map_full]:
 		m.world = world
 		m.player = player
 	hud.map_full.travel.connect(_travel)
 
 	world.level_changed.connect(_on_level_changed)
+	world.shake_requested.connect(func(a): _shake = maxf(_shake, a))
 	K8s.state_updated.connect(func(s):
 		if float(s.get("time", 0)) > 0.0:
 			_clock_base = float(s.time)
 			_clock_local = 0.0
 		world.challenge = Settings.challenge
 		world.apply_state(s)
+		if _need_spawn:
+			# The level only exists once the first snapshot arrives.
+			_need_spawn = false
+			player.teleport(world.spawn)
 		missions.notify("state"))
 	K8s.action_done.connect(func(ok, _m, req):
 		if ok:
@@ -193,10 +214,13 @@ func _ready() -> void:
 		hud.show_connect(false)
 	elif K8s.web_query_param("bridge") != "" or "--connect" in OS.get_cmdline_user_args():
 		var url := K8s.default_bridge_url()
+		var ctx := K8s.web_query_param("context")
 		for arg in OS.get_cmdline_user_args():
 			if arg.begins_with("--bridge="):
 				url = arg.substr(9)
-		K8s.connect_bridge(url, K8s.web_query_param("token"))
+			if arg.begins_with("--context="):
+				ctx = arg.substr(10)
+		K8s.connect_bridge(url, K8s.web_query_param("token"), ctx)
 
 	# Dev helper: `godot --path game -- --demo --shot=/tmp/x.png [--inspect]`
 	for arg in OS.get_cmdline_user_args():
@@ -219,6 +243,9 @@ func _screenshot_and_quit(path: String) -> void:
 				player.teleport(_standable_near(b.door_position() + Vector3(0, 0, 2.5)))
 				_zoom_target = 24.0
 				await get_tree().create_timer(1.5).timeout
+		if arg.begins_with("--node="):
+			_goto("node", arg.substr(7), "")
+			await get_tree().create_timer(1.5).timeout
 		if arg.begins_with("--goto="):
 			var key := arg.substr(7)
 			_goto("pod", key, key.split("/")[0])
@@ -244,6 +271,72 @@ func _screenshot_and_quit(path: String) -> void:
 			hud.node_terminal(str(d.to).substr(5), false)
 			await get_tree().create_timer(2.0).timeout
 			break
+	if "--fire-all" in OS.get_cmdline_user_args():
+		# Dev: fire every weapon into the air (no Kubernetes action) and
+		# capture a frame of each animation.
+		var base := ""
+		for x in OS.get_cmdline_user_args():
+			if x.begins_with("--shot="):
+				base = x.substr(7)
+		_zoom_target = 16.0
+		_zoom = 16.0
+		# Face the screen's right so the shots stay in view.
+		var right := (_pivot.global_basis * _cam.basis).x
+		player.set_facing(atan2(right.x, right.z))
+		for i in Weapons.LIST.size():
+			var w: Dictionary = Weapons.LIST[i]
+			_weapon = i
+			player.set_weapon_color(w.color)
+			var from := player.muzzle()
+			_fire_anim(w, from, _miss_point(), func(): pass)
+			var wait := {"blaster": 0.12, "hammer": 0.3, "ray": 0.25, "freeze": 0.2, "cutter": 0.2, "nuke": 0.75}
+			await get_tree().create_timer(wait[w.id]).timeout
+			await RenderingServer.frame_post_draw
+			get_viewport().get_texture().get_image().save_png(base.replace(".png", "_%s.png" % w.id))
+			await get_tree().create_timer(1.2).timeout
+		get_tree().quit()
+		return
+	if "--weapon-test" in OS.get_cmdline_user_args():
+		hud.chaos = true
+		hud._update_chaos_btn()
+		for i in Weapons.LIST.size():
+			var t := _aim(Weapons.LIST[i].target)
+			print("WEAPON %s unlocked=%s target=%s" % [Weapons.LIST[i].id, Weapons.unlocked(i), "none" if t.is_empty() else str(t.keys())])
+		if "--fpv" in OS.get_cmdline_user_args():
+			_toggle_fpv()
+			await get_tree().create_timer(0.4).timeout
+		_select_weapon(0)
+		if "--death-shots" in OS.get_cmdline_user_args():
+			_zoom_target = 9.0
+			_zoom = 9.0
+		_blast()
+		if "--death-shots" in OS.get_cmdline_user_args():
+			var base := ""
+			for x in OS.get_cmdline_user_args():
+				if x.begins_with("--shot="):
+					base = x.substr(7)
+			for t in [[0.9, "_term"], [0.85, "_shatter"]]:
+				await get_tree().create_timer(t[0]).timeout
+				await RenderingServer.frame_post_draw
+				get_viewport().get_texture().get_image().save_png(base.replace(".png", t[1] + ".png"))
+		await get_tree().create_timer(0.8).timeout
+	if "--autodoor-test" in OS.get_cmdline_user_args():
+		var b: FactoryBuilding = world.buildings.get("shop")
+		player.teleport(b.door_position() + Vector3(0, 0, 3.0))
+		await get_tree().create_timer(0.3).timeout
+		player.teleport(b.door_position())
+		await get_tree().create_timer(0.5).timeout
+		print("AUTODOOR entered: ", world.level)
+		await get_tree().create_timer(0.5).timeout
+		var ex: Dictionary = world.doors.filter(func(d): return d.to == "plant")[0]
+		player.teleport(ex.pos + Vector3(0, 0, -2.5))
+		await get_tree().create_timer(0.3).timeout
+		player.teleport(ex.pos)
+		await get_tree().create_timer(0.5).timeout
+		var b2: FactoryBuilding = world.buildings.get("shop")
+		print("AUTODOOR exited: ", world.level, " near shop door: ", player.global_position.distance_to(b2.door_position()) < 3.0)
+		get_tree().quit()
+		return
 	if "--stats" in OS.get_cmdline_user_args():
 		hud.toggle_stats()
 		await get_tree().create_timer(1.0).timeout
@@ -292,6 +385,15 @@ func _go_level(l: String) -> void:
 func _on_level_changed(l: String) -> void:
 	hud.close_modals()
 	player.teleport(world.spawn)
+	# Coming back to the plant: stand in front of the door you came out of.
+	if l == "plant" and _prev_level != "plant":
+		var key := "@power" if _prev_level == "power" else _prev_level.substr(3)
+		var b: FactoryBuilding = world.buildings.get(key)
+		if b:
+			player.teleport(_standable_near(b.door_position() + Vector3(0, 0, 1.8)))
+	_prev_level = l
+	_door_armed = false
+	_zone = ""
 	_fyaw = deg_to_rad(_yaw)
 	_pan = Vector3.ZERO
 	_zoom_target = LEVEL_ZOOM.get(l, 26.0)
@@ -353,7 +455,18 @@ func _add_stars() -> void:
 
 
 func _process(delta: float) -> void:
+	_cooldown = maxf(0.0, _cooldown - delta)
+	# Camera shake (explosions, hammer)
+	_shake = move_toward(_shake, 0.0, delta * 2.0)
+	var sh := Vector2(randf_range(-1, 1), randf_range(-1, 1)) * _shake * 0.4
+	_cam.h_offset = sh.x
+	_cam.v_offset = sh.y
+	_fcam.h_offset = sh.x * 0.2
+	_fcam.v_offset = sh.y * 0.2
+	Sfx.set_listener(player.global_position)
 	_update_daylight(delta)
+	_auto_doors()
+	_update_zone()
 	var busy := hud.is_modal_open() or get_viewport().gui_get_focus_owner() is LineEdit
 	player.input_enabled = not busy
 	if _fpv and busy and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
@@ -397,6 +510,7 @@ func _toggle_fpv() -> void:
 	hud.fpv = _fpv
 	hud.overlay.crosshair = _fpv
 	player.set_first_person(_fpv)
+	_viewmodel.visible = _fpv
 	if _fpv:
 		# Look where the isometric camera was looking.
 		_fyaw = deg_to_rad(_yaw)
@@ -412,6 +526,54 @@ func _toggle_fpv() -> void:
 	hud._sync_view()
 
 
+## Voxel model of the equipped weapon, held in the lower-right corner of
+## the first-person view. Each weapon gets its own attachment.
+func _build_viewmodel(i: int) -> void:
+	for c in _viewmodel.get_children():
+		c.queue_free()
+	var w: Dictionary = Weapons.LIST[i]
+	var col: Color = w.color
+	var g := Node3D.new()
+	_viewmodel.add_child(g)
+	# Arm and glove
+	Vox.box(g, Vector3(0.16, 0.16, 0.5), Vector3(0.05, -0.12, 0.35), Vox.WHITE)
+	Vox.box(g, Vector3(0.18, 0.2, 0.18), Vector3(0.0, -0.05, 0.05), Vox.BLUE)
+	# Body of the gun
+	Vox.box(g, Vector3(0.16, 0.16, 0.6), Vector3(0, 0.08, -0.15), Vox.SLATE)
+	Vox.box(g, Vector3(0.1, 0.18, 0.1), Vector3(0, -0.06, 0.02), Vox.NAVY)
+	Vox.box(g, Vector3(0.12, 0.12, 0.08), Vector3(0, 0.08, -0.48), col, 3.0, false)
+	match w.id:
+		"hammer":
+			Vox.box(g, Vector3(0.36, 0.22, 0.22), Vector3(0, 0.22, -0.42), col, 1.0)
+		"ray":
+			var dish := Vox.box(g, Vector3(0.34, 0.34, 0.05), Vector3(0, 0.08, -0.52), col, 1.5)
+			dish.rotation.x = 0.0
+			Vox.box(g, Vector3(0.05, 0.05, 0.18), Vector3(0, 0.08, -0.6), Vox.WHITE, 3.0, false)
+		"freeze":
+			Vox.box(g, Vector3(0.14, 0.26, 0.14), Vector3(0.14, 0.2, -0.05), col, 1.2)
+			Vox.box(g, Vector3(0.14, 0.26, 0.14), Vector3(-0.14, 0.2, -0.05), col, 1.2)
+		"cutter":
+			var blade := Vox.box(g, Vector3(0.04, 0.3, 0.3), Vector3(0, 0.12, -0.55), col, 2.0, false)
+			blade.rotation.x = 0.6
+		"nuke":
+			Vox.box(g, Vector3(0.24, 0.24, 0.7), Vector3(0, 0.14, -0.2), Vox.FOREST)
+			Vox.box(g, Vector3(0.18, 0.18, 0.22), Vector3(0, 0.14, -0.62), col, 2.0)
+	# Drawn on top of everything (no depth test) so it never clips into walls.
+	for mi in g.find_children("*", "MeshInstance3D", true, false):
+		var m: StandardMaterial3D = mi.material_override.duplicate()
+		m.no_depth_test = true
+		# Transparent pass is drawn after every opaque object: stays on top.
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.render_priority = 10
+		m.next_pass = null
+		mi.material_override = m
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_viewmodel.scale = Vector3.ONE * 0.5
+	_viewmodel.position = VM_POS
+	_viewmodel.rotation = Vector3(0.05, 0.18, 0)
+	_viewmodel.visible = _fpv
+
+
 func _update_fpv(delta: float) -> void:
 	player.cam_yaw = _fyaw
 	player.face_look(_fyaw)
@@ -420,6 +582,12 @@ func _update_fpv(delta: float) -> void:
 	var bob := sin(_bob) * (0.07 if player.running else 0.04) if player.moving else 0.0
 	_fcam.global_position = player.head_position() + Vector3(0, bob, 0)
 	_fcam.rotation = Vector3(_fpitch, _fyaw, 0)
+	# Weapon sway while walking, kick back when firing
+	_recoil = move_toward(_recoil, 0.0, delta * 3.0)
+	var sway := Vector3(sin(_bob * 0.5) * 0.02, absf(sin(_bob)) * 0.02, 0) if player.moving else Vector3.ZERO
+	_viewmodel.position = VM_POS + sway + Vector3(0, _recoil * 0.03, _recoil * 0.1)
+	if not _viewmodel.has_meta("swing"):
+		_viewmodel.rotation.x = 0.05 + _recoil * 0.5
 
 
 ## Hour of day (0-24) from the cluster clock in the player's time zone.
@@ -458,6 +626,7 @@ func _update_daylight(delta: float) -> void:
 	_env.fog_light_color = sky
 	_env.ambient_light_color = Color("5a6aa8").lerp(Color("8fa0d8"), day).lerp(Color("c98b7a"), golden * 0.4)
 	_env.ambient_light_energy = lerpf(0.55, 0.6, day)
+	Sfx.set_night(1.0 - day)
 	_stars.visible = day < 0.35
 
 
@@ -484,6 +653,12 @@ func _update_labels() -> void:
 ## the node island under the cursor's ground point.
 func _pick(mouse: Vector2) -> Entity:
 	var cam := _active_cam()
+	# Label plates are clickable too (they are the easiest target).
+	var ui_mouse := mouse / _ui
+	for i in range(hud.overlay.hits.size() - 1, -1, -1):
+		var h: Array = hud.overlay.hits[i]
+		if h[0].has_point(ui_mouse) and is_instance_valid(h[1]):
+			return h[1]
 	var best: Entity = null
 	var best_d := 1e9
 	for e in world.all_entities():
@@ -602,6 +777,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				if e is PodBot:
 					hud.open_logs(e.data)
 			KEY_F: _blast()
+			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6:
+				_select_weapon(event.physical_keycode - KEY_1)
 
 
 ## First-person mouse handling. Returns true if the event was consumed.
@@ -653,6 +830,10 @@ func _nearest(max_dist: float, kind: String) -> Entity:
 
 
 var _warping := false
+var _door_armed := false      # doors only trigger after you have stepped off one
+var _prev_level := "plant"
+var _zone := ""               # area the player is in, for the zone banner
+var _need_spawn := true       # place the player once the level has been built
 
 
 ## Mario-style warp: hop onto the pipe, sink into it spinning, fade out,
@@ -662,6 +843,7 @@ func _warp(from_pipe: Vector3, to_node: String) -> void:
 		return
 	_warping = true
 	player.frozen = true
+	Sfx.play("pipe")
 	var b := player.body()
 	var top := from_pipe + Vector3(0, 1.25, 0)
 	var tw := create_tween()
@@ -695,6 +877,61 @@ func _warp(from_pipe: Vector3, to_node: String) -> void:
 	_warping = false
 
 
+## Explains where you are: a banner when you step onto a node island or
+## into a hall, plus the path in the level bar.
+func _update_zone() -> void:
+	if hud.is_connect_visible() or K8s.state.is_empty():
+		return
+	var zone := world.level
+	var title := ""
+	var body := ""
+	if world.level == "power":
+		var isl := world.island_at(player.global_position)
+		if isl:
+			zone = "node:" + isl.key
+			var here: int = isl.slots.size()
+			if isl.is_control_plane():
+				title = tr("CONTROL-PLANE: %s") % isl.key
+				body = tr("The brain of the cluster. It runs the API server (every kubectl talks to it), etcd (the cluster's database), the scheduler (picks a node for each pod) and the controller-manager (makes reality match the desired state). Its components are pods in kube-system: %d here.") % here
+			else:
+				title = tr("WORKER NODE: %s") % isl.key
+				body = tr("A machine that runs your workloads. Its kubelet starts the containers the scheduler assigns here and reports their health to the control-plane. %d pods here.") % here
+			if isl.data.get("unschedulable", false):
+				body += " " + tr("It is CORDONED: no new pods will be scheduled here.")
+	elif world.level.begins_with("ns:"):
+		var ns := world.current_ns()
+		title = tr("NAMESPACE: %s") % ns
+		body = tr("A space inside the cluster. %d assembly lines (workloads) make %d pods (robots); %d loading docks (services) send them traffic.") % [
+			world.lines.size(), world.pods.size(), world.services.size()]
+	if zone == _zone:
+		return
+	_zone = zone
+	var path := world.level_title()
+	if zone.begins_with("node:"):
+		path += "  >  " + zone.substr(5)
+	hud.set_level_title(path)
+	if title != "":
+		hud.banner(title, body)
+
+
+## Walking onto a door mat (hall doors, exits) goes through it, no key
+## needed. Warp pipes and terminals stay on E: they are things you "use".
+func _auto_doors() -> void:
+	if _warping or hud.is_connect_visible() or hud.is_modal_open():
+		return
+	var p := player.global_position
+	var near := world.door_near(p, 0.9)
+	if near.is_empty():
+		if world.door_near(p, 1.6).is_empty():
+			_door_armed = true
+		return
+	var to := str(near.to)
+	if _door_armed and not to.begins_with("warp:") and not to.begins_with("term:") and player.on_ground():
+		_door_armed = false
+		Sfx.play("door")
+		_go_level(to)
+
+
 ## Jump to the next unhealthy pod anywhere in the cluster.
 func _cycle_pods() -> void:
 	var list: Array = K8s.state.get("pods", []).filter(func(p):
@@ -719,6 +956,8 @@ func _interact() -> void:
 		if str(d.to).begins_with("term:"):
 			var nn := str(d.to).substr(5)
 			var isl: NodeIsland = world.islands.get(nn)
+			if isl:
+				hud.inspect(isl)
 			hud.node_terminal(nn, isl != null and isl.is_control_plane())
 			return
 		_go_level(d.to)
@@ -730,28 +969,189 @@ func _interact() -> void:
 	hud.inspect(_nearest(3.5, ""))
 
 
+var _weapon := 0
+var _cooldown := 0.0
+var _shake := 0.0
+
+
+func _select_weapon(i: int) -> void:
+	if i >= Weapons.LIST.size():
+		return
+	if not Weapons.unlocked(i):
+		hud.toast(tr("Locked: complete the mission \"%s\"") % tr(Weapons.unlock_title(i)), false)
+		return
+	_weapon = i
+	var w: Dictionary = Weapons.LIST[i]
+	player.set_weapon_color(w.color)
+	_build_viewmodel(i)
+	hud.set_weapon(i)
+	hud.toast("%d  %s: %s" % [i + 1, tr(w.name), tr(w.desc)], true)
+
+
+## Fires the current weapon. It always animates (even with nothing in
+## range); only a hit on a real target performs the Kubernetes operation,
+## at the moment the shot lands.
 func _blast() -> void:
 	if not hud.chaos:
 		hud.toast(tr("Blaster locked. Press C to enable CHAOS MODE."), false)
 		return
-	# Prefer the pod in front of the player, else the nearest one.
-	var best: PodBot = null
-	var best_score := 1e9
-	for p in world.pods.values():
-		if p.dying or p.category == "term":
-			continue
-		var to: Vector3 = p.global_position - player.global_position
+	if _cooldown > 0.0:
+		return
+	var w: Dictionary = Weapons.LIST[_weapon]
+	_cooldown = w.cooldown
+	var tgt := _aim(w.target)
+	var from := player.muzzle()
+	if _fpv:
+		from = _viewmodel.global_transform * Vector3(0, 0.08, -0.55)
+	var to: Vector3 = tgt.pos if not tgt.is_empty() else _miss_point()
+	if tgt.is_empty():
+		_fire_anim(w, from, to, func(): world.sfx("miss", to))
+		return
+	var req: Dictionary = tgt.req
+	match w.id:
+		"hammer":
+			req = {"action": "restart", "kind": tgt.w.kind, "ns": tgt.w.ns, "name": tgt.w.name}
+		"ray":
+			if tgt.w.kind == "DaemonSet":
+				hud.toast(tr("A DaemonSet runs one pod per node: it cannot be scaled"), false)
+				_fire_anim(w, from, to, func(): pass)
+				return
+			req = {"action": "scale", "kind": tgt.w.kind, "ns": tgt.w.ns, "name": tgt.w.name, "replicas": maxi(0, int(tgt.w.desired) - 1)}
+		"freeze":
+			req = {"action": "uncordon" if tgt.n.get("unschedulable", false) else "cordon", "name": tgt.n.name}
+		"cutter":
+			req = {"action": "delete_service", "ns": tgt.s.ns, "name": tgt.s.name}
+		"nuke":
+			req = {"action": "delete_workload", "kind": tgt.w.kind, "ns": tgt.w.ns, "name": tgt.w.name}
+	var act := func(): K8s.action(req)
+	if w.id == "blaster":
+		act = func():
+			for p in world.pods.values():
+				if p.global_position.distance_to(to) < 1.5:
+					p.hit(from)
+					break
+			K8s.action(req)
+	if w.id in ["cutter", "nuke"]:
+		# The two irreversible ones always ask, even in chaos mode.
+		_cooldown = 0.0
+		hud.confirm(tr("%s: %s") % [tr(w.name), Kubectl.for_action(req)], func():
+			_cooldown = w.cooldown
+			_fire_anim(w, from, to, act), Kubectl.for_action(req))
+		return
+	_fire_anim(w, from, to, act)
+
+
+## Where a shot goes when nothing is in range: straight ahead, as far as
+## that weapon reaches (the hammer hits the ground right in front of you).
+func _miss_point() -> Vector3:
+	var reach: float = {"blaster": 9.0, "hammer": 2.2, "ray": 6.0, "freeze": 4.5, "cutter": 6.0, "nuke": 9.0}.get(Weapons.LIST[_weapon].id, 8.0)
+	if _fpv:
+		return _fcam.global_position - _fcam.global_basis.z * reach
+	return player.global_position + Vector3(0, 0.7, 0) + player.forward() * reach
+
+
+## Per-weapon animation + sound; on_impact runs when the shot lands.
+func _fire_anim(w: Dictionary, from: Vector3, to: Vector3, on_impact: Callable) -> void:
+	var col: Color = w.color
+	player.fire_pose()
+	match w.id:
+		"blaster":
+			_recoil = 0.6
+			world.sfx("blaster")
+			world.bolt(from, to, col, func():
+				world.sfx("hit", to)
+				on_impact.call())
+		"hammer":
+			_swing()
+			world.sfx("hammer")
+			await get_tree().create_timer(0.15).timeout
+			var ground := Vector3(to.x, world.surface_y(Vector2(to.x, to.z)) if world.surface_y(Vector2(to.x, to.z)) != -INF else player.global_position.y, to.z)
+			world.shockwave(ground, col)
+			on_impact.call()
+		"ray":
+			_recoil = 0.3
+			world.sfx("ray")
+			world.beam(from, to, col, 0.5)
+			await get_tree().create_timer(0.4).timeout
+			world.flash(to, col, 0.8)
+			on_impact.call()
+		"freeze":
+			_recoil = 0.4
+			world.sfx("freeze")
+			world.spray(from, to, col)
+			await get_tree().create_timer(0.35).timeout
+			world.ice(Vector3(to.x, player.global_position.y if world.surface_y(Vector2(to.x, to.z)) == -INF else world.surface_y(Vector2(to.x, to.z)), to.z), col)
+			on_impact.call()
+		"cutter":
+			_recoil = 0.5
+			world.sfx("cutter")
+			world.boomerang(from, to, col, on_impact)
+		"nuke":
+			_recoil = 1.5
+			world.sfx("nuke_launch")
+			world.rocket(from, to, func():
+				world.sfx("explosion", to)
+				on_impact.call())
+
+
+## Hammer: the first-person weapon swings down.
+func _swing() -> void:
+	var tw := create_tween()
+	tw.tween_property(_viewmodel, "rotation:x", -1.1, 0.1)
+	tw.tween_property(_viewmodel, "rotation:x", 0.05, 0.25)
+
+
+func _boom(p: Vector3, col: Color, big: bool) -> void:
+	for k in (14 if big else 4):
+		world.poof(p + Vector3(randf_range(-1.5, 1.5), randf_range(0, 2), randf_range(-1.5, 1.5)) * (1.5 if big else 0.6), col)
+
+
+## Finds what the weapon would hit: {pos, req, w?, n?, s?} or {}.
+func _aim(kind: String) -> Dictionary:
+	var me := player.global_position
+	var fwd := player.forward()
+	# Lambdas capture locals by value: keep the running best in a dictionary.
+	var st := {"best": {}, "score": 1e9}
+	var consider := func(pos: Vector3, reach: float, info: Dictionary):
+		var to := pos - me
 		to.y = 0
 		var d := to.length()
-		if d > 7.0:
-			continue
-		var facing := to.normalized().dot(player.forward())
-		var score := d - facing * 3.0
-		if score < best_score:
-			best_score = score
-			best = p
-	if best == null:
-		hud.toast(tr("No pod in range"), false)
-		return
-	world.zap(player.muzzle(), best.global_position + Vector3(0, best.top_y * 0.5, 0))
-	K8s.action({"action": "delete_pod", "ns": best.data.ns, "name": best.data.name})
+		if d > reach:
+			return
+		var score := d - to.normalized().dot(fwd) * 3.0
+		if score < st.score:
+			st.score = score
+			info["pos"] = pos
+			st.best = info
+	match kind:
+		"pod":
+			for p in world.pods.values():
+				if not p.dying and p.category != "term":
+					consider.call(p.global_position + Vector3(0, p.top_y * 0.5, 0), 7.0,
+						{"req": {"action": "delete_pod", "ns": p.data.ns, "name": p.data.name}})
+		"workload":
+			# Lines (inside a hall) or the owner of a pod you hit (anywhere).
+			for l in world.lines.values():
+				consider.call(l.global_position + Vector3(0.6, 1.0, 0), 7.0, {"req": {}, "w": l.data})
+			for p in world.pods.values():
+				if p.dying:
+					continue
+				var w := _workload_of(p.data)
+				if not w.is_empty():
+					consider.call(p.global_position + Vector3(0, p.top_y * 0.5, 0), 7.0, {"req": {}, "w": w})
+		"node":
+			for isl in world.islands.values():
+				var c: Vector3 = isl.global_position
+				consider.call(c + Vector3(0, 0.5, 0), isl.size * 0.5 + 6.0, {"req": {}, "n": isl.data})
+		"service":
+			for dk in world.services.values():
+				consider.call(dk.global_position + Vector3(0, 1.0, 0), 8.0, {"req": {}, "s": dk.data})
+	return st.best
+
+
+func _workload_of(pod: Dictionary) -> Dictionary:
+	for w in K8s.state.get("workloads", []):
+		if w.ns == pod.ns and w.kind == pod.get("owner_kind", "") and w.name == pod.get("owner_name", ""):
+			return w
+	return {}
+

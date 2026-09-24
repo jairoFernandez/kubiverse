@@ -3,8 +3,8 @@ extends Entity
 ## A Kubernetes Node rendered as a floating voxel island. Its pods stand on
 ## a grid of slots; the island grows with the number of pods.
 
-const SLOT := 1.7
-const MARGIN := 2.2
+const SLOT := 2.0
+const MARGIN := 5.0   # free walking ring around the pods
 
 var cols := 3
 var size := 0.0
@@ -13,6 +13,10 @@ var _geo: Node3D
 var _beacon: MeshInstance3D
 var _sig := ""
 var _t := 0.0
+# Requested resources on this node (what the scheduler counts) vs allocatable.
+var used_cpu := 0.0
+var used_mem := 0.0
+var _gauges := []   # [fill MeshInstance3D for cpu, for mem]
 
 
 func _init() -> void:
@@ -76,8 +80,24 @@ func label_text() -> String:
 	return tr("node %s") % key
 
 
+func set_usage(cpu_m: float, mem: float) -> void:
+	used_cpu = cpu_m
+	used_mem = mem
+
+
+func cpu_frac() -> float:
+	return used_cpu / maxf(float(data.get("cpu_m", 0)), 1.0)
+
+
+func mem_frac() -> float:
+	return used_mem / maxf(float(data.get("mem_bytes", 0)), 1.0)
+
+
 func label_sub() -> String:
 	var tags := [tr("%d pods") % slots.size()]
+	if float(data.get("cpu_m", 0)) > 0:
+		tags.append("cpu %s/%s" % [Vox.fmt_cores(used_cpu), Vox.fmt_cores(float(data.cpu_m))])
+		tags.append("mem %s/%s" % [Vox.fmt_mib(used_mem), Vox.fmt_mib(float(data.get("mem_bytes", 0)))])
 	if not data.get("ready", true):
 		tags.append(tr("NOT READY"))
 	if data.get("unschedulable", false):
@@ -98,6 +118,13 @@ func label_color() -> Color:
 func _process(delta: float) -> void:
 	_t += delta
 	position = position.lerp(target, clampf(delta * 3.0, 0.0, 1.0))
+	# Capacity gauges: fill = requested / allocatable, colour by pressure.
+	for i in _gauges.size():
+		var f := clampf(cpu_frac() if i == 0 else mem_frac(), 0.0, 1.0)
+		var g: MeshInstance3D = _gauges[i]
+		g.scale.y = maxf(0.02, f)
+		g.position.y = 0.15 + 1.6 * g.scale.y * 0.5
+		g.material_override = Vox.mat(Vox.GREEN if f < 0.6 else (Vox.YELLOW if f < 0.85 else Vox.RED), 1.5, false)
 	if _beacon:
 		_beacon.visible = fmod(_t, 1.0) < 0.5
 
@@ -164,6 +191,18 @@ func _rebuild() -> void:
 		if not ready:
 			_beacon = Vox.box(_geo, Vector3(0.35, 0.35, 0.35), corner + Vector3(0, 1.8, 0), Vox.RED, 3.0)
 
+	# Two capacity gauges (CPU, memory) beside the tower / rack.
+	_gauges.clear()
+	for gi in 2:
+		var gp := corner + Vector3(1.2 + gi * 0.55, 0, 0)
+		Vox.box(_geo, Vector3(0.42, 1.9, 0.42), gp + Vector3(0, 0.95, 0), Color("20243a"))
+		var fill := MeshInstance3D.new()
+		fill.mesh = Vox.box_mesh(Vector3(0.3, 1.6, 0.44))
+		fill.position = gp + Vector3(0, 0.15, 0)
+		fill.material_override = Vox.mat(Vox.GREEN, 1.5, false)
+		_geo.add_child(fill)
+		_gauges.append(fill)
+		Vox.box(_geo, Vector3(0.3, 0.12, 0.46), gp + Vector3(0, 2.0, 0), Vox.BLUE if gi == 0 else Vox.PINK, 1.0, false)
 	if data.get("unschedulable", false):
 		# Hazard fence: the node is cordoned.
 		var n := int(s / 1.1)

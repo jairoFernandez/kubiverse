@@ -119,3 +119,15 @@ static func rng_for(s: String) -> RandomNumberGenerator:
 	var r := RandomNumberGenerator.new()
 	r.seed = s.hash()
 	return r
+
+
+## "250m" / "1.5" cores from millicores.
+static func fmt_cores(m: float) -> String:
+	return "%dm" % roundi(m) if m < 1000 else "%.1f" % (m / 1000.0)
+
+
+## "512 MiB" / "1.2 GiB" from bytes.
+static func fmt_mib(b: float) -> String:
+	if b >= 1024.0 * 1024 * 1024:
+		return "%.1f GiB" % (b / (1024.0 * 1024 * 1024))
+	return "%d MiB" % roundi(b / (1024.0 * 1024))

@@ -20,6 +20,8 @@ var minimap_size := 2
 var challenge := false
 var fast_day := false
 var servers: Array = []   # [{name, url, token, context}]
+var music_volume := 0.5
+var sfx_volume := 0.8
 
 
 func _ready() -> void:
@@ -38,6 +40,8 @@ func _ready() -> void:
 		challenge = cf.get_value("ui", "challenge", challenge)
 		fast_day = cf.get_value("ui", "fast_day", fast_day)
 		servers = cf.get_value("servers", "list", servers)
+		music_volume = cf.get_value("audio", "music", music_volume)
+		sfx_volume = cf.get_value("audio", "sfx", sfx_volume)
 
 
 func save() -> void:
@@ -55,6 +59,8 @@ func save() -> void:
 	cf.set_value("ui", "challenge", challenge)
 	cf.set_value("ui", "fast_day", fast_day)
 	cf.set_value("servers", "list", servers)
+	cf.set_value("audio", "music", music_volume)
+	cf.set_value("audio", "sfx", sfx_volume)
 	cf.save(PATH)
 	changed.emit()
 

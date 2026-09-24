@@ -36,6 +36,12 @@ var _squash := 0.0
 var _dust_cd := 0.0
 var _lean := 0.0
 var _first_person := false
+var _gun_tip: MeshInstance3D
+
+
+func set_weapon_color(c: Color) -> void:
+	if _gun_tip:
+		_gun_tip.material_override = Vox.mat(c, 2.5, false)
 
 
 func _ready() -> void:
@@ -64,7 +70,7 @@ func _ready() -> void:
 	for x in [-0.4, 0.4]:
 		_arms.append(Vox.box(_body, Vector3(0.16, 0.42, 0.18), Vector3(x, 0.66, 0), Vox.WHITE))
 	var gun := Vox.box(_arms[1], Vector3(0.14, 0.14, 0.5), Vector3(0, -0.12, 0.2), Vox.SLATE)
-	Vox.box(gun, Vector3(0.1, 0.1, 0.08), Vector3(0, 0, 0.28), Vox.YELLOW, 2.0, false)
+	_gun_tip = Vox.box(gun, Vector3(0.1, 0.1, 0.08), Vector3(0, 0, 0.28), Vox.YELLOW, 2.0, false)
 
 
 func body() -> Node3D:
@@ -97,6 +103,10 @@ func set_first_person(on: bool) -> void:
 	_body.visible = not on
 
 
+func set_facing(angle: float) -> void:
+	_facing = angle
+
+
 ## In first person the body faces where the camera looks.
 func face_look(yaw: float) -> void:
 	_facing = yaw + PI
@@ -104,6 +114,20 @@ func face_look(yaw: float) -> void:
 
 func on_ground() -> bool:
 	return _grounded
+
+
+var _fire_t := 0.0
+
+
+## Iso view: raise the gun arm for a moment when firing.
+func fire_pose() -> void:
+	_fire_t = 0.35
+
+
+func _sfx(name: String) -> void:
+	var s := get_node_or_null("/root/Sfx")
+	if s:
+		s.play(name, global_position)
 
 
 func jump() -> void:
@@ -119,6 +143,7 @@ func _do_jump() -> void:
 	_coyote = 0.0
 	_jump_buffer = 0.0
 	_grounded = false
+	_sfx("jump")
 	if true:
 		_vy = JUMP_SPEED
 		_squash = -0.15
@@ -149,7 +174,9 @@ func _process(delta: float) -> void:
 	position = world.move_player(position, step, feet) if world else position + step
 
 	# Gravity: stand on the highest surface under the feet, or fall.
-	_ground = world.ground_below(Vector2(position.x, position.z), feet + 0.05) if world else 0.0
+	# Surfaces up to one step above the feet count as ground: walking onto a
+	# slightly higher plank steps up instead of falling through it.
+	_ground = world.ground_below(Vector2(position.x, position.z), feet + World.STEP) if world else 0.0
 	if world and world.walk_rects.is_empty():
 		_ground = 0.0  # level not loaded yet: don't fall through nothing
 	if _vy > 0.0 or feet > _ground + 0.02 or _ground == -INF:
@@ -161,6 +188,7 @@ func _process(delta: float) -> void:
 			_vy = 0.0
 			_grounded = true
 			_squash = 0.2
+			_sfx("land")
 	else:
 		position.y = _ground  # follows moving platforms
 		_vy = 0.0
@@ -182,7 +210,11 @@ func _process(delta: float) -> void:
 
 	if moving and not _first_person:
 		_facing = lerp_angle(_facing, atan2(dir.x, dir.z), clampf(delta * 14.0, 0.0, 1.0))
+	if moving:
+		var before := int(_walk / PI)
 		_walk += delta * (17.0 if running else 11.0)
+		if int(_walk / PI) != before and on_ground():
+			_sfx("step")
 	else:
 		_walk = lerpf(_walk, roundf(_walk / PI) * PI, clampf(delta * 10.0, 0.0, 1.0))
 	_lean = lerpf(_lean, 0.28 if running else 0.0, clampf(delta * 8.0, 0.0, 1.0))
@@ -201,6 +233,9 @@ func _process(delta: float) -> void:
 	_legs[1].position.z = -sin(_walk) * amp
 	_arms[0].rotation.x = -sin(_walk) * amp * 2.2
 	_arms[1].rotation.x = sin(_walk) * amp * 2.2 if moving else -0.3
+	if _fire_t > 0.0:
+		_fire_t -= delta
+		_arms[1].rotation.x = -1.4
 	# Shadow on the ground below (helps judging jumps); hidden over the void.
 	var gy := world.ground_below(Vector2(position.x, position.z), position.y + 0.05) if world else 0.0
 	_shadow.visible = gy != -INF

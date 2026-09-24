@@ -51,6 +51,12 @@ var _view_challenge: CheckBox
 var _view_fastday: CheckBox
 var clock_text := ""
 var _fade: ColorRect
+var _banner: PanelContainer
+var _banner_title: Label
+var _banner_body: Label
+var _banner_t := 0.0
+var _weapon_bar: HBoxContainer
+var _last_bad := -1
 var map_full: MapView
 var _map_panel: PanelContainer
 
@@ -141,6 +147,7 @@ class LabelOverlay extends Control:
 	var items := []
 	var font: Font
 	var crosshair := false
+	var hits := []   # [[Rect2, Entity]] label plates you can click, last drawn on top
 	const PAD := Vector2(10, 5)
 
 	func _draw() -> void:
@@ -152,6 +159,7 @@ class LabelOverlay extends Control:
 		# Big labels first; each label is nudged upward until it does not
 		# overlap one already placed, and sits on a dark plate.
 		var placed: Array[Rect2] = []
+		hits.clear()
 		var sorted := items.duplicate()
 		sorted.sort_custom(func(a, b): return a.big and not b.big)
 		for it in sorted:
@@ -172,6 +180,8 @@ class LabelOverlay extends Control:
 				if not hit:
 					break
 			placed.append(r)
+			if it.get("entity") != null:
+				hits.append([r, it.entity])
 			draw_rect(r, Color(0.043, 0.051, 0.102, 0.8 if it.big else 0.9))
 			draw_rect(Rect2(r.position, Vector2(4, r.size.y)), it.color)
 			var y := r.position.y + PAD.y + font.get_ascent(size)
@@ -305,6 +315,7 @@ func _button(text: String, cb: Callable, variation := "") -> Button:
 	if variation != "":
 		b.theme_type_variation = variation
 	b.pressed.connect(cb)
+	b.pressed.connect(func(): Sfx.play("click", null, 0.0))
 	return b
 
 
@@ -453,6 +464,29 @@ func _build_connect_ui() -> void:
 	_connect_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(_connect_status)
 	_refresh_saved()
+
+
+func _volume_row(label: String, key: String) -> HBoxContainer:
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 10)
+	var l := _label(label, 24, Vox.SILVER)
+	l.custom_minimum_size = Vector2(110, 0)
+	h.add_child(l)
+	var sl := HSlider.new()
+	sl.min_value = 0.0
+	sl.max_value = 1.0
+	sl.step = 0.05
+	sl.value = Settings.get(key)
+	sl.custom_minimum_size = Vector2(200, 24)
+	sl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	sl.focus_mode = Control.FOCUS_NONE
+	sl.value_changed.connect(func(v):
+		Settings.set(key, v)
+		Settings.save()
+		if key == "sfx_volume":
+			Sfx.play("coin", null, 0.0))
+	h.add_child(sl)
+	return h
 
 
 func _lang_row() -> HBoxContainer:
@@ -658,6 +692,8 @@ func _build_game_ui() -> void:
 	sh.add_child(_button(" + ", func(): Settings.step_scale(1)))
 	vv.add_child(sh)
 	vv.add_child(_lang_row())
+	vv.add_child(_volume_row("Music", "music_volume"))
+	vv.add_child(_volume_row("Effects", "sfx_volume"))
 	_view_run = _check("Always run  [X]", func():
 		Settings.always_run = not Settings.always_run
 		Settings.save())
@@ -701,6 +737,7 @@ func _build_game_ui() -> void:
 	_inspector.offset_top = TOP
 	_inspector.offset_right = -10
 	_inspector.visible = false
+	_inspector.add_theme_stylebox_override("panel", _flat(Color(0.114, 0.169, 0.325, 1.0), INK, 3, 16))
 	_game_root.add_child(_inspector)
 	_insp_scroll = ScrollContainer.new()
 	_insp_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -1089,7 +1126,9 @@ func _sync_view() -> void:
 	_view_lines.set_pressed_no_signal(Settings.lines_all)
 	_view_term.set_pressed_no_signal(Settings.terminal)
 	_view_legend.set_pressed_no_signal(_legend.visible)
-	_terminal.visible = Settings.terminal
+	# First person is immersive: terminal and minimap step aside (/ brings
+	# the terminal back to type a command).
+	_terminal.visible = Settings.terminal and (not fpv or _term_input.has_focus())
 	_view_run.set_pressed_no_signal(Settings.always_run)
 	_view_minimap.set_pressed_no_signal(Settings.minimap)
 	_view_fpv.set_pressed_no_signal(fpv)
@@ -1097,7 +1136,7 @@ func _sync_view() -> void:
 	_view_challenge.set_pressed_no_signal(Settings.challenge)
 	_view_fastday.set_pressed_no_signal(Settings.fast_day)
 	if map_mini:
-		map_mini.get_parent().visible = Settings.minimap and not stats.visible
+		map_mini.get_parent().visible = Settings.minimap and not stats.visible and not fpv
 	for b in _lang_btns:
 		b.theme_type_variation = "GoButton" if b.get_meta("lang") == Settings.lang else ""
 
@@ -1150,6 +1189,33 @@ func _enable_chaos() -> void:
 func _update_chaos_btn() -> void:
 	_chaos_btn.text = tr("C CHAOS ON") if chaos else tr("C CHAOS")
 	_chaos_btn.theme_type_variation = "DangerButton" if chaos else ""
+	if _weapon_bar:
+		_weapon_bar.visible = chaos
+
+
+## Weapon slots (visible in chaos mode): 1-6, locked ones greyed out.
+func set_weapon(current: int) -> void:
+	if _weapon_bar == null:
+		_weapon_bar = HBoxContainer.new()
+		_weapon_bar.add_theme_constant_override("separation", 6)
+		_weapon_bar.set_anchors_preset(Control.PRESET_CENTER_TOP)
+		_weapon_bar.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		_weapon_bar.offset_top = TOP + 2
+		_weapon_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_game_root.add_child(_weapon_bar)
+	for c in _weapon_bar.get_children():
+		c.queue_free()
+	for i in Weapons.LIST.size():
+		var w: Dictionary = Weapons.LIST[i]
+		var ok := Weapons.unlocked(i)
+		var p := PanelContainer.new()
+		p.add_theme_stylebox_override("panel", _flat(Color(0.043, 0.051, 0.102, 0.92), w.color if i == current else (Vox.SLATE if ok else INK), 3 if i == current else 2, 6))
+		var txt := "%d %s" % [i + 1, tr(w.name)] if i == current else ("%d" % (i + 1) if ok else "%d x" % (i + 1))
+		var l := _label(txt, 20, w.color if ok else Vox.SLATE)
+		l.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		p.add_child(l)
+		_weapon_bar.add_child(p)
+	_weapon_bar.visible = chaos
 
 
 func _on_connection(status: String, detail: String) -> void:
@@ -1181,6 +1247,10 @@ func _on_state(s: Dictionary) -> void:
 			"pending", "warn": pending += 1
 			"crash", "pull", "failed": bad += 1
 	_alarms = _compute_alarms(s)
+	var failing := _alarms.filter(func(a): return a.sev >= 3).size()
+	if failing > _last_bad and _last_bad >= 0:
+		Sfx.play("alarm", null, 0.0)
+	_last_bad = failing
 	_alarm_btn.text = tr("ALARMS %d") % _alarms.size()
 	_alarm_btn.theme_type_variation = "DangerButton" if _alarms.any(func(a): return a.sev >= 3) else ""
 	if _alarm_panel.visible:
@@ -1215,6 +1285,8 @@ func add_event(ev: Dictionary) -> void:
 
 
 func toast(msg: String, ok := true) -> void:
+	if not ok:
+		Sfx.play("error", null, 0.0)
 	_toast.text = msg
 	_toast.add_theme_color_override("font_color", Vox.GREEN if ok else Vox.RED)
 	_toast.visible = true
@@ -1249,6 +1321,33 @@ func node_terminal(node_name: String, is_cp: bool) -> void:
 	_term_input.caret_column = _term_input.text.length()
 
 
+## Short explanation of the area you just walked into (fades after a while).
+func banner(title: String, body: String) -> void:
+	if _banner == null:
+		_banner = PanelContainer.new()
+		_banner.add_theme_stylebox_override("panel", _flat(Color(0.043, 0.051, 0.102, 0.95), Vox.YELLOW, 3, 14))
+		_banner.set_anchors_preset(Control.PRESET_CENTER_TOP)
+		_banner.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		_banner.offset_top = TOP + 6
+		_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var v := VBoxContainer.new()
+		v.add_theme_constant_override("separation", 4)
+		_banner.add_child(v)
+		_banner_title = _label("", 28, Vox.YELLOW)
+		v.add_child(_banner_title)
+		_banner_body = _label("", 22, Vox.WHITE)
+		_banner_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_banner_body.custom_minimum_size = Vector2(620, 0)
+		v.add_child(_banner_body)
+		_game_root.add_child(_banner)
+	_banner_title.text = title
+	_banner_body.text = body
+	_banner.size = Vector2.ZERO
+	_banner.visible = true
+	_banner.modulate.a = 1.0
+	_banner_t = 9.0
+
+
 ## Full-screen fade used by the warp pipes (0 = clear, 1 = dark).
 func fade(to: float, secs: float) -> void:
 	if _fade == null:
@@ -1264,12 +1363,14 @@ func fade(to: float, secs: float) -> void:
 func focus_terminal() -> void:
 	if not Settings.terminal:
 		toggle_terminal()
+	_terminal.visible = true
 	_term_input.grab_focus()
 
 
 func _term_keys(ev: InputEvent) -> void:
 	if not (ev is InputEventKey and ev.pressed):
 		return
+	Sfx.play("key", null, 0.15)
 	match ev.keycode:
 		KEY_UP:
 			if _term_history.is_empty():
@@ -1337,6 +1438,7 @@ func inspect(e: Entity) -> void:
 	_insp_key = e.key
 	_insp_sig = ""
 	_inspector.visible = true
+	_inspector.move_to_front()
 	world.selected = e
 	if missions:
 		missions.notify("inspect", e.kind, e.data)
@@ -1392,6 +1494,11 @@ func _refresh_inspector() -> void:
 			_insp_title.text = tr("POD %s") % d.name
 			lines.append(_kv("namespace", d.ns))
 			lines.append(_kv("status", "[color=#%s]%s[/color]" % [PodBot.category_color(cat).to_html(false), d.status]))
+			var why: String = d.get("message", "")
+			if why != "" and cat != "ok":
+				lines.append(_kv("why", "[color=#ffec27]%s[/color]" % why.replace("[", "(")))
+			if float(d.get("cpu_req_m", 0)) > 0 or float(d.get("mem_req", 0)) > 0:
+				lines.append(_kv("requests", "cpu %s, mem %s" % [StatsPanel.cores(float(d.get("cpu_req_m", 0))), StatsPanel.mib(float(d.get("mem_req", 0)))]))
 			lines.append(_kv("ready", tr("%d/%d containers   restarts %d") % [int(d.ready), int(d.total), int(d.restarts)]))
 			lines.append(_kv("node", d.node if d.node != "" else "[color=#ffec27]%s[/color]" % tr("(not scheduled yet)")))
 			lines.append(_kv("ip", d.get("ip", "")))
@@ -1406,7 +1513,7 @@ func _refresh_inspector() -> void:
 				if sv.ns == d.ns and sv.get("pods") != null and d.name in sv.pods:
 					svcs.append(sv.name)
 			lines.append(_kv("services", ", ".join(svcs) if svcs else "[color=#5f574f]%s[/color]" % tr("none route traffic here")))
-			var usage := _usage_lines([d])
+			var usage := _usage_lines([d], true)
 			for i in usage.size():
 				lines.insert(3 + i, usage[i])
 			buttons.append(["LOGS [L]", func(): open_logs(d), "", false, Kubectl.logs(d.ns, d.name, "", false, true)])
@@ -1490,7 +1597,7 @@ func _refresh_inspector() -> void:
 
 ## CPU/memory of a set of pods: live usage from metrics-server (if any)
 ## next to what they requested.
-func _usage_lines(pod_list: Array) -> Array:
+func _usage_lines(pod_list: Array, pod_view := false) -> Array:
 	var m = K8s.state.get("metrics", {})
 	var live: bool = m != null and m.get("available", false)
 	var cpu := 0.0
@@ -1513,34 +1620,38 @@ func _usage_lines(pod_list: Array) -> Array:
 		out.append(_kv("memory", "%s  %s" % [StatsPanel.mib(mem), ("[color=#5f574f](req %s)[/color]" % StatsPanel.mib(rmem)) if rmem > 0 else ""]))
 		if rmem > 0:
 			out.append(_kv("", StatsPanel.bar(mem / rmem, 12) + " [color=#5f574f]%s[/color]" % tr("of request")))
-	elif rcpu > 0 or rmem > 0:
+	elif (rcpu > 0 or rmem > 0) and not pod_view:
 		out.append(_kv("requests", "cpu %s, mem %s" % [StatsPanel.cores(rcpu), StatsPanel.mib(rmem)]))
 	if not live:
 		out.append("[color=#5f574f]%s[/color]" % tr("no live usage: metrics-server not installed"))
-	elif seen == 0 and not pod_list.is_empty():
+	elif seen == 0 and not pod_list.is_empty() and not (pod_view and pod_list[0].get("node", "") == ""):
 		out.append("[color=#5f574f]%s[/color]" % tr("no metrics yet (they refresh every 15 s)"))
 	return out
 
 
+## Node capacity: what pods REQUEST (the scheduler only looks at this) and,
+## if metrics-server is installed, what they really use.
 func _node_usage_lines(n: Dictionary) -> Array:
 	var m = K8s.state.get("metrics", {})
 	var out := []
 	var cap_cpu := float(n.get("cpu_m", 0))
 	var cap_mem := float(n.get("mem_bytes", 0))
-	var cpu := 0.0
-	var mem := 0.0
-	var label := "live"
+	var rcpu := 0.0
+	var rmem := 0.0
+	for p in K8s.state.get("pods", []):
+		if p.get("node", "") == n.name and not p.get("deleting", false) and PodBot.categorize(p) != "done":
+			rcpu += float(p.get("cpu_req_m", 0))
+			rmem += float(p.get("mem_req", 0))
+	out.append("[color=#83769c]%s[/color]" % tr("RESERVED (requests) - what the scheduler checks"))
+	out.append(_kv("cpu", "%s %s / %s" % [StatsPanel.bar(rcpu / maxf(cap_cpu, 1.0), 10), StatsPanel.cores(rcpu), StatsPanel.cores(cap_cpu)]))
+	out.append(_kv("memory", "%s %s / %s" % [StatsPanel.bar(rmem / maxf(cap_mem, 1.0), 10), StatsPanel.mib(rmem), StatsPanel.mib(cap_mem)]))
+	out.append(_kv("free", "cpu %s, mem %s" % [StatsPanel.cores(maxf(0.0, cap_cpu - rcpu)), StatsPanel.mib(maxf(0.0, cap_mem - rmem))]))
 	if m != null and m.get("available", false) and m.nodes.has(n.name):
-		cpu = float(m.nodes[n.name].cpu_m)
-		mem = float(m.nodes[n.name].mem_bytes)
-	else:
-		label = "requested"
-		for p in K8s.state.get("pods", []):
-			if p.get("node", "") == n.name:
-				cpu += float(p.get("cpu_req_m", 0))
-				mem += float(p.get("mem_req", 0))
-	out.append(_kv("cpu", "%s %s / %s [color=#5f574f](%s)[/color]" % [StatsPanel.bar(cpu / maxf(cap_cpu, 1.0), 10), StatsPanel.cores(cpu), StatsPanel.cores(cap_cpu), tr(label)]))
-	out.append(_kv("memory", "%s %s / %s" % [StatsPanel.bar(mem / maxf(cap_mem, 1.0), 10), StatsPanel.mib(mem), StatsPanel.mib(cap_mem)]))
+		var cpu := float(m.nodes[n.name].cpu_m)
+		var mem := float(m.nodes[n.name].mem_bytes)
+		out.append("[color=#83769c]%s[/color]" % tr("REAL USE (metrics-server)"))
+		out.append(_kv("cpu", "%s %s" % [StatsPanel.bar(cpu / maxf(cap_cpu, 1.0), 10), StatsPanel.cores(cpu)]))
+		out.append(_kv("memory", "%s %s" % [StatsPanel.bar(mem / maxf(cap_mem, 1.0), 10), StatsPanel.mib(mem)]))
 	return out
 
 
@@ -1935,7 +2046,8 @@ func _layout() -> void:
 	# Inspector on the right, legend on the left: scroll when too tall.
 	var w := clampf(sz.x * 0.42, 340.0, 560.0)
 	_inspector.offset_left = -w - 10
-	var max_h := sz.y - top - low - 10
+	# The inspector may cover the terminal, never the other way round.
+	var max_h := sz.y - top - bottom - 10
 	var want := _insp_box.get_combined_minimum_size().y + 36
 	_insp_scroll.custom_minimum_size = Vector2(w - 36, clampf(want - 36, 60, max_h - 36))
 	_inspector.size.y = 0
@@ -1973,6 +2085,11 @@ func _layout() -> void:
 
 func _process(delta: float) -> void:
 	StatsPanel.probe(delta)
+	if _banner_t > 0.0:
+		_banner_t -= delta
+		_banner.modulate.a = clampf(_banner_t, 0.0, 1.0)
+		if _banner_t <= 0.0:
+			_banner.visible = false
 	_perf_t += delta
 	if _perf_t > 0.5 and _perf_label:
 		_perf_t = 0.0

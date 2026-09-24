@@ -199,7 +199,8 @@ func _new_pod(wkey: String, wl: Dictionary, want_node: String) -> void:
 		"ready": 0, "total": wl.containers.size(), "restarts": 0, "owner_kind": wl.kind,
 		"owner_name": wl.name, "containers": wl.containers, "images": wl.containers.map(func(_c): return wl.image),
 		"ip": "", "age": 0.0, "deleting": false, "_t": 0.0, "_wl": wkey, "_want_node": want_node,
-		"cpu_req_m": 100 * wl.containers.size(), "mem_req": 128 * 1024 * 1024 * wl.containers.size(),
+		"cpu_req_m": (64000 if wl.behaviour == "unschedulable" else 100 * wl.containers.size()), "mem_req": 128 * 1024 * 1024 * wl.containers.size(),
+		"message": ("0/%d nodes are available: %d Insufficient cpu, 1 node(s) had untolerated taint(s)." % [nodes.size(), nodes.size() - 1]) if wl.behaviour == "unschedulable" else "",
 	}
 	_dirty = true
 
@@ -302,6 +303,12 @@ func action(req: Dictionary) -> Dictionary:
 				_svc(ns, n, "ClusterIP", n, ["80/TCP"])
 			_dirty = true
 			return {"ok": true, "message": "deployment %s/%s created" % [ns, n]}
+		"delete_service":
+			if not services.has(ns + "/" + n):
+				return {"ok": false, "error": "services \"%s\" not found" % n}
+			services.erase(ns + "/" + n)
+			_dirty = true
+			return {"ok": true, "message": "service %s deleted" % n}
 		"delete_workload":
 			var wkey := ns + "/" + kind + "/" + n
 			if not workloads.has(wkey):

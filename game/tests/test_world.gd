@@ -52,6 +52,31 @@ func _init() -> void:
 				break
 		if not ok:
 			print("FAIL power/easy: surface %d at y=%.2f needs a jump" % [i, world.walk_heights[i]]); fails += 1
+	# ...and actually walk it: from the centre towards each island, stepping
+	# like the player does (ground = highest surface <= feet + STEP), no jumps.
+	for isl in world.islands.values():
+		if isl.target.y < 0.1:
+			continue
+		var p := Vector3.ZERO   # centre of the control-plane island, where bridges start
+		var feet := 0.0
+		var reached := false
+		for step in 3000:
+			var to: Vector3 = isl.target - p
+			to.y = 0
+			if to.length() < 0.5:
+				break
+			var np: Vector3 = world.move_player(p, to.normalized() * 0.08, feet)
+			var g: float = world.ground_below(Vector2(np.x, np.z), feet + world.STEP)
+			if g == -INF:
+				print("FAIL power/easy: fell walking to %s at %s" % [isl.key, np]); fails += 1
+				break
+			p = np
+			feet = g
+			if isl.contains_xz(p) and absf(feet - isl.target.y) < 0.05:
+				reached = true
+				break
+		if not reached and fails == 0:
+			print("FAIL power/easy: could not walk onto %s (stuck at %s, feet %.2f)" % [isl.key, p, feet]); fails += 1
 	# Challenge mode: every surface is reachable with the player's jump.
 	world.challenge = true
 	world.set_level("plant")

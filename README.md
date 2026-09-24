@@ -25,7 +25,7 @@ Tu cluster de Kubernetes **real** convertido en un mundo 3D pixel‑art (voxel) 
 | **NAVE `<ns>`** (subnivel) | Cada **Deployment / StatefulSet / DaemonSet** es una **línea de montaje**: consola con lámparas por réplica (verde = ready) y cinta que solo corre si hay réplicas listas. Cada **Pod** es un **robot** en su estación (un bloque por contenedor, gema = estado). Cada **Service** es un **muelle de carga**; al pasar el ratón o seleccionar se dibujan las líneas de tráfico hacia sus pods. |
 | **SALA DE ENERGÍA** | Cada **Node** es una isla-generador con los pods que corren físicamente en ella. Castillo = control-plane, valla = cordoned, luz roja = NotReady, nube = pods esperando al scheduler. |
 
-Se entra por las puertas (**E**), con doble clic en una nave o desde la barra de niveles. El personaje respeta los límites físicos: camina solo por suelo real (terreno, suelo de la nave, islas y puentes) y no atraviesa naves, consolas, cintas ni muelles.
+Para entrar o salir basta con **pisar la alfombra de la puerta** (o pulsar E, hacer doble clic en una nave o usar la barra de niveles). Empiezas en la calle central, entre las naves, y al salir de una nave apareces delante de su puerta. Al pisar una isla o entrar en una nave aparece un **cartel de zona** que explica qué es (control-plane, worker o namespace), y la barra de niveles muestra dónde estás. Las tuberías warp y los quioscos se usan con E. El personaje respeta los límites físicos: camina solo por suelo real (terreno, suelo de la nave, islas y puentes) y no atraviesa naves, consolas, cintas ni muelles.
 
 ![Dentro de una nave](docs/hall.png)
 ![Sala de energía](docs/energy.png)
@@ -97,6 +97,42 @@ Por defecto, **puentes de tablones** con escalones suaves llevan a cada isla sin
 El panel TERMINAL (tecla `/` para escribir) ejecuta **kubectl real** en el host del bridge, contra el mismo contexto, con historial (↑/↓) y `clear`. Un clic en cualquier comando del juego lo pega en la terminal. Los comandos que modifican (scale, delete pod, rollout restart, cordon, create deployment...) también cuentan para las misiones. En modo demo hay un emulador de kubectl.
 
 Límites de seguridad: no se usa ninguna shell (se rechazan `;`, `|`, `&`, `$`, las comillas invertidas y las redirecciones). Tampoco se permiten comandos interactivos o que no terminan (`exec`, `edit`, `port-forward`, `-w`, `logs -f`), cambiar de cluster o credenciales (`--context`, `--kubeconfig`, `--token`...), leer ficheros locales (`-f`, `-k`, `cp`) ni `config`. Con `--readonly` solo se aceptan verbos de lectura.
+
+## Modo caos y armas (C, 1-6, F)
+
+Con el modo caos activado (C), **F** dispara el arma equipada contra lo que tengas delante. Cada arma es una operación real de Kubernetes y se desbloquea al completar la misión que enseña ese concepto:
+
+| Tecla | Arma | Operación | Se desbloquea con |
+|---|---|---|---|
+| 1 | Pistola de pods | `delete pod` | desde el inicio |
+| 2 | Martillo de rollout | `rollout restart` del workload | misión "Actualización continua" |
+| 3 | Rayo reductor | `scale` −1 réplica | misión "Más producción" |
+| 4 | Pistola de hielo | `cordon` / `uncordon` del nodo | misión "Mantenimiento" |
+| 5 | Cortador de servicios | `delete service` | misión "Sigue el tráfico" |
+| 6 | Bomba nuclear | `delete` del workload entero | misión "Recoge la fábrica" |
+
+El cortador y la bomba piden confirmación siempre. Todo disparo aparece en la TERMINAL como su comando kubectl.
+
+Cada arma tiene su animación, aunque no haya nada al alcance: el disparo sale igual y se pierde en el aire, sin ejecutar nada.
+- **Pistola**: rayo con estela.
+- **Martillo**: golpe y onda expansiva en el suelo.
+- **Rayo reductor**: haz vibrante con anillos.
+- **Hielo**: chorro de cristales que dejan hielo donde impactan.
+- **Cortador**: cuchilla que va y vuelve como un bumerán.
+- **Bomba**: cohete en parábola, explosión, hongo y temblor de cámara.
+
+Cada arma tiene su tiempo de recarga, y la operación real se ejecuta cuando el disparo impacta.
+
+## Audio
+
+Todo el sonido se **genera por código** con un pequeño sintetizador chiptune ([`sfx.gd`](game/scripts/sfx.gd): ondas cuadrada, triangular, sierra y ruido, con barridos y envolventes), así que el juego no incluye ningún archivo de audio:
+- **Efectos**: cada arma, pasos, salto, aterrizaje, monedas, tuberías, puertas, caídas, muerte de pods, clics de la interfaz, teclas de la terminal, misión completada y una alarma cuando un pod empieza a fallar.
+- **Música**: dos bucles en la misma tonalidad, uno de día (animado) y otro de noche (tranquilo), que se funden según la hora del cluster.
+- **Volumen**: música y efectos en **VISTA**.
+
+## Capacidad de los nodos
+
+Cada isla tiene dos medidores (CPU azul y memoria rosa) que muestran lo **reservado por los requests** de sus pods frente a lo asignable del nodo: verde, amarillo o rojo según la presión. Su letrero dice, por ejemplo, "cpu 700m/4.0, mem 896 MiB/8 GiB". El panel del nodo separa lo reservado (lo único que mira el scheduler), lo libre y el uso real (metrics-server). Un pod Pending muestra el mensaje del scheduler con el motivo exacto, por ejemplo "0/4 nodes are available: 2 Insufficient cpu, 2 node(s) had untolerated taint(s)", y lo que pide.
 
 ## Primera persona (P)
 

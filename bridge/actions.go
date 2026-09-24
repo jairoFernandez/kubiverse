@@ -142,6 +142,10 @@ func (b *Bridge) doAction(ctx context.Context, req ActionRequest) (string, error
 		}
 		return "deployment " + req.NS + "/" + req.Name + " created", nil
 
+	case "delete_service":
+		err := b.cs.CoreV1().Services(req.NS).Delete(ctx, req.Name, metav1.DeleteOptions{})
+		return "service " + req.Name + " deleted", err
+
 	case "delete_workload":
 		var err error
 		switch req.Kind {

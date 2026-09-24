@@ -64,6 +64,7 @@ type Pod struct {
 	Deleting   bool     `json:"deleting"`
 	CPUReqm    int64    `json:"cpu_req_m"`
 	MemReq     int64    `json:"mem_req"`
+	Message    string   `json:"message"` // why it is not running (scheduler / container)
 }
 
 type Workload struct {
@@ -270,6 +271,20 @@ func convertPod(p *corev1.Pod, rsOwner map[string]string, now time.Time) Pod {
 		}
 	}
 	out.Status = podStatus(p)
+	for _, c := range p.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse && c.Message != "" {
+			out.Message = c.Message
+		}
+	}
+	if out.Message == "" {
+		for _, cs := range p.Status.ContainerStatuses {
+			if cs.State.Waiting != nil && cs.State.Waiting.Message != "" {
+				out.Message = cs.State.Waiting.Message
+			} else if cs.State.Terminated != nil && cs.State.Terminated.Message != "" {
+				out.Message = cs.State.Terminated.Message
+			}
+		}
+	}
 	for _, cs := range p.Status.ContainerStatuses {
 		if cs.Ready {
 			out.Ready++

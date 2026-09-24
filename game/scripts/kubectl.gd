@@ -31,6 +31,8 @@ static func for_action(req: Dictionary) -> String:
 			return c
 		"delete_workload":
 			return "kubectl %sdelete %s/%s" % [_ns(ns), kind, n]
+		"delete_service":
+			return "kubectl %sdelete service %s" % [_ns(ns), n]
 	return "# unknown action"
 
 
@@ -199,6 +201,8 @@ static func to_action(line: String, default_ns := "default") -> Dictionary:
 				return {"action": "delete_pod", "ns": ns, "name": pos[1]}
 			if pos.size() == 1 and (pos[0].begins_with("pod/") or pos[0].begins_with("po/")):
 				return {"action": "delete_pod", "ns": ns, "name": pos[0].split("/")[1]}
+			if pos.size() >= 2 and pos[0] in ["service", "services", "svc"]:
+				return {"action": "delete_service", "ns": ns, "name": pos[1]}
 			var kn := kind_name(pos)
 			if kn[0] in ["Deployment", "StatefulSet", "DaemonSet"]:
 				return {"action": "delete_workload", "kind": kn[0], "ns": ns, "name": kn[1]}

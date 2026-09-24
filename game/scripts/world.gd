@@ -10,6 +10,7 @@ extends Node3D
 ## player may stand (walkable areas minus solid blockers).
 
 signal level_changed(level: String)
+signal shake_requested(amount: float)
 
 const SYSTEM_NS := ["kube-system", "kube-public", "kube-node-lease", "local-path-storage"]
 const LINE_GAP := 6.5
@@ -53,6 +54,7 @@ var _limbo_slots := {}
 var _particles := []
 var _t := 0.0
 var _any_beam := false
+var _rim: Node3D
 
 
 func _ready() -> void:
@@ -75,6 +77,11 @@ func _ready() -> void:
 		Vox.box(_marker, Vector3(w, 0.16, w), Vector3(0, i * -0.16, 0), Vox.YELLOW, 2.0)
 	_marker.visible = false
 	add_child(_marker)
+	_rim = Node3D.new()
+	for i in 4:
+		Vox.box(_rim, Vector3.ONE, Vector3.ZERO, Vox.YELLOW, 2.5, false)
+	_rim.visible = false
+	add_child(_rim)
 
 
 func ns_visible(ns: String) -> bool:
@@ -332,7 +339,9 @@ func _apply_plant(s: Dictionary) -> void:
 			var b: FactoryBuilding = buildings[n]
 			_add_door(b.door_position(), "ns:" + n, "enter hall %s|" + n, Vox.ns_color(n))
 		_add_door(pw.door_position(), "power", "enter the energy room", Vox.YELLOW)
-		spawn = Vector3(0, 0, 3.0)
+		# Start in the street in the middle of the halls, not by the energy plant.
+		var sx := -grid_w * 0.5 + roundi(cols * 0.5) * cell_w
+		spawn = Vector3(sx, 0, -grid_d * 0.5 - 4.0)
 	blockers.clear()
 	for b in buildings.values():
 		blockers.append(b.footprint())
@@ -507,9 +516,15 @@ func _drop_missing_pods(seen: Dictionary) -> void:
 
 func _apply_power(s: Dictionary) -> void:
 	var per_node := {}
+	var req := {}   # node -> [cpu_m, mem] requested by every pod on it
 	for p in s.pods:
-		if ns_visible(p.ns) and p.get("node", "") != "":
+		if p.get("node", "") == "":
+			continue
+		if ns_visible(p.ns):
 			per_node[p.node] = per_node.get(p.node, 0) + 1
+		if not p.get("deleting", false) and PodBot.categorize(p) != "done":
+			var r: Array = req.get(p.node, [0.0, 0.0])
+			req[p.node] = [r[0] + float(p.get("cpu_req_m", 0)), r[1] + float(p.get("mem_req", 0))]
 	var seen := {}
 	for n in s.nodes:
 		seen[n.name] = true
@@ -520,6 +535,8 @@ func _apply_power(s: Dictionary) -> void:
 			_entities.add_child(isl)
 			islands[n.name] = isl
 		isl.update_data(n, per_node.get(n.name, 0))
+		var r: Array = req.get(n.name, [0.0, 0.0])
+		isl.set_usage(r[0], r[1])
 	for k in islands.keys():
 		if not seen.has(k):
 			islands[k].queue_free()
@@ -549,7 +566,8 @@ func _apply_power(s: Dictionary) -> void:
 	if workers.size() > 1:
 		r = maxf(r, (biggest + 6.0) / (2.0 * sin(PI / workers.size())))
 	for i in workers.size():
-		var a := -PI * 0.5 + TAU * i / workers.size() + (PI * 0.25 if workers.size() > 1 else PI * 0.5)
+		# Bridges land on edge midpoints (never on the prop-filled corners).
+		var a := PI * 0.5 + TAU * (i + 1) / (workers.size() + 1)
 		var isl: NodeIsland = islands[workers[i]]
 		isl.target = Vector3(cos(a) * r, 0.8 + (i % 3) * 0.7, sin(a) * r)
 		if isl.position == Vector3.ZERO:
@@ -566,8 +584,20 @@ func _apply_power(s: Dictionary) -> void:
 			_add_walk(Rect2(-hub.x, -hub.y, hub.x * 2, hub.y * 2), 0.0)
 			# The castle tower in the control-plane's corner is solid.
 			blockers.append(Rect2(-hub.x + 0.25, -hub.y + 0.25, 1.1, 1.1))
-		_add_door(Vector3(0, 0, hub.y - 0.8), "plant", "exit to the plant", Vox.YELLOW)
-		spawn = Vector3(0.8, 0, hub.y - 2.0)
+		# Where bridges touch each island: props must keep away from there.
+		var landings := {}   # island name (or "@hub") -> [Vector3 points]
+		var centre_key := center_name if center_name != "" else "@hub"
+		landings[centre_key] = []
+		for k in workers:
+			var c: Vector3 = islands[k].target
+			var dir := Vector3(c.x, 0, c.z).normalized()
+			landings[centre_key].append(dir * (minf(hub.x / maxf(absf(dir.x), 0.001), hub.y / maxf(absf(dir.z), 0.001)) - 0.6))
+			var h: float = islands[k].size * 0.5
+			landings[k] = [Vector3(c.x, c.y, c.z) - dir * (minf(h / maxf(absf(dir.x), 0.001), h / maxf(absf(dir.z), 0.001)) - 0.6)]
+		var door_pos := _free_spot(Vector3.ZERO, hub.x, landings[centre_key], [Vector3(0, 0, hub.y - 0.8)])
+		_add_door(door_pos, "plant", "exit to the plant", Vox.YELLOW)
+		landings[centre_key].append(door_pos)
+		spawn = door_pos.move_toward(Vector3.ZERO, 2.0)
 		for i in workers.size():
 			var isl: NodeIsland = islands[workers[i]]
 			var half: float = isl.size * 0.5
@@ -579,7 +609,10 @@ func _apply_power(s: Dictionary) -> void:
 		# Warp pipes: a ring centre -> worker 1 -> worker 2 -> ... -> centre.
 		var stops: Array = ([center_name] if center_name != "" else ["@hub"]) + workers
 		for st in stops:
-			pipes[st] = _pipe_pos(st, hub)
+			var base: Vector3 = Vector3.ZERO if st == "@hub" else islands[st].target
+			var half: float = hub.x if st == "@hub" else islands[st].size * 0.5
+			pipes[st] = _free_spot(base, half, landings.get(st, []))
+			landings.get_or_add(st, []).append(pipes[st])
 		for i in stops.size():
 			var here: String = stops[i]
 			var nxt: String = stops[(i + 1) % stops.size()]
@@ -590,7 +623,9 @@ func _apply_power(s: Dictionary) -> void:
 		for nn in names:
 			var isl: NodeIsland = islands[nn]
 			var h2: float = isl.size * 0.5
-			_build_kiosk(isl.target + Vector3(-h2 + 1.0, 0, h2 - 1.0), nn, nn == center_name)
+			var kpos := _free_spot(isl.target, h2, landings.get(nn, []))
+			landings.get_or_add(nn, []).append(kpos)
+			_build_kiosk(kpos, nn, nn == center_name)
 		var cr := Vox.rng_for("cloud")
 		var cloud := Node3D.new()
 		cloud.name = "Cloud"
@@ -714,6 +749,29 @@ func _build_walkway(hub: Vector2, isl: NodeIsland) -> void:
 				post.rotation.y = yaw
 
 
+## A spot on an island (centre `base`, half-size `h`) far from every point
+## in `avoid` (bridge landings, other props). Corners first, then edges.
+func _free_spot(base: Vector3, h: float, avoid: Array, prefer := []) -> Vector3:
+	var m := h - 1.1
+	var cands: Array = prefer.duplicate()
+	for c in [Vector3(m, 0, -m), Vector3(-m, 0, m), Vector3(m, 0, m), Vector3(0, 0, m + 0.2),
+			Vector3(m + 0.2, 0, 0), Vector3(0, 0, -m - 0.2), Vector3(-m - 0.2, 0, 0)]:
+		cands.append(base + c)
+	var tower := base + Vector3(-h + 0.8, 0, -h + 0.8)   # tower / rack corner is taken
+	var best: Vector3 = cands[0]
+	var best_d := -1.0
+	for c in cands:
+		var d: float = c.distance_to(tower)
+		for a in avoid:
+			d = minf(d, Vector2(c.x - a.x, c.z - a.z).length())
+		if d >= 3.0:
+			return c
+		if d > best_d:
+			best_d = d
+			best = c
+	return best
+
+
 ## Where the warp pipe of an island (or the hub) stands: far corner, away
 ## from the tower and the door.
 func _pipe_pos(name: String, hub: Vector2) -> Vector3:
@@ -779,6 +837,25 @@ func poof(pos: Vector3, col: Color) -> void:
 		_particles.append({"m": m, "v": v, "life": 0.7, "g": 6.0})
 
 
+## A pod is deleted: a flash, then its body breaks into voxel pieces that
+## fly out, bounce on the floor and fade.
+func shatter(pos: Vector3, height: float, col: Color) -> void:
+	sfx("pod_death", pos)
+	var flash := Vox.box(_fx_root, Vector3(0.9, height + 0.3, 0.8), pos + Vector3(0, (height + 0.3) * 0.5, 0), Vox.WHITE, 4.0, false)
+	_particles.append({"m": flash, "v": Vector3.ZERO, "life": 0.12, "g": 0.0})
+	var n := 14
+	for i in n:
+		var y := randf_range(0.1, height)
+		var sz := randf_range(0.14, 0.3)
+		var c := col if i % 3 else col.darkened(0.3)
+		if i % 5 == 0:
+			c = Vox.NAVY
+		var m := Vox.box(_fx_root, Vector3.ONE * sz, pos + Vector3(randf_range(-0.3, 0.3), y, randf_range(-0.3, 0.3)), c, 0.0, true)
+		var out := Vector3(randf_range(-1, 1), 0, randf_range(-1, 1)).normalized()
+		_particles.append({"m": m, "v": out * randf_range(1.5, 3.5) + Vector3(0, randf_range(2.5, 5.0), 0),
+			"life": randf_range(1.0, 1.6), "g": 14.0, "floor": pos.y, "spin": Vector3(randf(), randf(), randf()) * 8.0})
+
+
 func smoke(pos: Vector3, col := Color("4a4350")) -> void:
 	var m := Vox.box(_fx_root, Vector3(0.25, 0.25, 0.25), pos, col, 0.0, false)
 	_particles.append({"m": m, "v": Vector3(randf_range(-0.2, 0.2), 1.2, randf_range(-0.2, 0.2)), "life": 1.4, "g": -0.5})
@@ -790,6 +867,157 @@ func flame(pos: Vector3, size := 1.0) -> void:
 	m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_particles.append({"m": m, "v": Vector3(randf_range(-0.4, 0.4), randf_range(1.8, 3.2), randf_range(-0.4, 0.4)),
 		"life": 0.7, "max": 0.7, "g": -1.0, "fire": true})
+
+
+## Plays a sound through the Sfx autoload when it exists (not in tests).
+func sfx(name: String, pos = null) -> void:
+	var s := get_node_or_null("/root/Sfx")
+	if s:
+		s.play(name, pos)
+
+
+# ------------------------------------------------------------ weapon fx
+
+func _glow(size: Vector3, pos: Vector3, col: Color, energy := 3.0) -> MeshInstance3D:
+	var m := Vox.box(_fx_root, size, pos, col, energy, false)
+	m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return m
+
+
+func _trail(pos: Vector3, col: Color, size := 0.14) -> void:
+	_particles.append({"m": _glow(Vector3.ONE * size, pos, col, 2.0), "v": Vector3.ZERO, "life": 0.25, "g": 0.0})
+
+
+func flash(pos: Vector3, col: Color, size := 1.0) -> void:
+	var m := _glow(Vector3.ONE * size, pos, col, 5.0)
+	var tw := create_tween()
+	tw.tween_property(m, "scale", Vector3.ONE * 2.5, 0.12)
+	tw.tween_callback(m.queue_free)
+
+
+## Energy bolt with a trail; calls on_hit when it arrives.
+func bolt(from: Vector3, to: Vector3, col: Color, on_hit: Callable, speed := 22.0) -> void:
+	var m := _glow(Vector3(0.32, 0.32, 0.32), from, col, 4.0)
+	flash(from, col, 0.35)
+	var dur := maxf(0.05, from.distance_to(to) / speed)
+	var tw := create_tween()
+	tw.tween_method(func(t: float):
+		m.position = from.lerp(to, t)
+		if randf() < 0.8:
+			_trail(m.position, col, 0.2), 0.0, 1.0, dur)
+	tw.tween_callback(func():
+		m.queue_free()
+		flash(to, col, 0.5)
+		poof(to, col)
+		on_hit.call())
+
+
+## Ground slam: a ring of blocks rushing outwards.
+func shockwave(pos: Vector3, col: Color) -> void:
+	flash(pos + Vector3(0, 0.3, 0), col, 1.2)
+	for i in 20:
+		var a := TAU * i / 20.0
+		var m := _glow(Vector3(0.3, 0.2, 0.3), pos + Vector3(0, 0.15, 0), col, 2.0)
+		_particles.append({"m": m, "v": Vector3(cos(a), 0.6, sin(a)) * 7.0, "life": 0.5, "g": 3.0})
+	shake_requested.emit(0.35)
+
+
+## Shrink-ray beam: a pulsing ray with rings running along it.
+func beam(from: Vector3, to: Vector3, col: Color, dur := 0.5) -> void:
+	var len := from.distance_to(to)
+	var ray := _glow(Vector3(0.12, 0.12, len), from.lerp(to, 0.5), col, 4.0)
+	ray.look_at_from_position(from.lerp(to, 0.5), to, Vector3.UP)
+	var tw := create_tween()
+	tw.tween_method(func(t: float):
+		var w := 1.0 + sin(t * 60.0) * 0.5
+		ray.scale = Vector3(w, w, 1.0)
+		if randf() < 0.5:
+			var ring := _glow(Vector3(0.5, 0.5, 0.06), from.lerp(to, fmod(t * 3.0, 1.0)), Vox.WHITE, 3.0)
+			ring.look_at_from_position(ring.position, to, Vector3.UP)
+			_particles.append({"m": ring, "v": Vector3.ZERO, "life": 0.15, "g": 0.0}), 0.0, 1.0, dur)
+	tw.tween_callback(ray.queue_free)
+
+
+## Freeze gun: a cone of ice crystals; crystals grow where it hits.
+func spray(from: Vector3, to: Vector3, col: Color) -> void:
+	var dir := (to - from).normalized()
+	for i in 40:
+		var spread := Vector3(randf_range(-1, 1), randf_range(-0.4, 0.8), randf_range(-1, 1)) * 0.22
+		var m := _glow(Vector3.ONE * randf_range(0.16, 0.3), from, col if i % 3 else Vox.WHITE, 2.0)
+		_particles.append({"m": m, "v": (dir + spread).normalized() * randf_range(10.0, 16.0), "life": from.distance_to(to) / 13.0 + 0.1, "g": 2.0})
+
+
+func ice(pos: Vector3, col: Color) -> void:
+	for i in 6:
+		var h := randf_range(0.5, 1.4)
+		var c := _glow(Vector3(0.25, h, 0.25), pos + Vector3(randf_range(-0.8, 0.8), h * 0.5, randf_range(-0.8, 0.8)), col, 1.5)
+		c.rotation = Vector3(randf_range(-0.3, 0.3), randf() * TAU, randf_range(-0.3, 0.3))
+		var tw := create_tween()
+		c.scale = Vector3(1, 0.05, 1)
+		tw.tween_property(c, "scale", Vector3.ONE, 0.15)
+		tw.tween_interval(1.2)
+		tw.tween_property(c, "scale", Vector3(1, 0.02, 1), 0.3)
+		tw.tween_callback(c.queue_free)
+
+
+## Service cutter: a spinning blade that flies out and comes back.
+func boomerang(from: Vector3, to: Vector3, col: Color, on_hit: Callable) -> void:
+	var b := _glow(Vector3(0.7, 0.06, 0.25), from, col, 3.0)
+	var tw := create_tween()
+	var mid := from.lerp(to, 0.5) + Vector3(0, 0.8, 0)
+	tw.tween_method(func(t: float):
+		b.position = from.lerp(mid, t).lerp(mid.lerp(to, t), t)
+		b.rotation.y += 0.6
+		_trail(b.position, col, 0.1), 0.0, 1.0, 0.3)
+	tw.tween_callback(func():
+		flash(to, col, 0.6)
+		poof(to, col)
+		on_hit.call())
+	tw.tween_method(func(t: float):
+		b.position = to.lerp(from, t) + Vector3(0, sin(t * PI) * 0.8, 0)
+		b.rotation.y += 0.6, 0.0, 1.0, 0.3)
+	tw.tween_callback(b.queue_free)
+
+
+## Nuke: rocket on an arc with a smoke trail, then a big explosion.
+func rocket(from: Vector3, to: Vector3, on_boom: Callable) -> void:
+	var r := Node3D.new()
+	_fx_root.add_child(r)
+	Vox.box(r, Vector3(0.3, 0.3, 0.8), Vector3.ZERO, Vox.FOREST)
+	Vox.box(r, Vector3(0.22, 0.22, 0.25), Vector3(0, 0, -0.5), Vox.RED, 2.0)
+	var dist := from.distance_to(to)
+	var h := clampf(dist * 0.4, 1.5, 6.0)
+	var dur := clampf(dist / 12.0, 0.5, 1.4)
+	var tw := create_tween()
+	var last := [from]
+	tw.tween_method(func(t: float):
+		var p := from.lerp(to, t) + Vector3(0, sin(t * PI) * h, 0)
+		if p.distance_to(last[0]) > 0.001:
+			r.look_at_from_position(p, p + (p - last[0]), Vector3.UP)
+		last[0] = p
+		smoke(p, Color("8f8f9f")), 0.0, 1.0, dur).set_trans(Tween.TRANS_SINE)
+	tw.tween_callback(func():
+		r.queue_free()
+		explode(to)
+		on_boom.call())
+
+
+func explode(pos: Vector3) -> void:
+	var fb := _glow(Vector3.ONE, pos + Vector3(0, 0.5, 0), Vox.YELLOW, 6.0)
+	var tw := create_tween()
+	tw.tween_property(fb, "scale", Vector3.ONE * 7.0, 0.25).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(fb, "position:y", pos.y + 2.5, 0.25)
+	tw.tween_property(fb, "scale", Vector3.ONE * 0.1, 0.35)
+	tw.tween_callback(fb.queue_free)
+	for i in 40:
+		var c: Color = [Vox.RED, Vox.ORANGE, Vox.YELLOW, Vox.SLATE][i % 4]
+		var m := _glow(Vector3.ONE * randf_range(0.2, 0.5), pos + Vector3(0, 0.5, 0), c, 3.0)
+		var v := Vector3(randf_range(-1, 1), randf_range(0.2, 1.6), randf_range(-1, 1)).normalized() * randf_range(5.0, 12.0)
+		_particles.append({"m": m, "v": v, "life": randf_range(0.6, 1.3), "g": 9.0, "floor": pos.y})
+	# Mushroom cloud
+	for i in 10:
+		smoke(pos + Vector3(randf_range(-0.6, 0.6), 1.0 + i * 0.35, randf_range(-0.6, 0.6)), Color("5f574f"))
+	shake_requested.emit(1.0)
 
 
 func zap(from: Vector3, to: Vector3) -> void:
@@ -819,11 +1047,18 @@ func _process(delta: float) -> void:
 			continue
 		p.v = p.v - Vector3(0, p.g * delta, 0)
 		m.position += p.v * delta
+		if p.has("floor") and m.position.y < p.floor + 0.08:
+			m.position.y = p.floor + 0.08
+			p.v = Vector3(p.v.x * 0.6, absf(p.v.y) * 0.35, p.v.z * 0.6)
+		if p.has("spin"):
+			m.rotation += p.spin * delta
 		if p.get("fire", false):
 			var f: float = p.life / p.max
 			m.material_override = Vox.mat(Vox.YELLOW if f > 0.66 else (Vox.ORANGE if f > 0.33 else Vox.RED), 3.0, false)
 			m.position.x += sin(_t * 30.0 + m.position.z) * 0.02
 			m.scale = Vector3.ONE * clampf(f * 1.3, 0.05, 1.0)
+		elif p.has("floor"):
+			m.scale = Vector3.ONE * clampf(p.life * 2.5, 0.05, 1.0)   # shrink only at the very end
 		else:
 			m.scale = Vector3.ONE * clampf(p.life * 1.5, 0.05, 1.0)
 	_draw_beams()
@@ -833,9 +1068,45 @@ func _process(delta: float) -> void:
 		_marker.rotation.y += delta * 2.0
 	else:
 		_marker.visible = false
+	_update_rim()
 	var cloud := _static.get_node_or_null("Cloud") if _static else null
 	if cloud:
 		cloud.visible = pods.values().any(func(b): return b.node_name == "" and not b.dying)
+
+
+## Glowing frame around the hovered (or selected) island / hall so it is
+## obvious what a click will select.
+func _update_rim() -> void:
+	var e: Entity = null
+	for c in [hovered, selected]:
+		if c != null and is_instance_valid(c) and c.is_area():
+			e = c
+			break
+	if e == null:
+		_rim.visible = false
+		return
+	var r: Rect2
+	var y := 0.1
+	if e is NodeIsland:
+		r = Rect2(e.global_position.x - e.size * 0.5, e.global_position.z - e.size * 0.5, e.size, e.size)
+		y = e.global_position.y + 0.08
+	elif e is FactoryBuilding:
+		r = Rect2(e.global_position.x - e.w * 0.5 - 0.4, e.global_position.z - e.d * 0.5 - 0.4, e.w + 0.8, e.d + 0.8)
+	else:
+		_rim.visible = false
+		return
+	_rim.visible = fmod(_t, 0.6) < 0.45 or e == selected
+	var t := 0.18
+	var sides := [
+		[Vector3(r.size.x, t, t), Vector3(r.get_center().x, y, r.position.y)],
+		[Vector3(r.size.x, t, t), Vector3(r.get_center().x, y, r.end.y)],
+		[Vector3(t, t, r.size.y), Vector3(r.position.x, y, r.get_center().y)],
+		[Vector3(t, t, r.size.y), Vector3(r.end.x, y, r.get_center().y)],
+	]
+	for i in 4:
+		var m: MeshInstance3D = _rim.get_child(i)
+		m.scale = sides[i][0]
+		m.position = sides[i][1]
 
 
 ## Service -> pod lines (service type color; white packets = traffic going
@@ -889,17 +1160,32 @@ func _line(a: Vector3, b: Vector3, col: Color) -> void:
 	_beam_mesh.surface_add_vertex(b)
 
 
+## The island (node) the player stands on in the energy room, or null.
+func island_at(p: Vector3) -> NodeIsland:
+	for isl in islands.values():
+		if isl.contains_xz(p) and absf(p.y - isl.global_position.y) < 1.5:
+			return isl
+	return null
+
+
+## Tells the player that the hovered thing can be clicked.
+func _hint(e: Entity, sub: String) -> String:
+	if e == hovered and e != selected:
+		return sub + "   <" + tr("click for actions") + ">"
+	return sub
+
+
 ## Label candidates for the 2D overlay: [{pos, text, sub, color, big, small?}]
 func labels(player_pos: Vector3) -> Array:
 	var out := []
 	for b in buildings.values():
-		out.append({"pos": b.anchor(), "text": b.label_text(), "sub": b.label_sub(), "color": b.label_color(), "big": true})
+		out.append({"pos": b.anchor(), "text": b.label_text(), "sub": _hint(b, b.label_sub()), "color": b.label_color(), "big": true, "entity": b})
 	for isl in islands.values():
-		out.append({"pos": isl.anchor(), "text": isl.label_text(), "sub": isl.label_sub(), "color": isl.label_color(), "big": true})
+		out.append({"pos": isl.anchor(), "text": isl.label_text(), "sub": _hint(isl, isl.label_sub()), "color": isl.label_color(), "big": true, "entity": isl})
 	for l in lines.values():
-		out.append({"pos": l.anchor(), "text": l.label_text(), "sub": l.label_sub(), "color": l.label_color(), "big": true})
+		out.append({"pos": l.anchor(), "text": l.label_text(), "sub": _hint(l, l.label_sub()), "color": l.label_color(), "big": true, "entity": l})
 	for dk in services.values():
-		out.append({"pos": dk.anchor(), "text": dk.label_text(), "sub": dk.label_sub(), "color": dk.label_color(), "big": false})
+		out.append({"pos": dk.anchor(), "text": dk.label_text(), "sub": _hint(dk, dk.label_sub()), "color": dk.label_color(), "big": false, "entity": dk})
 	var near := []
 	for e in pods.values():
 		if e.dying or e == hovered or e == selected:
@@ -913,7 +1199,7 @@ func labels(player_pos: Vector3) -> Array:
 		if e is PodBot and is_instance_valid(e) and not e in shown:
 			shown.append(e)
 	for e in shown:
-		out.append({"pos": e.anchor(), "text": e.label_text(), "sub": e.label_sub(), "color": e.label_color(), "big": false})
+		out.append({"pos": e.anchor(), "text": e.label_text(), "sub": _hint(e, e.label_sub()), "color": e.label_color(), "big": false, "entity": e})
 	for e in [hovered, selected]:
 		if e is PodBot and is_instance_valid(e):
 			for sv in services.values():
