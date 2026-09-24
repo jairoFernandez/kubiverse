@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -35,9 +36,9 @@ type Bridge struct {
 	contextName string
 	server      string
 	readOnly    bool
-	token       string
 
-	kubeconfigPath string // explicit --kubeconfig, passed on to kubectl
+	kubeconfigPath string             // explicit --kubeconfig, passed on to kubectl
+	stop           context.CancelFunc // stops this cluster's informers
 	metrics        Metrics
 
 	nodeLister corelisters.NodeLister
@@ -62,99 +63,38 @@ type client struct {
 func main() {
 	var (
 		kubeconfig = flag.String("kubeconfig", "", "path to kubeconfig (default: $KUBECONFIG or ~/.kube/config)")
-		kubectx    = flag.String("context", "", "kubeconfig context to use (default: current-context)")
+		kubectx    = flag.String("context", "", "default kubeconfig context (default: current-context)")
 		addr       = flag.String("addr", "127.0.0.1:8088", "listen address")
 		readOnly   = flag.Bool("readonly", false, "reject every mutating action")
 		token      = flag.String("token", os.Getenv("K8SGAME_TOKEN"), "optional shared token required by clients")
 		webDir     = flag.String("web", "", "optional directory with the Godot web export to serve at /")
 		origins    = flag.String("allow-origin", "", "extra comma-separated browser origins allowed to call the API (localhost is always allowed)")
+		dataDir    = flag.String("data", defaultDataDir(), "where kubeconfigs added from the game are stored")
 	)
 	flag.Parse()
-
-	rules := clientcmd.NewDefaultClientConfigLoadingRules()
-	if *kubeconfig != "" {
-		rules.ExplicitPath = *kubeconfig
-	}
-	overrides := &clientcmd.ConfigOverrides{CurrentContext: *kubectx}
-	cc := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides)
-	raw, err := cc.RawConfig()
-	if err != nil {
-		log.Fatalf("load kubeconfig: %v", err)
-	}
-	cfg, err := cc.ClientConfig()
-	if err != nil {
-		log.Fatalf("client config: %v", err)
-	}
-	cfg.UserAgent = "k8sgame-bridge"
-	cs, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		log.Fatalf("clientset: %v", err)
-	}
-	ctxName := raw.CurrentContext
-	if *kubectx != "" {
-		ctxName = *kubectx
-	}
-
-	b := &Bridge{
-		cs: cs, contextName: ctxName, server: cfg.Host,
-		readOnly: *readOnly, token: *token,
-		clients:        map[*client]struct{}{},
-		kubeconfigPath: *kubeconfig,
-	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	f := informers.NewSharedInformerFactory(cs, 10*time.Minute)
-	b.nodeLister = f.Core().V1().Nodes().Lister()
-	b.nsLister = f.Core().V1().Namespaces().Lister()
-	b.podLister = f.Core().V1().Pods().Lister()
-	b.svcLister = f.Core().V1().Services().Lister()
-	b.depLister = f.Apps().V1().Deployments().Lister()
-	b.rsLister = f.Apps().V1().ReplicaSets().Lister()
-	b.stsLister = f.Apps().V1().StatefulSets().Lister()
-	b.dsLister = f.Apps().V1().DaemonSets().Lister()
-
-	markDirty := cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(any) { b.markDirty() },
-		UpdateFunc: func(any, any) { b.markDirty() },
-		DeleteFunc: func(any) { b.markDirty() },
-	}
-	for _, inf := range []cache.SharedIndexInformer{
-		f.Core().V1().Nodes().Informer(),
-		f.Core().V1().Namespaces().Informer(),
-		f.Core().V1().Pods().Informer(),
-		f.Core().V1().Services().Informer(),
-		f.Apps().V1().Deployments().Informer(),
-		f.Apps().V1().ReplicaSets().Informer(),
-		f.Apps().V1().StatefulSets().Informer(),
-		f.Apps().V1().DaemonSets().Informer(),
-	} {
-		if _, err := inf.AddEventHandler(markDirty); err != nil {
-			log.Fatalf("add handler: %v", err)
+	hub := newHub(ctx, *kubeconfig, *kubectx, *dataDir, *readOnly, *token)
+	log.Printf("default context %q, extra kubeconfigs in %s", hub.defaultCtx, hub.dir)
+	// Warm up the default cluster so the first client connects instantly.
+	go func() {
+		if _, err := hub.get(""); err != nil {
+			log.Printf("default context not available yet: %v", err)
 		}
-	}
-	b.watchEvents(ctx, f)
-
-	log.Printf("connecting to %s (context %q)...", cfg.Host, ctxName)
-	f.Start(ctx.Done())
-	for typ, ok := range f.WaitForCacheSync(ctx.Done()) {
-		if !ok {
-			log.Fatalf("cache sync failed for %v", typ)
-		}
-	}
-	log.Printf("cluster cache synced")
-	b.markDirty()
-	go b.publishLoop(ctx)
-	go b.pollMetrics(ctx)
+	}()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
-	mux.HandleFunc("GET /api/state", b.auth(b.handleState))
-	mux.HandleFunc("GET /api/ws", b.auth(b.handleWS))
-	mux.HandleFunc("GET /api/logs", b.auth(b.handleLogs))
-	mux.HandleFunc("POST /api/action", b.auth(b.handleAction))
-	mux.HandleFunc("POST /api/kubectl", b.auth(b.handleKubectl))
+	mux.HandleFunc("GET /api/contexts", hub.auth(hub.handleContexts))
+	mux.HandleFunc("POST /api/kubeconfig", hub.auth(hub.handleAddKubeconfig))
+	mux.HandleFunc("DELETE /api/kubeconfig", hub.auth(hub.handleDeleteKubeconfig))
+	mux.HandleFunc("GET /api/state", hub.cluster((*Bridge).handleState))
+	mux.HandleFunc("GET /api/ws", hub.cluster((*Bridge).handleWS))
+	mux.HandleFunc("GET /api/logs", hub.cluster((*Bridge).handleLogs))
+	mux.HandleFunc("POST /api/action", hub.cluster((*Bridge).handleAction))
+	mux.HandleFunc("POST /api/kubectl", hub.cluster((*Bridge).handleKubectl))
 	if *webDir != "" {
 		fs := http.FileServer(http.Dir(*webDir))
 		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -176,6 +116,71 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+// startBridge connects to one cluster (informers + metrics) and returns it
+// once its caches are synced, or an error if the cluster is unreachable.
+func startBridge(root context.Context, cc clientcmd.ClientConfig, ctxName, kubeconfigPath string, readOnly bool) (*Bridge, error) {
+	cfg, err := cc.ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("client config: %w", err)
+	}
+	cfg.UserAgent = "k8sgame-bridge"
+	cs, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("clientset: %w", err)
+	}
+	b := &Bridge{
+		cs: cs, contextName: ctxName, server: cfg.Host, readOnly: readOnly,
+		clients: map[*client]struct{}{}, kubeconfigPath: kubeconfigPath,
+	}
+	ctx, cancel := context.WithCancel(root)
+	b.stop = cancel
+	f := informers.NewSharedInformerFactory(cs, 10*time.Minute)
+	b.nodeLister = f.Core().V1().Nodes().Lister()
+	b.nsLister = f.Core().V1().Namespaces().Lister()
+	b.podLister = f.Core().V1().Pods().Lister()
+	b.svcLister = f.Core().V1().Services().Lister()
+	b.depLister = f.Apps().V1().Deployments().Lister()
+	b.rsLister = f.Apps().V1().ReplicaSets().Lister()
+	b.stsLister = f.Apps().V1().StatefulSets().Lister()
+	b.dsLister = f.Apps().V1().DaemonSets().Lister()
+	markDirty := cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(any) { b.markDirty() },
+		UpdateFunc: func(any, any) { b.markDirty() },
+		DeleteFunc: func(any) { b.markDirty() },
+	}
+	for _, inf := range []cache.SharedIndexInformer{
+		f.Core().V1().Nodes().Informer(),
+		f.Core().V1().Namespaces().Informer(),
+		f.Core().V1().Pods().Informer(),
+		f.Core().V1().Services().Informer(),
+		f.Apps().V1().Deployments().Informer(),
+		f.Apps().V1().ReplicaSets().Informer(),
+		f.Apps().V1().StatefulSets().Informer(),
+		f.Apps().V1().DaemonSets().Informer(),
+	} {
+		if _, err := inf.AddEventHandler(markDirty); err != nil {
+			cancel()
+			return nil, err
+		}
+	}
+	b.watchEvents(ctx, f)
+	log.Printf("[%s] connecting to %s ...", ctxName, cfg.Host)
+	f.Start(ctx.Done())
+	syncCtx, syncCancel := context.WithTimeout(ctx, 25*time.Second)
+	defer syncCancel()
+	for typ, ok := range f.WaitForCacheSync(syncCtx.Done()) {
+		if !ok {
+			cancel()
+			return nil, fmt.Errorf("cluster %s unreachable (cache sync failed for %v)", cfg.Host, typ)
+		}
+	}
+	log.Printf("[%s] cluster cache synced", ctxName)
+	b.markDirty()
+	go b.publishLoop(ctx)
+	go b.pollMetrics(ctx)
+	return b, nil
 }
 
 // guard protects the API from drive-by browser requests: any web page you
@@ -218,22 +223,6 @@ func guard(h http.Handler, extra string) http.Handler {
 		}
 		h.ServeHTTP(w, r)
 	})
-}
-
-func (b *Bridge) auth(h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if b.token != "" {
-			t := r.Header.Get("X-Bridge-Token")
-			if t == "" {
-				t = r.URL.Query().Get("token")
-			}
-			if t != b.token {
-				http.Error(w, "invalid token", http.StatusUnauthorized)
-				return
-			}
-		}
-		h(w, r)
-	}
 }
 
 func (b *Bridge) markDirty() {

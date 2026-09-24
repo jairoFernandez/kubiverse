@@ -38,7 +38,23 @@ func _init() -> void:
 	var line: ProductionLine = world.lines.values()[0]
 	if world.can_stand(line.target + Vector3(4, 0, 0)):
 		print("FAIL: can walk through a conveyor"); fails += 1
-	# Energy room: every island must be reachable by jumps the player can do.
+	# Energy room, easy mode (default): every surface touches another one
+	# whose height is within a normal step, i.e. you can WALK everywhere.
+	world.challenge = false
+	world.set_level("plant")
+	world.set_level("power")
+	for i in range(1, world.walk_rects.size()):
+		var ok := false
+		for j in world.walk_rects.size():
+			if j != i and world.walk_rects[i].grow(0.05).intersects(world.walk_rects[j]) \
+					and absf(world.walk_heights[i] - world.walk_heights[j]) <= world.STEP:
+				ok = true
+				break
+		if not ok:
+			print("FAIL power/easy: surface %d at y=%.2f needs a jump" % [i, world.walk_heights[i]]); fails += 1
+	# Challenge mode: every surface is reachable with the player's jump.
+	world.challenge = true
+	world.set_level("plant")
 	world.set_level("power")
 	# Must match Player.JUMP_SPEED / GRAVITY / WALK_SPEED (player.gd needs
 	# autoloads, which --script mode does not load).
@@ -48,7 +64,6 @@ func _init() -> void:
 	for i in range(1, world.walk_rects.size()):
 		var r: Rect2 = world.walk_rects[i]
 		var y: float = world.walk_heights[i]
-		# nearest lower-or-equal surface must be within a jump
 		var ok := false
 		for j in world.walk_rects.size():
 			if j == i:
@@ -60,8 +75,8 @@ func _init() -> void:
 				ok = true
 				break
 		if not ok:
-			print("FAIL power: surface %d at y=%.1f is unreachable" % [i, y]); fails += 1
+			print("FAIL power/challenge: surface %d at y=%.1f is unreachable" % [i, y]); fails += 1
 	if world.coins.is_empty():
-		print("FAIL power: no coins"); fails += 1
+		print("FAIL power/challenge: no coins"); fails += 1
 	print("world tests: %s" % ("OK" if fails == 0 else "%d FAILED" % fails))
 	quit(fails)

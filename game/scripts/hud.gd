@@ -47,6 +47,10 @@ var stats: StatsPanel
 var _perf_label: Label
 var _perf_t := 0.0
 var _view_stats: CheckBox
+var _view_challenge: CheckBox
+var _view_fastday: CheckBox
+var clock_text := ""
+var _fade: ColorRect
 var map_full: MapView
 var _map_panel: PanelContainer
 
@@ -59,6 +63,12 @@ var _url_edit: LineEdit
 var _token_edit: LineEdit
 var _connect_status: Label
 var _connect_scale: Label
+var _saved_list: VBoxContainer
+var _ctx_pick: OptionButton
+var _save_name: LineEdit
+var _kc_box: VBoxContainer
+var _kc_name: LineEdit
+var _kc_text: TextEdit
 
 var _game_root: Control
 var _ctx_label: Label
@@ -324,16 +334,21 @@ func _build_connect_ui() -> void:
 	_connect_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_connect_root)
 	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", _flat(PANEL, Vox.BLUE, 4, 28))
+	panel.add_theme_stylebox_override("panel", _flat(PANEL, Vox.BLUE, 4, 22))
 	_connect_root.add_child(panel)
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.name = "Scroll"
+	panel.add_child(scroll)
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 12)
-	v.custom_minimum_size = Vector2(600, 0)
-	panel.add_child(v)
+	v.add_theme_constant_override("separation", 10)
+	v.custom_minimum_size = Vector2(720, 0)
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(v)
 	var title := Label.new()
 	title.text = "KUBECRAFT"
 	title.add_theme_font_override("font", _title_font)
-	title.add_theme_font_size_override("font_size", 40)
+	title.add_theme_font_size_override("font_size", 38)
 	title.add_theme_color_override("font_color", Vox.YELLOW)
 	title.add_theme_color_override("font_shadow_color", Vox.PLUM)
 	title.add_theme_constant_override("shadow_offset_x", 4)
@@ -343,41 +358,101 @@ func _build_connect_ui() -> void:
 	var sub := _label("Your Kubernetes cluster, as a voxel world.", 26, Vox.PEACH)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(sub)
-	v.add_child(HSeparator.new())
-	v.add_child(_label("k8s-bridge URL", 24, Vox.SILVER))
+
+	# ---- saved clusters
+	v.add_child(_section("SAVED CLUSTERS"))
+	_saved_list = VBoxContainer.new()
+	_saved_list.add_theme_constant_override("separation", 6)
+	v.add_child(_saved_list)
+
+	# ---- new connection
+	v.add_child(_section("NEW CONNECTION"))
+	var g := GridContainer.new()
+	g.columns = 2
+	g.add_theme_constant_override("h_separation", 10)
+	g.add_theme_constant_override("v_separation", 8)
+	v.add_child(g)
+	g.add_child(_label("k8s-bridge URL", 24, Vox.SILVER))
 	_url_edit = LineEdit.new()
 	_url_edit.text = K8s.default_bridge_url()
-	_url_edit.text_submitted.connect(func(_t): _do_connect())
-	v.add_child(_url_edit)
-	v.add_child(_label("Token (optional, --token on the bridge)", 24, Vox.SILVER))
+	_url_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_url_edit.text_submitted.connect(func(_t): _load_contexts())
+	g.add_child(_url_edit)
+	g.add_child(_label("Token", 24, Vox.SILVER))
 	_token_edit = LineEdit.new()
 	_token_edit.secret = true
+	_token_edit.placeholder_text = tr("optional (--token on the bridge)")
 	_token_edit.text = K8s.web_query_param("token")
-	_token_edit.text_submitted.connect(func(_t): _do_connect())
-	v.add_child(_token_edit)
+	g.add_child(_token_edit)
+	g.add_child(_label("Context", 24, Vox.SILVER))
+	var ch := HBoxContainer.new()
+	ch.add_theme_constant_override("separation", 8)
+	_ctx_pick = OptionButton.new()
+	_ctx_pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_ctx_pick.focus_mode = Control.FOCUS_NONE
+	_ctx_pick.add_item(tr("(bridge default)"))
+	_ctx_pick.item_selected.connect(func(_i): _save_name.placeholder_text = _picked_context())
+	ch.add_child(_ctx_pick)
+	ch.add_child(_button("LOAD CONTEXTS", _load_contexts))
+	g.add_child(ch)
+	g.add_child(_label("Name", 24, Vox.SILVER))
+	_save_name = LineEdit.new()
+	_save_name.placeholder_text = tr("name to save it as (optional)")
+	g.add_child(_save_name)
 	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 12)
-	var c := _button("CONNECT TO CLUSTER", _do_connect, "GoButton")
+	h.add_theme_constant_override("separation", 10)
+	var c := _button("CONNECT TO CLUSTER", func(): _do_connect(false), "GoButton")
 	c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	h.add_child(c)
+	var sv := _button("SAVE & CONNECT", func(): _do_connect(true), "GoButton")
+	sv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	h.add_child(sv)
+	v.add_child(h)
+
+	# ---- add kubeconfig (collapsible)
+	var kh := HBoxContainer.new()
+	v.add_child(kh)
+	var ktoggle := _button("+ ADD A KUBECONFIG", func(): _kc_box.visible = not _kc_box.visible)
+	kh.add_child(ktoggle)
+	_kc_box = VBoxContainer.new()
+	_kc_box.add_theme_constant_override("separation", 8)
+	_kc_box.visible = false
+	v.add_child(_kc_box)
+	var note := _label("The kubeconfig is sent only to the bridge above and stored there (~/.kubecraft/kubeconfigs, permissions 0600). Its contexts then appear in the list.", 21, Vox.SILVER)
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_kc_box.add_child(note)
+	_kc_name = LineEdit.new()
+	_kc_name.placeholder_text = tr("file name, e.g. prod-eu")
+	_kc_box.add_child(_kc_name)
+	_kc_text = TextEdit.new()
+	_kc_text.placeholder_text = tr("paste the kubeconfig YAML here")
+	_kc_text.custom_minimum_size = Vector2(0, 150)
+	_kc_box.add_child(_kc_text)
+	var kb := HBoxContainer.new()
+	kb.add_theme_constant_override("separation", 10)
+	if not OS.has_feature("web"):
+		kb.add_child(_button("LOAD FILE...", _pick_kubeconfig_file))
+	kb.add_child(_button("ADD TO BRIDGE", _upload_kubeconfig, "GoButton"))
+	_kc_box.add_child(kb)
+
+	# ---- misc
+	var h2 := HBoxContainer.new()
+	h2.add_theme_constant_override("separation", 10)
 	var d := _button("DEMO MODE", func():
 		K8s.start_demo()
 		show_connect(false))
-	d.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	h.add_child(d)
-	v.add_child(h)
-	var sh := HBoxContainer.new()
-	sh.add_theme_constant_override("separation", 10)
-	sh.add_child(_label("Text size", 24, Vox.SILVER))
-	sh.add_child(_button(" - ", func(): Settings.step_scale(-1)))
+	h2.add_child(d)
+	h2.add_child(_label("Text size", 24, Vox.SILVER))
+	h2.add_child(_button(" - ", func(): Settings.step_scale(-1)))
 	_connect_scale = _label("", 26, Vox.YELLOW)
-	sh.add_child(_connect_scale)
-	sh.add_child(_button(" + ", func(): Settings.step_scale(1)))
-	v.add_child(sh)
+	h2.add_child(_connect_scale)
+	h2.add_child(_button(" + ", func(): Settings.step_scale(1)))
+	v.add_child(h2)
 	v.add_child(_lang_row())
 	_connect_status = _label("Start the bridge first:  make run-bridge", 24, Vox.SILVER)
 	_connect_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(_connect_status)
+	_refresh_saved()
 
 
 func _lang_row() -> HBoxContainer:
@@ -393,10 +468,103 @@ func _lang_row() -> HBoxContainer:
 	return h
 
 
-func _do_connect() -> void:
-	K8s.connect_bridge(_url_edit.text, _token_edit.text)
-	_connect_status.text = tr("Connecting to %s ...") % K8s.base_url
-	_connect_status.add_theme_color_override("font_color", Vox.YELLOW)
+func _status(msg: String, col: Color) -> void:
+	_connect_status.text = msg
+	_connect_status.add_theme_color_override("font_color", col)
+
+
+func _picked_context() -> String:
+	var i := _ctx_pick.selected
+	return "" if i <= 0 else _ctx_pick.get_item_text(i).split("  ")[0]
+
+
+func _load_contexts() -> void:
+	_status(tr("Asking %s for its contexts...") % K8s.normalize_url(_url_edit.text), Vox.YELLOW)
+	K8s.list_contexts(_url_edit.text, _token_edit.text, func(ok: bool, data):
+		if not ok or not data.get("ok", false):
+			_status(tr("Cannot reach the bridge: %s") % str(data if not ok else data.get("error", "")), Vox.RED)
+			return
+		var keep := _picked_context()
+		_ctx_pick.clear()
+		_ctx_pick.add_item(tr("(bridge default)"))
+		for cx in data.contexts:
+			var label: String = cx.name + "  " + cx.server + ("  *" if cx.default else "")
+			_ctx_pick.add_item(label)
+			if cx.name == keep:
+				_ctx_pick.select(_ctx_pick.item_count - 1)
+		_status(tr("%d contexts available. Pick one and connect.") % data.contexts.size(), Vox.GREEN))
+
+
+func _refresh_saved() -> void:
+	for c in _saved_list.get_children():
+		c.queue_free()
+	if Settings.servers.is_empty():
+		_saved_list.add_child(_label("Nothing saved yet: fill in a new connection and use SAVE & CONNECT.", 22, Vox.SLATE))
+		return
+	for i in Settings.servers.size():
+		var sv: Dictionary = Settings.servers[i]
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 6)
+		var go := _button("> %s   %s @ %s" % [sv.name, sv.context if sv.context != "" else "default", sv.url], func():
+			_url_edit.text = sv.url
+			_token_edit.text = sv.get("token", "")
+			K8s.connect_bridge(sv.url, sv.get("token", ""), sv.context)
+			_status(tr("Connecting to %s ...") % sv.name, Vox.YELLOW), "GoButton")
+		go.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		go.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		go.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		go.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		row.add_child(go)
+		row.add_child(_button("X", func():
+			Settings.servers.remove_at(i)
+			Settings.save()
+			_refresh_saved(), "DangerButton"))
+		_saved_list.add_child(row)
+
+
+func _do_connect(save: bool) -> void:
+	var ctx := _picked_context()
+	if save:
+		var name := _save_name.text.strip_edges()
+		if name == "":
+			name = ctx if ctx != "" else K8s.normalize_url(_url_edit.text).trim_prefix("http://")
+		Settings.servers = Settings.servers.filter(func(x): return x.name != name)
+		Settings.servers.append({"name": name, "url": K8s.normalize_url(_url_edit.text), "token": _token_edit.text, "context": ctx})
+		Settings.save()
+		_refresh_saved()
+	K8s.connect_bridge(_url_edit.text, _token_edit.text, ctx)
+	_status(tr("Connecting to %s ...") % K8s.base_url, Vox.YELLOW)
+
+
+func _upload_kubeconfig() -> void:
+	var name := _kc_name.text.strip_edges()
+	if name == "" or _kc_text.text.strip_edges() == "":
+		_status(tr("Give the kubeconfig a name and paste its content."), Vox.RED)
+		return
+	K8s.add_kubeconfig(_url_edit.text, _token_edit.text, name, _kc_text.text, func(ok: bool, data):
+		if not ok or not data.get("ok", false):
+			_status(str(data if not ok else data.get("error", "")), Vox.RED)
+			return
+		_kc_text.text = ""
+		_kc_box.visible = false
+		_status(tr("Added contexts: %s") % ", ".join(data.contexts), Vox.GREEN)
+		_load_contexts())
+
+
+func _pick_kubeconfig_file() -> void:
+	var fd := FileDialog.new()
+	fd.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	fd.access = FileDialog.ACCESS_FILESYSTEM
+	fd.use_native_dialog = true
+	fd.current_dir = OS.get_environment("HOME") + "/.kube"
+	fd.file_selected.connect(func(path: String):
+		_kc_text.text = FileAccess.get_file_as_string(path)
+		if _kc_name.text == "":
+			_kc_name.text = path.get_file().get_basename().replace(" ", "-")
+		fd.queue_free())
+	fd.canceled.connect(fd.queue_free)
+	add_child(fd)
+	fd.popup_centered(Vector2i(900, 600))
 
 
 func show_connect(v: bool) -> void:
@@ -500,6 +668,14 @@ func _build_game_ui() -> void:
 	vv.add_child(_view_fpv)
 	_view_stats = _check("Performance & cluster stats  [F3]", toggle_stats)
 	vv.add_child(_view_stats)
+	_view_challenge = _check("Jump challenge (Mario platforms)", func():
+		Settings.challenge = not Settings.challenge
+		Settings.save())
+	vv.add_child(_view_challenge)
+	_view_fastday = _check("Accelerated day/night cycle", func():
+		Settings.fast_day = not Settings.fast_day
+		Settings.save())
+	vv.add_child(_view_fastday)
 	vv.add_child(_button("Recenter camera  [HOME]", func(): recenter_requested.emit()))
 	vv.add_child(_button("Restart missions", func():
 		missions.restart()
@@ -918,6 +1094,8 @@ func _sync_view() -> void:
 	_view_minimap.set_pressed_no_signal(Settings.minimap)
 	_view_fpv.set_pressed_no_signal(fpv)
 	_view_stats.set_pressed_no_signal(stats.visible)
+	_view_challenge.set_pressed_no_signal(Settings.challenge)
+	_view_fastday.set_pressed_no_signal(Settings.fast_day)
 	if map_mini:
 		map_mini.get_parent().visible = Settings.minimap and not stats.visible
 	for b in _lang_btns:
@@ -1053,6 +1231,34 @@ func _term_fill(cmd: String) -> void:
 	_term_input.text = cmd.trim_prefix("kubectl ").split("\n")[0]
 	_term_input.grab_focus()
 	_term_input.caret_column = _term_input.text.length()
+
+
+## Terminal kiosk on a node island: open the console already showing that
+## node, with the next useful command typed in and ready to run.
+func node_terminal(node_name: String, is_cp: bool) -> void:
+	if not Settings.terminal:
+		toggle_terminal()
+	_term_text.append_text("[color=#83769c]# --- %s %s ---[/color]\n" % [tr("console of node"), node_name])
+	if is_cp:
+		_term_submit("get nodes -o wide")
+		_term_input.text = "cluster-info"
+	else:
+		_term_submit("get pods -A -o wide --field-selector spec.nodeName=" + node_name)
+		_term_input.text = "describe node " + node_name
+	_term_input.grab_focus()
+	_term_input.caret_column = _term_input.text.length()
+
+
+## Full-screen fade used by the warp pipes (0 = clear, 1 = dark).
+func fade(to: float, secs: float) -> void:
+	if _fade == null:
+		_fade = ColorRect.new()
+		_fade.color = Color("0b0d1a")
+		_fade.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_fade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_fade.modulate.a = 0.0
+		add_child(_fade)
+	create_tween().tween_property(_fade, "modulate:a", to, secs)
 
 
 func focus_terminal() -> void:
@@ -1770,7 +1976,7 @@ func _process(delta: float) -> void:
 	_perf_t += delta
 	if _perf_t > 0.5 and _perf_label:
 		_perf_t = 0.0
-		_perf_label.text = StatsPanel.summary()
+		_perf_label.text = clock_text + "  " + StatsPanel.summary()
 	_insp_t += delta
 	if _insp_t > 0.3:
 		_insp_t = 0.0
@@ -1779,6 +1985,10 @@ func _process(delta: float) -> void:
 		_layout()
 	else:
 		_layout_modals()
+	if _connect_root.visible:
+		var sc: ScrollContainer = _connect_root.get_child(0).get_node("Scroll")
+		var want: float = sc.get_child(0).get_combined_minimum_size().y
+		sc.custom_minimum_size = Vector2(740, minf(want, _connect_root.size.y - 70))
 	if _toast_t > 0.0:
 		_toast_t -= delta
 		_toast.modulate.a = clampf(_toast_t, 0.0, 1.0)

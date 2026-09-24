@@ -33,8 +33,10 @@ var spawn := Vector3.ZERO
 var walk_rects: Array[Rect2] = []      # XZ areas you can stand on
 var walk_heights: Array[float] = []    # top height of each walk rect
 var void_level := false                # true: you can fall off the edges
+var challenge := false                 # energy room: Mario jumps instead of bridges
 var movers := []                       # [{idx, node, base, amp, speed}] bobbing platforms
 var coins := []                        # [{node, pos}] collectibles (energy room)
+var pipes := {}                        # node name (or "@hub") -> warp pipe position
 const STEP := 0.35                     # max height you can walk up without jumping
 var walk_segments := []                # [[a: Vector2, b: Vector2, half_width]] bridges
 var blockers: Array[Rect2] = []        # solid XZ areas
@@ -159,6 +161,7 @@ func _begin_static(sig: String) -> bool:
 	walk_segments.clear()
 	movers.clear()
 	coins.clear()
+	pipes.clear()
 	void_level = false
 	blockers.clear()
 	return true
@@ -552,7 +555,7 @@ func _apply_power(s: Dictionary) -> void:
 		if isl.position == Vector3.ZERO:
 			isl.position = isl.target
 	limbo_center = Vector3(0, 6.0, -hub.y - 3.0)
-	var sig := "power|" + center_name + str(names.map(func(k): return [k, islands[k].target, islands[k].size]))
+	var sig := "power|%s|%s" % [challenge, center_name] + str(names.map(func(k): return [k, islands[k].target, islands[k].size]))
 	if _begin_static(sig):
 		void_level = true
 		if center_name == "":
@@ -569,15 +572,25 @@ func _apply_power(s: Dictionary) -> void:
 			var isl: NodeIsland = islands[workers[i]]
 			var half: float = isl.size * 0.5
 			_add_walk(Rect2(isl.target.x - half, isl.target.z - half, isl.size, isl.size), isl.target.y)
-			_build_stones(hub, isl, i)
+			if challenge:
+				_build_stones(hub, isl, i)
+			else:
+				_build_walkway(hub, isl)
 		# Warp pipes: a ring centre -> worker 1 -> worker 2 -> ... -> centre.
 		var stops: Array = ([center_name] if center_name != "" else ["@hub"]) + workers
+		for st in stops:
+			pipes[st] = _pipe_pos(st, hub)
 		for i in stops.size():
 			var here: String = stops[i]
 			var nxt: String = stops[(i + 1) % stops.size()]
 			if here == nxt:
 				continue
-			_build_pipe(_pipe_pos(here, hub), nxt)
+			_build_pipe(pipes[here], nxt)
+		# A terminal kiosk on every node island: E opens that node's console.
+		for nn in names:
+			var isl: NodeIsland = islands[nn]
+			var h2: float = isl.size * 0.5
+			_build_kiosk(isl.target + Vector3(-h2 + 1.0, 0, h2 - 1.0), nn, nn == center_name)
 		var cr := Vox.rng_for("cloud")
 		var cloud := Node3D.new()
 		cloud.name = "Cloud"
@@ -674,6 +687,33 @@ func _build_stones(hub: Vector2, isl: NodeIsland, idx: int) -> void:
 			coins.append({"node": coin, "pos": coin.position})
 
 
+## Easy mode: a continuous plank walkway with gentle steps (each rise is
+## below STEP, so you just walk up it) from the centre to an island.
+func _build_walkway(hub: Vector2, isl: NodeIsland) -> void:
+	var c: Vector3 = isl.target
+	var dir := Vector3(c.x, 0, c.z).normalized()
+	if dir == Vector3.ZERO:
+		return
+	var start := dir * (minf(hub.x / maxf(absf(dir.x), 0.001), hub.y / maxf(absf(dir.z), 0.001)) - 0.4)
+	var half: float = isl.size * 0.5
+	var end := Vector3(c.x, 0, c.z) - dir * (minf(half / maxf(absf(dir.x), 0.001), half / maxf(absf(dir.z), 0.001)) - 0.4)
+	var dist := start.distance_to(end)
+	var n := maxi(ceili(dist / 0.7), ceili(c.y / (STEP * 0.8)) + 1)
+	var yaw := atan2(dir.x, dir.z)
+	for k in n + 1:
+		var t := float(k) / n
+		var p := start.lerp(end, t)
+		var y := c.y * clampf((t - 0.08) / 0.84, 0.0, 1.0)
+		# Overlapping squares make a continuous, diagonal-proof path.
+		_add_walk(Rect2(p.x - 0.8, p.z - 0.8, 1.6, 1.6), y)
+		var plank := Vox.box(_static, Vector3(1.7, 0.16, 0.62), Vector3(p.x, y - 0.08, p.z), Vox.BROWN if k % 2 else Color("8f4a2e"))
+		plank.rotation.y = yaw
+		if k % 3 == 0:
+			for side in [-0.9, 0.9]:
+				var post := Vox.box(_static, Vector3(0.12, 0.7, 0.12), Vector3(p.x, y + 0.25, p.z) + dir.cross(Vector3.UP) * side, Color("6b3a24"), 0.0, false)
+				post.rotation.y = yaw
+
+
 ## Where the warp pipe of an island (or the hub) stands: far corner, away
 ## from the tower and the door.
 func _pipe_pos(name: String, hub: Vector2) -> Vector3:
@@ -695,11 +735,27 @@ func _build_pipe(pos: Vector3, to_node: String) -> void:
 	doors.append({"pos": pos + Vector3(0, 0, 0.9), "to": "warp:" + to_node, "text": "warp pipe to %s|" + (to_node if to_node != "@hub" else "hub")})
 
 
+## Top of the warp pipe of a node (or "@hub").
+func pipe_top(node_name: String) -> Vector3:
+	return pipes.get(node_name, Vector3.ZERO) + Vector3(0, 1.25, 0)
+
+
 ## Arrival point when warping to a node's island (next to its pipe).
 func warp_target(node_name: String) -> Vector3:
-	var hub := Vector2(5, 5)
-	var p := _pipe_pos(node_name, hub)
-	return p + Vector3(-1.6, 0, 1.4)
+	return pipes.get(node_name, spawn) + Vector3(-1.6, 0, 1.4)
+
+
+func _build_kiosk(pos: Vector3, node_name: String, is_cp: bool) -> void:
+	var k := Node3D.new()
+	k.position = pos
+	_static.add_child(k)
+	Vox.box(k, Vector3(0.9, 1.1, 0.6), Vector3(0, 0.55, 0), Vox.NAVY)
+	Vox.box(k, Vector3(0.95, 0.12, 0.8), Vector3(0, 1.12, 0.1), Vox.SLATE)
+	var screen := Vox.box(k, Vector3(0.7, 0.45, 0.05), Vector3(0, 1.45, -0.05), Vox.BLUE if is_cp else Vox.GREEN, 1.8, false)
+	screen.rotation.x = deg_to_rad(-15)
+	Vox.box(k, Vector3(0.8, 0.55, 0.08), Vector3(0, 1.45, -0.1), Color("0b0d1a"))
+	blockers.append(Rect2(pos.x - 0.5, pos.z - 0.35, 1.0, 0.7))
+	doors.append({"pos": pos + Vector3(0, 0, 0.9), "to": "term:" + node_name, "text": "use the terminal of %s|" + node_name})
 
 
 ## Collects coins the player touches; returns how many were picked up.

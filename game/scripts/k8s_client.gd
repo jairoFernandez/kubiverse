@@ -13,6 +13,7 @@ enum Mode { OFFLINE, BRIDGE, DEMO }
 var mode := Mode.OFFLINE
 var base_url := ""
 var token := ""
+var context := ""   # kubeconfig context on the bridge ("" = bridge default)
 var state: Dictionary = {}
 
 var _ws: WebSocketPeer
@@ -39,14 +40,41 @@ func web_query_param(name: String) -> String:
 	return "" if v == null else str(v)
 
 
-func connect_bridge(url: String, tok: String) -> void:
+func connect_bridge(url: String, tok: String, ctx := "") -> void:
 	disconnect_all()
 	mode = Mode.BRIDGE
-	base_url = url.strip_edges().trim_suffix("/")
-	if not base_url.begins_with("http"):
-		base_url = "http://" + base_url
+	base_url = normalize_url(url)
 	token = tok.strip_edges()
+	context = ctx.strip_edges()
 	_open_ws()
+
+
+static func normalize_url(url: String) -> String:
+	var u := url.strip_edges().trim_suffix("/")
+	return u if u.begins_with("http") else "http://" + u
+
+
+## Query string selecting the context (and token) on the bridge.
+func _q(first := true) -> String:
+	var parts := []
+	if context != "":
+		parts.append("context=" + context.uri_encode())
+	if token != "":
+		parts.append("token=" + token.uri_encode())
+	if parts.is_empty():
+		return ""
+	return ("?" if first else "&") + "&".join(parts)
+
+
+## Lists the contexts a bridge can serve. cb(ok, data: {default, contexts} or error)
+func list_contexts(url: String, tok: String, cb: Callable) -> void:
+	_http_to(normalize_url(url), tok, HTTPClient.METHOD_GET, "/api/contexts", "", cb)
+
+
+## Sends a pasted kubeconfig to the bridge (stored there with 0600). cb(ok, data)
+func add_kubeconfig(url: String, tok: String, name: String, content: String, cb: Callable) -> void:
+	_http_to(normalize_url(url), tok, HTTPClient.METHOD_POST, "/api/kubeconfig",
+		JSON.stringify({"name": name, "content": content}), cb)
 
 
 func start_demo() -> void:
@@ -77,9 +105,7 @@ func is_readonly() -> bool:
 
 
 func _open_ws() -> void:
-	var ws_url := ("ws" + base_url.substr(4)) + "/api/ws"
-	if token != "":
-		ws_url += "?token=" + token.uri_encode()
+	var ws_url := ("ws" + base_url.substr(4)) + "/api/ws" + _q()
 	_ws = WebSocketPeer.new()
 	_ws.inbound_buffer_size = 1 << 24 # snapshots of big clusters can be several MB
 	_ws.max_queued_packets = 64
@@ -146,7 +172,7 @@ func action(req: Dictionary) -> void:
 	if mode != Mode.BRIDGE:
 		action_done.emit(false, "not connected", req)
 		return
-	_http(HTTPClient.METHOD_POST, "/api/action", JSON.stringify(req), func(ok: bool, data):
+	_http(HTTPClient.METHOD_POST, "/api/action" + _q(), JSON.stringify(req), func(ok: bool, data):
 		if not ok:
 			action_done.emit(false, str(data), req)
 		else:
@@ -163,7 +189,7 @@ func run_kubectl(line: String, cb: Callable) -> void:
 	if mode != Mode.BRIDGE:
 		cb.call(false, "not connected")
 		return
-	_http(HTTPClient.METHOD_POST, "/api/kubectl", JSON.stringify({"line": line}), func(ok: bool, data):
+	_http(HTTPClient.METHOD_POST, "/api/kubectl" + _q(), JSON.stringify({"line": line}), func(ok: bool, data):
 		if not ok:
 			cb.call(false, str(data))
 		else:
@@ -176,7 +202,7 @@ func fetch_logs(ns: String, pod: String, container: String, previous: bool, cb: 
 		cb.call(true, _mock.logs(ns, pod, container, previous))
 		return
 	var path := "/api/logs?ns=%s&pod=%s&container=%s&tail=200%s" % [
-		ns.uri_encode(), pod.uri_encode(), container.uri_encode(), "&previous=1" if previous else ""]
+		ns.uri_encode(), pod.uri_encode(), container.uri_encode(), "&previous=1" if previous else ""] + _q(false)
 	_http(HTTPClient.METHOD_GET, path, "", func(ok: bool, data):
 		if not ok:
 			cb.call(false, str(data))
@@ -188,6 +214,10 @@ func fetch_logs(ns: String, pod: String, container: String, previous: bool, cb: 
 
 
 func _http(method: int, path: String, body: String, cb: Callable) -> void:
+	_http_to(base_url, token, method, path, body, cb)
+
+
+func _http_to(url: String, tok: String, method: int, path: String, body: String, cb: Callable) -> void:
 	var req := HTTPRequest.new()
 	req.timeout = 20.0
 	add_child(req)
@@ -203,9 +233,9 @@ func _http(method: int, path: String, body: String, cb: Callable) -> void:
 		cb.call(true, data)
 	)
 	var headers := PackedStringArray(["Content-Type: application/json"])
-	if token != "":
-		headers.append("X-Bridge-Token: " + token)
-	var err := req.request(base_url + path, headers, method, body)
+	if tok != "":
+		headers.append("X-Bridge-Token: " + tok)
+	var err := req.request(url + path, headers, method, body)
 	if err != OK:
 		req.queue_free()
 		cb.call(false, "cannot send request (err %d)" % err)

@@ -30,6 +30,17 @@ Se entra por las puertas (**E**), con doble clic en una nave o desde la barra de
 ![Dentro de una nave](docs/hall.png)
 ![Sala de energía](docs/energy.png)
 
+## Varios clusters y kubeconfigs
+
+Un solo bridge sirve **todos los contextos** de tu kubeconfig y los kubeconfigs que añadas desde el juego. Cada cluster se conecta bajo demanda y el juego elige cuál con `?context=`.
+
+En la pantalla de inicio:
+- **Clusters guardados**: nombre, URL del bridge, contexto y token (se guardan en las preferencias del juego). Clic para conectar y X para borrar.
+- **Nueva conexión**: URL del bridge y **CARGAR CONTEXTOS**. Elige uno y usa **GUARDAR Y CONECTAR**.
+- **+ Añadir un kubeconfig**: pégalo, o **CARGAR ARCHIVO...** en la versión nativa. Se envía solo al bridge, que lo guarda en `~/.kubecraft/kubeconfigs/` con permisos 0600, y sus contextos aparecen en la lista. Ojo: igual que con kubectl, un kubeconfig con plugins `exec` ejecuta ese comando en el host del bridge.
+
+API: `GET /api/contexts`, `POST /api/kubeconfig {name, content}` y `DELETE /api/kubeconfig?name=`. Todas las rutas de cluster aceptan `?context=`.
+
 ## Escenario multinodo (kind)
 
 ```bash
@@ -50,7 +61,7 @@ Tu contexto actual de kubectl no cambia.
 
 ## Sala de energía estilo Mario
 
-El **control-plane** es la isla central y es donde apareces; los workers orbitan a su alrededor a distintas alturas. Si el cluster no expone su control-plane (EKS, GKE...), el centro es una plataforma neutra. Cada isla tiene una **tubería warp** (E junto a ella) que te lleva a la siguiente isla sin tener que saltar. Para ir a pie hay que **saltar** por bloques "?", ladrillos y plataformas (algunas suben y bajan), recogiendo monedas. Si caes al vacío vuelves a la última plataforma donde estuviste. Hay *coyote time* (puedes saltar un instante después de salir del borde) y el salto pulsado justo antes de aterrizar también cuenta. La física es vertical de verdad: los bordes de una plataforma más alta hacen de pared y la sombra marca dónde vas a caer. Un test comprueba que cada isla es alcanzable con el salto del personaje.
+Por defecto, **puentes de tablones** con escalones suaves llevan a cada isla sin saltar. El reto de plataformas estilo Mario se activa en **VISTA → Reto de saltos**. El **control-plane** es la isla central y es donde apareces; los workers orbitan a su alrededor a distintas alturas. Si el cluster no expone su control-plane (EKS, GKE...), el centro es una plataforma neutra. Cada isla tiene una **tubería warp** (E junto a ella; te hundes en ella, fundido y sales por la de la siguiente isla) y un **quiosco-terminal** (E) que abre la terminal ya ejecutando los comandos de ese nodo: sus pods y `describe node`, o `get nodes` y `cluster-info` en el control-plane. Para ir a pie hay que **saltar** por bloques "?", ladrillos y plataformas (algunas suben y bajan), recogiendo monedas. Si caes al vacío vuelves a la última plataforma donde estuviste. Hay *coyote time* (puedes saltar un instante después de salir del borde) y el salto pulsado justo antes de aterrizar también cuenta. La física es vertical de verdad: los bordes de una plataforma más alta hacen de pared y la sombra marca dónde vas a caer. Un test comprueba que cada isla es alcanzable con el salto del personaje.
 
 ## Misiones (J)
 
@@ -95,6 +106,10 @@ Cámara en perspectiva a la altura del casco: el ratón mira (se captura; ESC lo
 
 - **Juego**: FPS, tiempo de frame, RAM, VRAM, draw calls, objetos y GPU.
 - **Cluster**: CPU y memoria totales y por nodo, pods por nodo frente a su capacidad y los pods que más CPU usan. Con **metrics-server** se muestra el uso real (`make metrics-server` lo instala; en clusters locales añade `--kubelet-insecure-tls`). Sin él, se muestra lo reservado por los *requests* de los pods.
+
+## Día y noche
+
+La iluminación sigue la **hora del cluster** (reloj del bridge, en tu zona horaria). El sol cruza el cielo, hay amanecer y atardecer anaranjados, y por la noche luna y estrellas. La hora se muestra en la barra de niveles. En modo demo (o con **VISTA → Ciclo día/noche acelerado**) un día dura 4 minutos.
 
 ## Naves en llamas
 

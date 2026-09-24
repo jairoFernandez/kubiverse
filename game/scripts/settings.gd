@@ -17,6 +17,9 @@ var lang := ""
 var always_run := false
 var minimap := true
 var minimap_size := 2
+var challenge := false
+var fast_day := false
+var servers: Array = []   # [{name, url, token, context}]
 
 
 func _ready() -> void:
@@ -32,6 +35,9 @@ func _ready() -> void:
 		always_run = cf.get_value("ui", "always_run", always_run)
 		minimap = cf.get_value("ui", "minimap", minimap)
 		minimap_size = cf.get_value("ui", "minimap_size", minimap_size)
+		challenge = cf.get_value("ui", "challenge", challenge)
+		fast_day = cf.get_value("ui", "fast_day", fast_day)
+		servers = cf.get_value("servers", "list", servers)
 
 
 func save() -> void:
@@ -46,6 +52,9 @@ func save() -> void:
 	cf.set_value("ui", "always_run", always_run)
 	cf.set_value("ui", "minimap", minimap)
 	cf.set_value("ui", "minimap_size", minimap_size)
+	cf.set_value("ui", "challenge", challenge)
+	cf.set_value("ui", "fast_day", fast_day)
+	cf.set_value("servers", "list", servers)
 	cf.save(PATH)
 	changed.emit()
 

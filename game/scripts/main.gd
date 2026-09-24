@@ -27,6 +27,14 @@ var _fpv := false
 var _fyaw := 0.0
 var _fpitch := 0.0
 var _bob := 0.0
+# Day/night cycle driven by the cluster clock
+var _env: Environment
+var _sun: DirectionalLight3D
+var _moon: DirectionalLight3D
+var _stars: Node3D
+var _clock_base := 0.0      # unix time of the last snapshot
+var _clock_local := 0.0     # seconds since that snapshot
+var _fast_t := 0.0
 var _yaw := 45.0
 var _yaw_target := 45.0
 var _zoom := 30.0
@@ -74,6 +82,7 @@ func _ready() -> void:
 	env.fog_enabled = true
 	env.fog_light_color = Color("1d2b53")
 	env.fog_density = 0.006
+	_env = env
 	var we := WorldEnvironment.new()
 	we.environment = env
 	_vp.add_child(we)
@@ -87,6 +96,12 @@ func _ready() -> void:
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
 	sun.directional_shadow_max_distance = 120.0
 	_vp.add_child(sun)
+	_sun = sun
+	_moon = DirectionalLight3D.new()
+	_moon.light_color = Color("9fb4ff")
+	_moon.light_energy = 0.0
+	_moon.rotation_degrees = Vector3(-60, 150, 0)
+	_vp.add_child(_moon)
 
 	_add_stars()
 
@@ -96,6 +111,9 @@ func _ready() -> void:
 	player.world = world
 	_vp.add_child(player)
 	player.fell.connect(func():
+		if hud.is_connect_visible() or world.walk_rects.is_empty():
+			player.teleport(world.spawn)
+			return
 		# Back to the last platform you stood on (a bit inward), not the start.
 		var back: Vector3 = player.last_safe
 		player.teleport(_standable_near(back) if world.can_stand(back) else world.spawn)
@@ -147,6 +165,10 @@ func _ready() -> void:
 
 	world.level_changed.connect(_on_level_changed)
 	K8s.state_updated.connect(func(s):
+		if float(s.get("time", 0)) > 0.0:
+			_clock_base = float(s.time)
+			_clock_local = 0.0
+		world.challenge = Settings.challenge
 		world.apply_state(s)
 		missions.notify("state"))
 	K8s.action_done.connect(func(ok, _m, req):
@@ -157,6 +179,12 @@ func _ready() -> void:
 
 	get_tree().root.size_changed.connect(_apply_scale)
 	Settings.changed.connect(_apply_scale)
+	Settings.changed.connect(func():
+		if world.challenge != Settings.challenge:
+			world.challenge = Settings.challenge
+			if world.level == "power":
+				world.set_level("plant")
+				world.set_level("power"))
 	_apply_scale()
 
 	# Web: ?demo=1 jumps straight into demo mode; ?bridge=... auto-connects.
@@ -199,6 +227,23 @@ func _screenshot_and_quit(path: String) -> void:
 			hud._term_submit(arg.substr(7))
 			hud.focus_terminal()
 			await get_tree().create_timer(1.5).timeout
+	for d in world.doors:
+		if "--warp" in OS.get_cmdline_user_args() and str(d.to).begins_with("warp:"):
+			_warp(d.pos - Vector3(0, 0, 0.9), str(d.to).substr(5))
+			await get_tree().create_timer(0.55).timeout
+			await RenderingServer.frame_post_draw
+			var shot_path := ""
+			for x in OS.get_cmdline_user_args():
+				if x.begins_with("--shot="):
+					shot_path = x.substr(7).replace(".png", "_mid.png")
+			get_viewport().get_texture().get_image().save_png(shot_path)
+			await get_tree().create_timer(1.5).timeout
+			break
+		if "--kiosk" in OS.get_cmdline_user_args() and str(d.to).begins_with("term:") and not world.islands[str(d.to).substr(5)].is_control_plane():
+			player.teleport(d.pos)
+			hud.node_terminal(str(d.to).substr(5), false)
+			await get_tree().create_timer(2.0).timeout
+			break
 	if "--stats" in OS.get_cmdline_user_args():
 		hud.toggle_stats()
 		await get_tree().create_timer(1.0).timeout
@@ -298,6 +343,7 @@ func _travel(pos: Vector3, target: Entity) -> void:
 
 func _add_stars() -> void:
 	var stars := Node3D.new()
+	_stars = stars
 	_vp.add_child(stars)
 	var rng := Vox.rng_for("stars")
 	for i in 140:
@@ -307,6 +353,7 @@ func _add_stars() -> void:
 
 
 func _process(delta: float) -> void:
+	_update_daylight(delta)
 	var busy := hud.is_modal_open() or get_viewport().gui_get_focus_owner() is LineEdit
 	player.input_enabled = not busy
 	if _fpv and busy and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
@@ -373,6 +420,45 @@ func _update_fpv(delta: float) -> void:
 	var bob := sin(_bob) * (0.07 if player.running else 0.04) if player.moving else 0.0
 	_fcam.global_position = player.head_position() + Vector3(0, bob, 0)
 	_fcam.rotation = Vector3(_fpitch, _fyaw, 0)
+
+
+## Hour of day (0-24) from the cluster clock in the player's time zone.
+## Demo mode, or the "accelerated" option, runs a whole day in 4 minutes.
+func _cluster_hour(delta: float) -> float:
+	_clock_local += delta
+	var t := _clock_base + _clock_local if _clock_base > 0.0 else Time.get_unix_time_from_system()
+	var bias: int = Time.get_time_zone_from_system().get("bias", 0)
+	var hour := fposmod((t + bias * 60.0) / 3600.0, 24.0)
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--hour="):
+			return float(arg.substr(7))
+	if Settings.fast_day or K8s.mode == K8s.Mode.DEMO:
+		_fast_t += delta
+		hour = fposmod(hour + _fast_t * 24.0 / 240.0, 24.0)
+	return hour
+
+
+func _update_daylight(delta: float) -> void:
+	var h := _cluster_hour(delta)
+	hud.clock_text = "%02d:%02d" % [int(h), int(fmod(h, 1.0) * 60.0)]
+	# Sun elevation: >0 between 06:00 and 18:00, peaks at noon.
+	var elev := sin((h - 6.0) / 12.0 * PI)
+	var day := clampf(elev * 2.5, 0.0, 1.0)            # 0 night .. 1 full day
+	var golden := clampf(1.0 - absf(elev) * 4.0, 0.0, 1.0) * (1.0 if elev > -0.25 else 0.0)
+	_sun.rotation_degrees = Vector3(-clampf(elev * 80.0, 4.0, 80.0), -30.0 + (h - 12.0) * 12.0, 0)
+	_sun.light_energy = 1.15 * day
+	_sun.light_color = Color("fff1e8").lerp(Color("ff9a4a"), golden)
+	_sun.visible = day > 0.01
+	_moon.light_energy = 0.6 * (1.0 - day)
+	var night_sky := Color("0d1230")
+	var day_sky := Color("2b4a8a")
+	var dusk_sky := Color("5a2450")
+	var sky := night_sky.lerp(day_sky, day).lerp(dusk_sky, golden * 0.6)
+	_env.background_color = sky
+	_env.fog_light_color = sky
+	_env.ambient_light_color = Color("5a6aa8").lerp(Color("8fa0d8"), day).lerp(Color("c98b7a"), golden * 0.4)
+	_env.ambient_light_energy = lerpf(0.55, 0.6, day)
+	_stars.visible = day < 0.35
 
 
 func _mouse_px() -> Vector2:
@@ -566,6 +652,49 @@ func _nearest(max_dist: float, kind: String) -> Entity:
 	return best
 
 
+var _warping := false
+
+
+## Mario-style warp: hop onto the pipe, sink into it spinning, fade out,
+## pop out of the destination pipe and hop onto the island.
+func _warp(from_pipe: Vector3, to_node: String) -> void:
+	if _warping:
+		return
+	_warping = true
+	player.frozen = true
+	var b := player.body()
+	var top := from_pipe + Vector3(0, 1.25, 0)
+	var tw := create_tween()
+	tw.tween_property(player, "position", top, 0.22).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	await tw.finished
+	world.poof(top, Vox.GREEN)
+	tw = create_tween().set_parallel(true)
+	tw.tween_property(player, "position", top - Vector3(0, 1.3, 0), 0.45).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	tw.tween_property(b, "scale", Vector3(0.5, 1.1, 0.5), 0.45)
+	tw.tween_property(b, "rotation:y", b.rotation.y + TAU * 1.5, 0.45)
+	hud.fade(1.0, 0.35)
+	await tw.finished
+	# Travel
+	var dest_top := world.pipe_top(to_node)
+	player.position = dest_top - Vector3(0, 1.3, 0)
+	_pan = Vector3.ZERO
+	await get_tree().create_timer(0.15).timeout
+	hud.fade(0.0, 0.3)
+	tw = create_tween().set_parallel(true)
+	tw.tween_property(player, "position", dest_top + Vector3(0, 1.4, 0), 0.4).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(b, "scale", Vector3.ONE, 0.4)
+	await tw.finished
+	world.poof(dest_top + Vector3(0, 0.4, 0), Vox.GREEN)
+	# Hop down next to the pipe
+	var land := _standable_near(world.warp_target(to_node))
+	tw = create_tween()
+	tw.tween_property(player, "position", land, 0.35).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	await tw.finished
+	player.teleport(land)
+	player.frozen = false
+	_warping = false
+
+
 ## Jump to the next unhealthy pod anywhere in the cluster.
 func _cycle_pods() -> void:
 	var list: Array = K8s.state.get("pods", []).filter(func(p):
@@ -585,10 +714,12 @@ func _interact() -> void:
 	var d := world.door_near(player.global_position, 2.2)
 	if not d.is_empty():
 		if str(d.to).begins_with("warp:"):
-			world.poof(player.global_position + Vector3(0, 0.8, 0), Vox.GREEN)
-			player.teleport(_standable_near(world.warp_target(str(d.to).substr(5))))
-			world.poof(player.global_position + Vector3(0, 0.8, 0), Vox.GREEN)
-			_pan = Vector3.ZERO
+			_warp(d.pos - Vector3(0, 0, 0.9), str(d.to).substr(5))
+			return
+		if str(d.to).begins_with("term:"):
+			var nn := str(d.to).substr(5)
+			var isl: NodeIsland = world.islands.get(nn)
+			hud.node_terminal(nn, isl != null and isl.is_control_plane())
 			return
 		_go_level(d.to)
 		return

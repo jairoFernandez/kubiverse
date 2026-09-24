@@ -18,6 +18,7 @@ var _tick := 0.0
 var _dirty := true
 var _ip := 10
 var _chaos_t := 15.0
+var _field_node := ""
 
 
 func start() -> void:
@@ -399,6 +400,10 @@ func kubectl(line: String) -> Dictionary:
 		"version":
 			return {"ok": true, "output": "Client Version: v1.31.0-kubecraft\nServer Version: v1.31.0-demo"}
 		"get":
+			_field_node = ""
+			var fs: String = c.flags.get("field-selector", "")
+			if fs.begins_with("spec.nodeName="):
+				_field_node = fs.substr(14)
 			return {"ok": true, "output": _kget(c.pos, ns, all_ns, wide)}
 		"describe":
 			return _describe(c.pos, ns)
@@ -440,7 +445,7 @@ func _kget(pos: Array, ns: String, all_ns: bool, wide: bool) -> String:
 		"pods", "pod", "po":
 			var rows := [(["NAMESPACE"] if ns_col else []) + ["NAME", "READY", "STATUS", "RESTARTS", "AGE"] + (["IP", "NODE"] if wide else [])]
 			for p in pods.values():
-				if all_ns or p.ns == ns:
+				if (all_ns or p.ns == ns) and (_field_node == "" or p.node == _field_node):
 					rows.append(([p.ns] if ns_col else []) + [p.name, "%d/%d" % [p.ready, p.total], p.status, p.restarts, _age(p.age)] + ([p.ip if p.ip != "" else "<none>", p.node if p.node != "" else "<none>"] if wide else []))
 			return _table(rows) if rows.size() > 1 else "No resources found in %s namespace." % ns
 		"nodes", "node", "no":

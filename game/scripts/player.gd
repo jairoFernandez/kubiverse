@@ -26,6 +26,7 @@ var _grounded := true
 var _ground := 0.0
 var coins := 0
 var last_safe := Vector3.ZERO   # where to respawn after falling
+var frozen := false             # scripted animation (warp) in control
 var _coyote := 0.0              # can still jump shortly after leaving an edge
 var _jump_buffer := 0.0         # a jump pressed just before landing still counts
 
@@ -64,6 +65,10 @@ func _ready() -> void:
 		_arms.append(Vox.box(_body, Vector3(0.16, 0.42, 0.18), Vector3(x, 0.66, 0), Vox.WHITE))
 	var gun := Vox.box(_arms[1], Vector3(0.14, 0.14, 0.5), Vector3(0, -0.12, 0.2), Vox.SLATE)
 	Vox.box(gun, Vector3(0.1, 0.1, 0.08), Vector3(0, 0, 0.28), Vox.YELLOW, 2.0, false)
+
+
+func body() -> Node3D:
+	return _body
 
 
 func muzzle() -> Vector3:
@@ -122,6 +127,8 @@ func _do_jump() -> void:
 
 
 func _process(delta: float) -> void:
+	if frozen:
+		return
 	var dir := Vector3.ZERO
 	if input_enabled:
 		var v := Vector2(
@@ -143,6 +150,8 @@ func _process(delta: float) -> void:
 
 	# Gravity: stand on the highest surface under the feet, or fall.
 	_ground = world.ground_below(Vector2(position.x, position.z), feet + 0.05) if world else 0.0
+	if world and world.walk_rects.is_empty():
+		_ground = 0.0  # level not loaded yet: don't fall through nothing
 	if _vy > 0.0 or feet > _ground + 0.02 or _ground == -INF:
 		_vy -= GRAVITY * delta
 		position.y += _vy * delta
