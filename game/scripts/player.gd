@@ -21,8 +21,13 @@ var _arms: Array[MeshInstance3D] = []
 var _shadow: MeshInstance3D
 var _walk := 0.0
 var _facing := 0.0
-var _y := 0.0          # jump height
 var _vy := 0.0
+var _grounded := true
+var _ground := 0.0
+var coins := 0
+
+signal fell
+signal coin
 var _squash := 0.0
 var _dust_cd := 0.0
 var _lean := 0.0
@@ -68,7 +73,15 @@ func forward() -> Vector3:
 
 ## Eye position for the first-person camera.
 func head_position() -> Vector3:
-	return global_position + Vector3(0, 1.3 + _y, 0)
+	return global_position + Vector3(0, 1.3, 0)
+
+
+## Places the player on whatever surface is at p (teleports, level changes).
+func teleport(p: Vector3) -> void:
+	var y := world.surface_y(Vector2(p.x, p.z)) if world else 0.0
+	position = Vector3(p.x, y if y != -INF else 0.0, p.z)
+	_vy = 0.0
+	_grounded = true
 
 
 func set_first_person(on: bool) -> void:
@@ -82,7 +95,7 @@ func face_look(yaw: float) -> void:
 
 
 func on_ground() -> bool:
-	return _y <= 0.001 and _vy <= 0.0
+	return _grounded
 
 
 func jump() -> void:
@@ -110,16 +123,31 @@ func _process(delta: float) -> void:
 	var shift := input_enabled and Input.is_physical_key_pressed(KEY_SHIFT)
 	running = moving and (shift != Settings.always_run)
 	var step := dir * (RUN_SPEED if running else WALK_SPEED) * delta
-	position = world.move_player(position, step) if world else position + step
+	var feet := position.y
+	position = world.move_player(position, step, feet) if world else position + step
 
-	# Jump: visual height only, the ground rules still apply.
-	if _y > 0.0 or _vy > 0.0:
+	# Gravity: stand on the highest surface under the feet, or fall.
+	_ground = world.ground_below(Vector2(position.x, position.z), feet + 0.05) if world else 0.0
+	if _vy > 0.0 or feet > _ground + 0.02 or _ground == -INF:
 		_vy -= GRAVITY * delta
-		_y += _vy * delta
-		if _y <= 0.0:
-			_y = 0.0
+		position.y += _vy * delta
+		_grounded = false
+		if _ground != -INF and position.y <= _ground:
+			position.y = _ground
 			_vy = 0.0
+			_grounded = true
 			_squash = 0.2
+	else:
+		position.y = _ground  # follows moving platforms
+		_vy = 0.0
+		_grounded = true
+	if position.y < -14.0 and world:
+		fell.emit()
+	if world and world.coins.size() > 0:
+		var got := world.collect_coins(global_position)
+		if got > 0:
+			coins += got
+			coin.emit()
 	_squash = move_toward(_squash, 0.0, delta * 1.5)
 
 	if moving and not _first_person:
@@ -137,11 +165,17 @@ func _process(delta: float) -> void:
 
 	var amp := 0.3 if running else 0.15
 	_body.rotation = Vector3(_lean, _facing, 0)
-	_body.position.y = _y + absf(sin(_walk)) * (0.12 if running else 0.07)
+	_body.position.y = absf(sin(_walk)) * (0.12 if running else 0.07) if on_ground() else 0.0
 	_body.scale = Vector3(1.0 + _squash * 0.5, 1.0 - _squash, 1.0 + _squash * 0.5)
 	_legs[0].position.z = sin(_walk) * amp
 	_legs[1].position.z = -sin(_walk) * amp
 	_arms[0].rotation.x = -sin(_walk) * amp * 2.2
 	_arms[1].rotation.x = sin(_walk) * amp * 2.2 if moving else -0.3
-	var sh := clampf(1.0 - _y * 0.35, 0.4, 1.0)
-	_shadow.scale = Vector3(sh, 1, sh)
+	# Shadow on the ground below (helps judging jumps); hidden over the void.
+	var gy := world.ground_below(Vector2(position.x, position.z), position.y + 0.05) if world else 0.0
+	_shadow.visible = gy != -INF
+	if _shadow.visible:
+		var hgt := position.y - gy
+		_shadow.global_position.y = gy + 0.02
+		var sh := clampf(1.0 - hgt * 0.25, 0.35, 1.0)
+		_shadow.scale = Vector3(sh, 1, sh)

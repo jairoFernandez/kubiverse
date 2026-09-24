@@ -11,7 +11,7 @@ var nodes := {}      # name -> {name, ready, unschedulable, roles, ...}
 var workloads := {}  # "ns/kind/name" -> {kind, ns, name, desired, image, behaviour, containers}
 var pods := {}       # "ns/name" -> pod dict + private "_t" timers
 var services := {}   # "ns/name" -> {ns, name, type, cluster_ip, ports, app}
-var namespaces := ["default", "kube-system", "shop", "payments", "monitoring"]
+var namespaces := ["default", "kube-system", "shop", "payments", "monitoring", "ml", "data"]
 
 var _clock := 0.0
 var _tick := 0.0
@@ -24,6 +24,9 @@ func start() -> void:
 	_node("control-plane", ["control-plane"])
 	_node("worker-a", [])
 	_node("worker-b", [])
+	_node("worker-c", [])
+	_node("gpu-1", [])
+	nodes["gpu-1"]["gpu"] = true
 	_wl("Deployment", "kube-system", "coredns", 2, "coredns/coredns:1.11", "ok")
 	_wl("DaemonSet", "kube-system", "kube-proxy", 0, "registry.k8s.io/kube-proxy:v1.31", "ok")
 	_wl("Deployment", "shop", "frontend", 3, "nginx:alpine", "ok")
@@ -32,6 +35,10 @@ func start() -> void:
 	_wl("Deployment", "payments", "ledger", 2, "busybox:1.36", "crash")
 	_wl("Deployment", "payments", "fraud-ai", 1, "registry.invalid/fraud-ai:v9", "pullfail")
 	_wl("DaemonSet", "monitoring", "node-exporter", 0, "prom/node-exporter", "ok")
+	_wl("Deployment", "ml", "trainer", 2, "pytorch/trainer:latest", "gpu")
+	_wl("Deployment", "ml", "giant-experiment", 1, "busybox", "unschedulable")
+	_wl("StatefulSet", "data", "broker", 3, "busybox", "ok")
+	_svc("data", "broker", "ClusterIP", "broker", ["9092/TCP"], true)
 	_svc("kube-system", "kube-dns", "ClusterIP", "coredns", ["53/UDP", "53/TCP"])
 	_svc("shop", "frontend", "LoadBalancer", "frontend", ["80/TCP"])
 	_svc("shop", "cart", "ClusterIP", "cart", ["8080/TCP"])
@@ -122,7 +129,7 @@ func _reconcile(dt: float) -> void:
 						_ev(p.ns, "Pod", p.name, "Failed", "Failed to pull image \"%s\": not found" % wl.image, "Warning")
 					else:
 						p.status = "Running"
-						p.ready = p.total if behaviour == "ok" else 0
+						p.ready = p.total if behaviour in ["ok", "gpu"] else 0
 						_ev(p.ns, "Pod", p.name, "Started", "Started container %s" % p.containers[0], "Normal")
 					_dirty = true
 			"ErrImagePull":
@@ -142,7 +149,7 @@ func _reconcile(dt: float) -> void:
 					p.ready = 0
 					p._t = 0.0
 					_dirty = true
-				elif p.ready < p.total and behaviour == "ok" and p._t > 0.5:
+				elif p.ready < p.total and behaviour in ["ok", "gpu"] and p._t > 0.5:
 					p.ready = p.total
 					_dirty = true
 			"Error", "OOMKilled":
@@ -155,7 +162,7 @@ func _reconcile(dt: float) -> void:
 			"CrashLoopBackOff":
 				if p._t > 3.0 + min(p.restarts, 5):
 					p.status = "Running"
-					p.ready = p.total if behaviour == "ok" else 0
+					p.ready = p.total if behaviour in ["ok", "gpu"] else 0
 					p._t = 0.0
 					_dirty = true
 	# Workload reconciliation.
@@ -199,11 +206,17 @@ func _new_pod(wkey: String, wl: Dictionary, want_node: String) -> void:
 func _schedule(p: Dictionary) -> String:
 	if p._want_node != "":
 		return p._want_node if nodes.has(p._want_node) else ""
+	var beh: String = workloads.get(p._wl, {}).get("behaviour", "ok")
+	if beh == "unschedulable":
+		return ""  # asks for more CPU than any node has
 	var best := ""
 	var best_n := 1 << 30
 	for n in nodes:
 		var nd: Dictionary = nodes[n]
 		if not nd.ready or nd.unschedulable or "control-plane" in nd.roles:
+			continue
+		# GPU node is tainted: only gpu workloads go there, and they only go there.
+		if nd.get("gpu", false) != (beh == "gpu"):
 			continue
 		var cnt := pods.values().filter(func(q): return q.node == n).size()
 		if cnt < best_n:

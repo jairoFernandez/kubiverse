@@ -30,6 +30,28 @@ Se entra por las puertas (**E**), con doble clic en una nave o desde la barra de
 ![Dentro de una nave](docs/hall.png)
 ![Sala de energía](docs/energy.png)
 
+## Escenario multinodo (kind)
+
+```bash
+make cluster         # kind: 1 control-plane + 3 workers (uno "GPU" con taint) + metrics-server + escenario
+make serve-web-kind  # bridge en :8089 contra kind-kubecraft -> http://127.0.0.1:8089
+make cluster-delete
+```
+
+[`deploy/complex.yaml`](deploy/complex.yaml) crea cinco namespaces:
+
+- **ecommerce**: tienda con réplicas repartidas entre nodos, API con sidecar, workers, Postgres con volumen y Redis.
+- **data**: StatefulSet de 3 brokers, CronJob cada 2 min (pods Completed) y un Job.
+- **ml**: entrenamiento forzado al nodo GPU (taint + toleration), un modelo con imagen rota y un pod que pide 64 CPUs y **nunca** se programa.
+- **observability**: DaemonSet en todos los nodos y Prometheus.
+- **chaos**: crashes aleatorios y un pod OOMKilled.
+
+Tu contexto actual de kubectl no cambia.
+
+## Sala de energía estilo Mario
+
+Los nodos son islas flotantes a distintas alturas. Para llegar hay que **saltar** por bloques "?", ladrillos y plataformas (algunas suben y bajan), recogiendo monedas. Si caes al vacío vuelves al centro. La física es vertical de verdad: los bordes de una plataforma más alta hacen de pared y la sombra marca dónde vas a caer. Un test comprueba que cada isla es alcanzable con el salto del personaje.
+
 ## Misiones (J)
 
 11 misiones guiadas para entender Kubernetes haciendo: namespaces, pods, nodos, crear un Deployment, autorreparación, escalar, Services/endpoints, depurar un CrashLoop con logs, rollout, cordon/uncordon y limpieza. Cada una explica el concepto (**WHY?**) y el comando `kubectl` equivalente. Se validan contra el estado real del cluster. Las que modifican cosas usan el namespace **`academia`**, para no tocar tus aplicaciones.

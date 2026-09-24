@@ -157,6 +157,8 @@ const ES := {
 	"(no output)": "(sin salida)",
 	# ---- help keys
 	"walk": "andar",
+	"You fell into the void! Back to the hub.": "¡Caíste al vacío! De vuelta al centro.",
+	"Coins: %d": "Monedas: %d",
 	"system": "sistema",
 	"process CPU": "CPU proceso",
 	"renderer": "renderer",

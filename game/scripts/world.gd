@@ -31,6 +31,11 @@ var pods := {}       # "ns/name" -> PodBot
 var doors := []                        # [{pos, to, text}]
 var spawn := Vector3.ZERO
 var walk_rects: Array[Rect2] = []      # XZ areas you can stand on
+var walk_heights: Array[float] = []    # top height of each walk rect
+var void_level := false                # true: you can fall off the edges
+var movers := []                       # [{idx, node, base, amp, speed}] bobbing platforms
+var coins := []                        # [{node, pos}] collectibles (energy room)
+const STEP := 0.35                     # max height you can walk up without jumping
 var walk_segments := []                # [[a: Vector2, b: Vector2, half_width]] bridges
 var blockers: Array[Rect2] = []        # solid XZ areas
 var limbo_center := Vector3.ZERO
@@ -150,7 +155,11 @@ func _begin_static(sig: String) -> bool:
 	add_child(_static)
 	doors.clear()
 	walk_rects.clear()
+	walk_heights.clear()
 	walk_segments.clear()
+	movers.clear()
+	coins.clear()
+	void_level = false
 	blockers.clear()
 	return true
 
@@ -175,22 +184,46 @@ func door_near(p: Vector3, reach := 1.8) -> Dictionary:
 
 # ---------------------------------------------------------------- physics
 
-## True if the player may stand at p: on some walkable surface and not
-## inside a solid object.
+func _add_walk(r: Rect2, y := 0.0) -> int:
+	walk_rects.append(r)
+	walk_heights.append(y)
+	return walk_rects.size() - 1
+
+
+## Highest walkable surface under q at or below `max_y` (-INF if none).
+func ground_below(q: Vector2, max_y: float) -> float:
+	var best := -INF
+	for i in walk_rects.size():
+		if walk_heights[i] <= max_y and walk_rects[i].has_point(q):
+			best = maxf(best, walk_heights[i])
+	for sgm in walk_segments:
+		if Geometry2D.get_closest_point_to_segment(q, sgm[0], sgm[1]).distance_to(q) <= sgm[2] and 0.0 <= max_y:
+			best = maxf(best, 0.0)
+	return best
+
+
+## Highest surface under q regardless of height (-INF if none).
+func surface_y(q: Vector2) -> float:
+	return ground_below(q, INF)
+
+
+func _blocked(q: Vector2, feet: float) -> bool:
+	for b in blockers:
+		if b.grow(0.3).has_point(q):
+			return true
+	# The side of a higher platform is a wall.
+	for i in walk_rects.size():
+		if walk_heights[i] > feet + STEP and walk_rects[i].grow(0.2).has_point(q):
+			return true
+	# Levels with solid edges: no floor = wall. Void levels let you fall.
+	return not void_level and surface_y(q) == -INF
+
+
+## True if the player may stand at p (on some surface, not inside a solid).
 func can_stand(p: Vector3) -> bool:
 	var q := Vector2(p.x, p.z)
-	var on := false
-	for r in walk_rects:
-		if r.has_point(q):
-			on = true
-			break
-	if not on:
-		for sgm in walk_segments:
-			var c := Geometry2D.get_closest_point_to_segment(q, sgm[0], sgm[1])
-			if c.distance_to(q) <= sgm[2]:
-				on = true
-				break
-	if not on:
+	var y := surface_y(q)
+	if y == -INF:
 		return false
 	for b in blockers:
 		if b.grow(0.3).has_point(q):
@@ -198,21 +231,18 @@ func can_stand(p: Vector3) -> bool:
 	return true
 
 
-## Moves from `from` by `delta`, sliding along walls; returns the new position.
-func move_player(from: Vector3, delta: Vector3) -> Vector3:
-	if walk_rects.is_empty():
+## Horizontal move from `from` by `delta` with feet at `feet`, sliding along
+## walls. Returns the new position (y untouched; gravity is the player's job).
+func move_player(from: Vector3, delta: Vector3, feet := 0.0) -> Vector3:
+	if walk_rects.is_empty() and walk_segments.is_empty():
 		return from + delta
-	var p := from + delta
-	if can_stand(p):
-		return p
-	var px := from + Vector3(delta.x, 0, 0)
-	if can_stand(px):
-		return px
-	var pz := from + Vector3(0, 0, delta.z)
-	if can_stand(pz):
-		return pz
-	if not can_stand(from):
+	var q0 := Vector2(from.x, from.z)
+	if _blocked(q0, feet) and not void_level:
 		return from + delta  # stuck inside something: let the player walk out
+	for d in [delta, Vector3(delta.x, 0, 0), Vector3(0, 0, delta.z)]:
+		var p: Vector3 = from + d
+		if not _blocked(Vector2(p.x, p.z), feet):
+			return p
 	return from
 
 
@@ -306,7 +336,7 @@ func _apply_plant(s: Dictionary) -> void:
 
 
 func _build_plant_ground(g: Rect2, n: int, cols: int, cw: float, cd: float, gw: float, gd: float) -> void:
-	walk_rects.append(g)
+	_add_walk(g)
 	Vox.box(_static, Vector3(g.size.x, 0.4, g.size.y), Vector3(g.get_center().x, -0.2, g.get_center().y), Color("4a5a3a"))
 	Vox.box(_static, Vector3(g.size.x - 0.6, 1.2, g.size.y - 0.6), Vector3(g.get_center().x, -1.0, g.get_center().y), Vox.BROWN.darkened(0.2))
 	var asphalt := Color("3b3f4f")
@@ -413,7 +443,7 @@ func _apply_hall(s: Dictionary, ns: String) -> void:
 	var fl := Rect2(-3.0, -depth + 3.0, width, depth + 4.0)
 	if _begin_static("hall|%s|%s|%d" % [ns, str(fl), loose.size()]):
 		var nsc := Vox.ns_color(ns)
-		walk_rects.append(fl)
+		_add_walk(fl)
 		var c := fl.get_center()
 		Vox.box(_static, Vector3(fl.size.x, 0.4, fl.size.y), Vector3(c.x, -0.2, c.y), Color("565c6e"))
 		Vox.box(_static, Vector3(fl.size.x - 0.5, 1.4, fl.size.y - 0.5), Vector3(c.x, -1.1, c.y), Color("3a3f55"))
@@ -497,19 +527,22 @@ func _apply_power(s: Dictionary) -> void:
 	var biggest := 0.0
 	for k in names:
 		biggest = maxf(biggest, islands[k].size)
-	var r := hub.length() + biggest * 0.5 + 5.0
+	# Islands float at different heights, far enough apart that you need to
+	# jump across stepping stones to reach them.
+	var r := hub.length() + biggest * 0.5 + 12.0
 	if names.size() > 1:
-		r = maxf(r, (biggest + 4.0) / (2.0 * sin(PI / names.size())))
+		r = maxf(r, (biggest + 6.0) / (2.0 * sin(PI / names.size())))
 	for i in names.size():
 		var a := -PI * 0.5 + TAU * i / names.size() + (PI * 0.25 if names.size() > 1 else PI * 0.5)
 		var isl: NodeIsland = islands[names[i]]
-		isl.target = Vector3(cos(a) * r, 0, sin(a) * r)
+		isl.target = Vector3(cos(a) * r, 1.2 + (i % 3) * 1.1, sin(a) * r)
 		if isl.position == Vector3.ZERO:
 			isl.position = isl.target
 	limbo_center = Vector3(0, 6.0, -hub.y - 3.0)
 	var sig := "power|" + str(names.map(func(k): return [k, islands[k].target, islands[k].size]))
 	if _begin_static(sig):
-		walk_rects.append(Rect2(-hub.x, -hub.y, hub.x * 2, hub.y * 2))
+		void_level = true
+		_add_walk(Rect2(-hub.x, -hub.y, hub.x * 2, hub.y * 2), 0.0)
 		Vox.box(_static, Vector3(hub.x * 2, 0.4, hub.y * 2), Vector3(0, -0.2, 0), Color("3b3f5e"))
 		Vox.box(_static, Vector3(hub.x * 2 - 1, 1.2, hub.y * 2 - 1), Vector3(0, -1.0, 0), Vox.SLATE)
 		Vox.box(_static, Vector3(2.0, 1.0, 1.0), Vector3(0, 0.5, -2.0), Vox.NAVY)
@@ -517,11 +550,11 @@ func _apply_power(s: Dictionary) -> void:
 		blockers.append(Rect2(-1.0, -2.5, 2.0, 1.0))
 		_add_door(Vector3(0, 0, hub.y - 1.0), "plant", "exit to the plant", Vox.YELLOW)
 		spawn = Vector3(0, 0, hub.y - 2.4)
-		for k in names:
-			var isl: NodeIsland = islands[k]
+		for i in names.size():
+			var isl: NodeIsland = islands[names[i]]
 			var half: float = isl.size * 0.5
-			walk_rects.append(Rect2(isl.target.x - half, isl.target.z - half, isl.size, isl.size))
-			_build_bridge(hub, isl)
+			_add_walk(Rect2(isl.target.x - half, isl.target.z - half, isl.size, isl.size), isl.target.y)
+			_build_stones(hub, isl, i)
 		var cr := Vox.rng_for("cloud")
 		var cloud := Node3D.new()
 		cloud.name = "Cloud"
@@ -529,9 +562,6 @@ func _apply_power(s: Dictionary) -> void:
 		for i in 9:
 			var sz := Vector3(cr.randf_range(2.0, 3.4), cr.randf_range(0.6, 1.0), cr.randf_range(1.6, 2.6))
 			Vox.box(cloud, sz, limbo_center + Vector3(-4.0 + i * 1.0, -0.4 - cr.randf() * 0.3, cr.randf_range(-1.0, 1.0)), Vox.WHITE, 0.3, false)
-	else:
-		# Blockers are rebuilt each time only for static levels; keep desk.
-		pass
 	var pseen := {}
 	for d in s.pods:
 		if not ns_visible(d.ns):
@@ -568,25 +598,69 @@ func _power_pod_position(bot: PodBot) -> Vector3:
 	return limbo_center + Vector3((idx % 6) * 1.3 - 3.25, 0.0, (idx / 6) * 1.3 - 0.6)
 
 
-func _build_bridge(hub: Vector2, isl: NodeIsland) -> void:
+const STONE := 1.6        # stepping stone size
+const STONE_GAP := 1.5    # empty space between stones (a jump, even walking)
+const MAX_RISE := 0.85    # height difference between stones (< jump height)
+
+
+## Mario-style path from the hub to an island: floating blocks ("?" blocks,
+## bricks and some platforms that bob up and down) you have to jump across.
+func _build_stones(hub: Vector2, isl: NodeIsland, idx: int) -> void:
 	var c: Vector3 = isl.target
 	var dir := Vector3(c.x, 0, c.z).normalized()
 	if dir == Vector3.ZERO:
 		return
-	var start := dir * (minf(hub.x / maxf(absf(dir.x), 0.001), hub.y / maxf(absf(dir.z), 0.001)) - 0.3)
+	var start := dir * (minf(hub.x / maxf(absf(dir.x), 0.001), hub.y / maxf(absf(dir.z), 0.001)))
 	var half: float = isl.size * 0.5
-	var end := c - dir * (minf(half / maxf(absf(dir.x), 0.001), half / maxf(absf(dir.z), 0.001)) - 0.3)
-	walk_segments.append([Vector2(start.x, start.z), Vector2(end.x, end.z), 0.8])
-	var bridge := Node3D.new()
-	_static.add_child(bridge)
-	bridge.look_at_from_position(start, end, Vector3.UP)
-	var steps := int(start.distance_to(end) / 0.6)
-	for i in steps:
-		var z := -0.3 - i * 0.6
-		Vox.box(bridge, Vector3(1.6, 0.14, 0.5), Vector3(0, -0.07, z), Vox.BROWN if i % 2 else Color("8f4a2e"))
-		if i % 4 == 0:
-			for x in [-0.85, 0.85]:
-				Vox.box(bridge, Vector3(0.12, 0.6, 0.12), Vector3(x, 0.2, z), Color("6b3a24"), 0.0, false)
+	var end := Vector3(c.x, 0, c.z) - dir * (minf(half / maxf(absf(dir.x), 0.001), half / maxf(absf(dir.z), 0.001)))
+	var dist := start.distance_to(end)
+	var n := maxi(maxi(1, int(dist / (STONE + STONE_GAP))), ceili(c.y / MAX_RISE) - 1)
+	var spacing := dist / (n + 1)
+	var rng := Vox.rng_for("stones" + isl.key)
+	for k in n:
+		var p := start + dir * spacing * (k + 1)
+		var y := c.y * float(k + 1) / float(n + 1)
+		var widx := _add_walk(Rect2(p.x - STONE * 0.5, p.z - STONE * 0.5, STONE, STONE), y)
+		var node := Node3D.new()
+		node.position = Vector3(p.x, y, p.z)
+		_static.add_child(node)
+		var kind := rng.randi() % 4
+		if kind == 0:
+			# "?" block
+			Vox.box(node, Vector3(STONE, 0.9, STONE), Vector3(0, -0.45, 0), Vox.YELLOW.darkened(0.1), 0.3)
+			for q in [Vector3(-0.15, -0.25, 0), Vector3(0.0, -0.1, 0), Vector3(0.15, -0.25, 0), Vector3(0.15, -0.4, 0), Vector3(0, -0.55, 0), Vector3(0, -0.8, 0)]:
+				for side in [Vector3(0, 0, STONE * 0.5 + 0.02), Vector3(STONE * 0.5 + 0.02, 0, 0)]:
+					Vox.box(node, Vector3(0.14, 0.14, 0.14), q + side + Vector3(0, 0.12, 0), Vox.BROWN, 0.0, false)
+		elif kind == 1:
+			# Bricks
+			Vox.box(node, Vector3(STONE, 0.6, STONE), Vector3(0, -0.3, 0), Vox.BROWN)
+			for bx in [-0.4, 0.4]:
+				Vox.box(node, Vector3(0.05, 0.62, STONE + 0.02), Vector3(bx, -0.3, 0), Color("6b3a24"), 0.0, false)
+		else:
+			# Floating grass platform; one in three bobs up and down
+			Vox.box(node, Vector3(STONE, 0.3, STONE), Vector3(0, -0.15, 0), Vox.GREEN)
+			Vox.box(node, Vector3(STONE - 0.3, 0.5, STONE - 0.3), Vector3(0, -0.55, 0), Vox.BROWN)
+			if kind == 3 and k > 0 and k < n - 1:
+				movers.append({"idx": widx, "node": node, "base": y, "amp": 0.5, "speed": 1.4 + idx * 0.2})
+		# A coin floating above every other stone
+		if k % 2 == 1:
+			var coin := Node3D.new()
+			coin.position = Vector3(p.x, y + 1.3, p.z)
+			Vox.box(coin, Vector3(0.45, 0.45, 0.1), Vector3.ZERO, Vox.YELLOW, 2.5)
+			_static.add_child(coin)
+			coins.append({"node": coin, "pos": coin.position})
+
+
+## Collects coins the player touches; returns how many were picked up.
+func collect_coins(p: Vector3) -> int:
+	var got := 0
+	for c in coins:
+		var node: Node3D = c.node
+		if node.visible and node.global_position.distance_to(p + Vector3(0, 0.8, 0)) < 1.0:
+			node.visible = false
+			poof(node.global_position, Vox.YELLOW)
+			got += 1
+	return got
 
 
 # -------------------------------------------------------------------- fx
@@ -622,6 +696,12 @@ func zap(from: Vector3, to: Vector3) -> void:
 
 func _process(delta: float) -> void:
 	_t += delta
+	for m in movers:
+		var y: float = m.base + sin(_t * m.speed) * m.amp
+		walk_heights[m.idx] = y
+		m.node.position.y = y
+	for c in coins:
+		c.node.rotation.y += delta * 3.0
 	for i in range(_particles.size() - 1, -1, -1):
 		var p: Dictionary = _particles[i]
 		p.life -= delta

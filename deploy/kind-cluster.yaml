@@ -1,0 +1,22 @@
+# Multi-node playground cluster for KubeCraft:
+#   make cluster        (kind create cluster --config deploy/kind-cluster.yaml)
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: kubecraft
+nodes:
+  - role: control-plane
+  - role: worker
+    labels: {topology.kubernetes.io/zone: zone-a, tier: web}
+  - role: worker
+    labels: {topology.kubernetes.io/zone: zone-b, tier: data}
+  - role: worker
+    # "GPU" node: only pods that tolerate the taint land here.
+    labels: {topology.kubernetes.io/zone: zone-b, accelerator: gpu}
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+          taints:
+            - key: gpu
+              value: "true"
+              effect: NoSchedule

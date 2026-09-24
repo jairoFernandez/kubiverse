@@ -95,6 +95,11 @@ func _ready() -> void:
 	player = Player.new()
 	player.world = world
 	_vp.add_child(player)
+	player.fell.connect(func():
+		player.teleport(world.spawn)
+		world.poof(player.global_position + Vector3(0, 1, 0), Vox.WHITE)
+		hud.toast(tr("You fell into the void! Back to the hub."), false))
+	player.coin.connect(func(): hud.toast(tr("Coins: %d") % player.coins, true))
 
 	_pivot = Node3D.new()
 	_vp.add_child(_pivot)
@@ -157,7 +162,11 @@ func _ready() -> void:
 		K8s.start_demo()
 		hud.show_connect(false)
 	elif K8s.web_query_param("bridge") != "" or "--connect" in OS.get_cmdline_user_args():
-		K8s.connect_bridge(K8s.default_bridge_url(), K8s.web_query_param("token"))
+		var url := K8s.default_bridge_url()
+		for arg in OS.get_cmdline_user_args():
+			if arg.begins_with("--bridge="):
+				url = arg.substr(9)
+		K8s.connect_bridge(url, K8s.web_query_param("token"))
 
 	# Dev helper: `godot --path game -- --demo --shot=/tmp/x.png [--inspect]`
 	for arg in OS.get_cmdline_user_args():
@@ -177,7 +186,7 @@ func _screenshot_and_quit(path: String) -> void:
 		if arg.begins_with("--near="):
 			var b: FactoryBuilding = world.buildings.get(arg.substr(7))
 			if b:
-				player.position = _standable_near(b.door_position() + Vector3(0, 0, 2.5))
+				player.teleport(_standable_near(b.door_position() + Vector3(0, 0, 2.5)))
 				_zoom_target = 24.0
 				await get_tree().create_timer(1.5).timeout
 		if arg.begins_with("--goto="):
@@ -235,8 +244,8 @@ func _go_level(l: String) -> void:
 
 func _on_level_changed(l: String) -> void:
 	hud.close_modals()
+	player.teleport(world.spawn)
 	_fyaw = deg_to_rad(_yaw)
-	player.position = world.spawn
 	_pan = Vector3.ZERO
 	_zoom_target = LEVEL_ZOOM.get(l, 26.0)
 	hud.set_level_title(world.level_title())
@@ -252,7 +261,7 @@ func _goto(kind: String, key: String, ns: String) -> void:
 	if e == null:
 		hud.toast(tr("Not visible here (maybe filtered)"), false)
 		return
-	player.position = _standable_near(e.target)
+	player.teleport(_standable_near(e.target))
 	_pan = Vector3.ZERO
 	hud.inspect(e)
 
@@ -273,11 +282,11 @@ func _standable_near(p: Vector3) -> Vector3:
 func _travel(pos: Vector3, target: Entity) -> void:
 	world.poof(player.global_position + Vector3(0, 0.8, 0), Vox.WHITE)
 	if target is FactoryBuilding:
-		player.position = _standable_near(target.door_position() + Vector3(0, 0, 0.8))
+		player.teleport(_standable_near(target.door_position() + Vector3(0, 0, 0.8)))
 	elif target != null:
-		player.position = _standable_near(target.target + Vector3(0, 0, 1.6))
+		player.teleport(_standable_near(target.target + Vector3(0, 0, 1.6)))
 	else:
-		player.position = _standable_near(pos)
+		player.teleport(_standable_near(pos))
 	_pan = Vector3.ZERO
 	hud.toggle_map()
 	world.poof(player.global_position + Vector3(0, 0.8, 0), Vox.YELLOW)
