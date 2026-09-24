@@ -96,7 +96,9 @@ func _ready() -> void:
 	player.world = world
 	_vp.add_child(player)
 	player.fell.connect(func():
-		player.teleport(world.spawn)
+		# Back to the last platform you stood on (a bit inward), not the start.
+		var back: Vector3 = player.last_safe
+		player.teleport(_standable_near(back) if world.can_stand(back) else world.spawn)
 		world.poof(player.global_position + Vector3(0, 1, 0), Vox.WHITE)
 		hud.toast(tr("You fell into the void! Back to the hub."), false))
 	player.coin.connect(func(): hud.toast(tr("Coins: %d") % player.coins, true))
@@ -582,6 +584,12 @@ func _cycle_pods() -> void:
 func _interact() -> void:
 	var d := world.door_near(player.global_position, 2.2)
 	if not d.is_empty():
+		if str(d.to).begins_with("warp:"):
+			world.poof(player.global_position + Vector3(0, 0.8, 0), Vox.GREEN)
+			player.teleport(_standable_near(world.warp_target(str(d.to).substr(5))))
+			world.poof(player.global_position + Vector3(0, 0.8, 0), Vox.GREEN)
+			_pan = Vector3.ZERO
+			return
 		_go_level(d.to)
 		return
 	var e := hud.inspected()

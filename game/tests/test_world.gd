@@ -42,8 +42,8 @@ func _init() -> void:
 	world.set_level("power")
 	# Must match Player.JUMP_SPEED / GRAVITY / WALK_SPEED (player.gd needs
 	# autoloads, which --script mode does not load).
-	var jump_h := 7.5 * 7.5 / (2.0 * 24.0)
-	var air := 2.0 * 7.5 / 24.0
+	var jump_h := 8.6 * 8.6 / (2.0 * 24.0)
+	var air := 2.0 * 8.6 / 24.0
 	var max_gap := 5.5 * air * 0.9
 	for i in range(1, world.walk_rects.size()):
 		var r: Rect2 = world.walk_rects[i]

@@ -523,38 +523,61 @@ func _apply_power(s: Dictionary) -> void:
 			islands.erase(k)
 	var names := islands.keys()
 	names.sort()
-	var hub := Vector2(5, 5)
-	var biggest := 0.0
+	# The control-plane is the centre of the room (where you arrive); the
+	# workers orbit around it at different heights. Managed clusters (EKS,
+	# GKE...) hide their control-plane: a plain hub platform is used instead.
+	var center_name := ""
 	for k in names:
+		if islands[k].is_control_plane():
+			center_name = k
+			break
+	var workers := names.filter(func(k): return k != center_name)
+	var hub := Vector2(5, 5)
+	if center_name != "":
+		var cp: NodeIsland = islands[center_name]
+		cp.target = Vector3.ZERO
+		if cp.position == Vector3.ZERO:
+			cp.position = cp.target
+		hub = Vector2(cp.size, cp.size) * 0.5
+	var biggest := 0.0
+	for k in workers:
 		biggest = maxf(biggest, islands[k].size)
-	# Islands float at different heights, far enough apart that you need to
-	# jump across stepping stones to reach them.
-	var r := hub.length() + biggest * 0.5 + 12.0
-	if names.size() > 1:
-		r = maxf(r, (biggest + 6.0) / (2.0 * sin(PI / names.size())))
-	for i in names.size():
-		var a := -PI * 0.5 + TAU * i / names.size() + (PI * 0.25 if names.size() > 1 else PI * 0.5)
-		var isl: NodeIsland = islands[names[i]]
-		isl.target = Vector3(cos(a) * r, 1.2 + (i % 3) * 1.1, sin(a) * r)
+	var r := hub.length() + biggest * 0.5 + 9.0
+	if workers.size() > 1:
+		r = maxf(r, (biggest + 6.0) / (2.0 * sin(PI / workers.size())))
+	for i in workers.size():
+		var a := -PI * 0.5 + TAU * i / workers.size() + (PI * 0.25 if workers.size() > 1 else PI * 0.5)
+		var isl: NodeIsland = islands[workers[i]]
+		isl.target = Vector3(cos(a) * r, 0.8 + (i % 3) * 0.7, sin(a) * r)
 		if isl.position == Vector3.ZERO:
 			isl.position = isl.target
 	limbo_center = Vector3(0, 6.0, -hub.y - 3.0)
-	var sig := "power|" + str(names.map(func(k): return [k, islands[k].target, islands[k].size]))
+	var sig := "power|" + center_name + str(names.map(func(k): return [k, islands[k].target, islands[k].size]))
 	if _begin_static(sig):
 		void_level = true
-		_add_walk(Rect2(-hub.x, -hub.y, hub.x * 2, hub.y * 2), 0.0)
-		Vox.box(_static, Vector3(hub.x * 2, 0.4, hub.y * 2), Vector3(0, -0.2, 0), Color("3b3f5e"))
-		Vox.box(_static, Vector3(hub.x * 2 - 1, 1.2, hub.y * 2 - 1), Vector3(0, -1.0, 0), Vox.SLATE)
-		Vox.box(_static, Vector3(2.0, 1.0, 1.0), Vector3(0, 0.5, -2.0), Vox.NAVY)
-		Vox.box(_static, Vector3(1.8, 0.5, 0.05), Vector3(0, 1.1, -1.48), Vox.GREEN, 1.0, false)
-		blockers.append(Rect2(-1.0, -2.5, 2.0, 1.0))
-		_add_door(Vector3(0, 0, hub.y - 1.0), "plant", "exit to the plant", Vox.YELLOW)
-		spawn = Vector3(0, 0, hub.y - 2.4)
-		for i in names.size():
-			var isl: NodeIsland = islands[names[i]]
+		if center_name == "":
+			_add_walk(Rect2(-hub.x, -hub.y, hub.x * 2, hub.y * 2), 0.0)
+			Vox.box(_static, Vector3(hub.x * 2, 0.4, hub.y * 2), Vector3(0, -0.2, 0), Color("3b3f5e"))
+			Vox.box(_static, Vector3(hub.x * 2 - 1, 1.2, hub.y * 2 - 1), Vector3(0, -1.0, 0), Vox.SLATE)
+		else:
+			_add_walk(Rect2(-hub.x, -hub.y, hub.x * 2, hub.y * 2), 0.0)
+			# The castle tower in the control-plane's corner is solid.
+			blockers.append(Rect2(-hub.x + 0.25, -hub.y + 0.25, 1.1, 1.1))
+		_add_door(Vector3(0, 0, hub.y - 0.8), "plant", "exit to the plant", Vox.YELLOW)
+		spawn = Vector3(0.8, 0, hub.y - 2.0)
+		for i in workers.size():
+			var isl: NodeIsland = islands[workers[i]]
 			var half: float = isl.size * 0.5
 			_add_walk(Rect2(isl.target.x - half, isl.target.z - half, isl.size, isl.size), isl.target.y)
 			_build_stones(hub, isl, i)
+		# Warp pipes: a ring centre -> worker 1 -> worker 2 -> ... -> centre.
+		var stops: Array = ([center_name] if center_name != "" else ["@hub"]) + workers
+		for i in stops.size():
+			var here: String = stops[i]
+			var nxt: String = stops[(i + 1) % stops.size()]
+			if here == nxt:
+				continue
+			_build_pipe(_pipe_pos(here, hub), nxt)
 		var cr := Vox.rng_for("cloud")
 		var cloud := Node3D.new()
 		cloud.name = "Cloud"
@@ -598,9 +621,9 @@ func _power_pod_position(bot: PodBot) -> Vector3:
 	return limbo_center + Vector3((idx % 6) * 1.3 - 3.25, 0.0, (idx / 6) * 1.3 - 0.6)
 
 
-const STONE := 1.6        # stepping stone size
-const STONE_GAP := 1.5    # empty space between stones (a jump, even walking)
-const MAX_RISE := 0.85    # height difference between stones (< jump height)
+const STONE := 2.0        # stepping stone size
+const STONE_GAP := 1.1    # empty space between stones (an easy hop)
+const MAX_RISE := 0.7     # height difference between stones (< jump height)
 
 
 ## Mario-style path from the hub to an island: floating blocks ("?" blocks,
@@ -649,6 +672,34 @@ func _build_stones(hub: Vector2, isl: NodeIsland, idx: int) -> void:
 			Vox.box(coin, Vector3(0.45, 0.45, 0.1), Vector3.ZERO, Vox.YELLOW, 2.5)
 			_static.add_child(coin)
 			coins.append({"node": coin, "pos": coin.position})
+
+
+## Where the warp pipe of an island (or the hub) stands: far corner, away
+## from the tower and the door.
+func _pipe_pos(name: String, hub: Vector2) -> Vector3:
+	if name == "@hub" or not islands.has(name):
+		return Vector3(hub.x - 1.2, 0, -hub.y + 1.2)
+	var isl: NodeIsland = islands[name]
+	var h: float = isl.size * 0.5
+	return isl.target + Vector3(h - 1.0, 0, -h + 1.0)
+
+
+func _build_pipe(pos: Vector3, to_node: String) -> void:
+	var node := Node3D.new()
+	node.position = pos
+	_static.add_child(node)
+	Vox.box(node, Vector3(0.9, 1.0, 0.9), Vector3(0, 0.5, 0), Color("1f9e3a"))
+	Vox.box(node, Vector3(1.15, 0.3, 1.15), Vector3(0, 1.1, 0), Vox.GREEN)
+	Vox.box(node, Vector3(0.8, 0.04, 0.8), Vector3(0, 1.26, 0), Color("0b2a12"), 0.0, false)
+	blockers.append(Rect2(pos.x - 0.55, pos.z - 0.55, 1.1, 1.1))
+	doors.append({"pos": pos + Vector3(0, 0, 0.9), "to": "warp:" + to_node, "text": "warp pipe to %s|" + (to_node if to_node != "@hub" else "hub")})
+
+
+## Arrival point when warping to a node's island (next to its pipe).
+func warp_target(node_name: String) -> Vector3:
+	var hub := Vector2(5, 5)
+	var p := _pipe_pos(node_name, hub)
+	return p + Vector3(-1.6, 0, 1.4)
 
 
 ## Collects coins the player touches; returns how many were picked up.

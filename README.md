@@ -50,7 +50,7 @@ Tu contexto actual de kubectl no cambia.
 
 ## Sala de energía estilo Mario
 
-Los nodos son islas flotantes a distintas alturas. Para llegar hay que **saltar** por bloques "?", ladrillos y plataformas (algunas suben y bajan), recogiendo monedas. Si caes al vacío vuelves al centro. La física es vertical de verdad: los bordes de una plataforma más alta hacen de pared y la sombra marca dónde vas a caer. Un test comprueba que cada isla es alcanzable con el salto del personaje.
+El **control-plane** es la isla central y es donde apareces; los workers orbitan a su alrededor a distintas alturas. Si el cluster no expone su control-plane (EKS, GKE...), el centro es una plataforma neutra. Cada isla tiene una **tubería warp** (E junto a ella) que te lleva a la siguiente isla sin tener que saltar. Para ir a pie hay que **saltar** por bloques "?", ladrillos y plataformas (algunas suben y bajan), recogiendo monedas. Si caes al vacío vuelves a la última plataforma donde estuviste. Hay *coyote time* (puedes saltar un instante después de salir del borde) y el salto pulsado justo antes de aterrizar también cuenta. La física es vertical de verdad: los bordes de una plataforma más alta hacen de pared y la sombra marca dónde vas a caer. Un test comprueba que cada isla es alcanzable con el salto del personaje.
 
 ## Misiones (J)
 

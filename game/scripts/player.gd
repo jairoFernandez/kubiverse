@@ -6,7 +6,7 @@ extends Node3D
 
 const WALK_SPEED := 5.5
 const RUN_SPEED := 10.5
-const JUMP_SPEED := 7.5
+const JUMP_SPEED := 8.6
 const GRAVITY := 24.0
 
 var cam_yaw := 0.0
@@ -25,6 +25,9 @@ var _vy := 0.0
 var _grounded := true
 var _ground := 0.0
 var coins := 0
+var last_safe := Vector3.ZERO   # where to respawn after falling
+var _coyote := 0.0              # can still jump shortly after leaving an edge
+var _jump_buffer := 0.0         # a jump pressed just before landing still counts
 
 signal fell
 signal coin
@@ -99,7 +102,19 @@ func on_ground() -> bool:
 
 
 func jump() -> void:
-	if on_ground() and input_enabled:
+	if not input_enabled:
+		return
+	if on_ground() or _coyote > 0.0:
+		_do_jump()
+	else:
+		_jump_buffer = 0.15
+
+
+func _do_jump() -> void:
+	_coyote = 0.0
+	_jump_buffer = 0.0
+	_grounded = false
+	if true:
 		_vy = JUMP_SPEED
 		_squash = -0.15
 		if world:
@@ -141,6 +156,12 @@ func _process(delta: float) -> void:
 		position.y = _ground  # follows moving platforms
 		_vy = 0.0
 		_grounded = true
+	_coyote = 0.12 if _grounded else maxf(0.0, _coyote - delta)
+	if _grounded:
+		last_safe = position
+		if _jump_buffer > 0.0:
+			_do_jump()
+	_jump_buffer = maxf(0.0, _jump_buffer - delta)
 	if position.y < -14.0 and world:
 		fell.emit()
 	if world and world.coins.size() > 0:
