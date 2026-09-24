@@ -13,6 +13,7 @@ const MINI_SCALE := 4.5  # map px (UI units) per world unit
 var world: World
 var player: Player
 var full := false
+var zoom := 1.0
 var font: Font
 
 var _scale := 1.0
@@ -71,7 +72,7 @@ func _draw() -> void:
 		_scale = minf(size.x / maxf(b.size.x, 1.0), size.y / maxf(b.size.y, 1.0))
 		_origin = b.get_center()
 	else:
-		_scale = MINI_SCALE
+		_scale = MINI_SCALE * zoom
 		_origin = _xz(player.global_position)
 	draw_rect(Rect2(Vector2.ZERO, size), Color("0e1224"))
 	var ground := Color("3d4a33") if world.level == "plant" else (Color("4a5066") if world.level.begins_with("ns:") else Color("343a58"))

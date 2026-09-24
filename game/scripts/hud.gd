@@ -617,17 +617,31 @@ func _build_game_ui() -> void:
 	mm.anchor_top = 1.0
 	mm.anchor_bottom = 1.0
 	mm.offset_left = 10
-	mm.offset_right = 230
 	mm.clip_contents = true
 	mm.name = "Minimap"
 	mm.add_theme_stylebox_override("panel", _flat(Color("0e1224"), Vox.SLATE, 2, 0))
 	_game_root.add_child(mm)
+	var mmv := VBoxContainer.new()
+	mmv.add_theme_constant_override("separation", 0)
+	mm.add_child(mmv)
+	var mmh := HBoxContainer.new()
+	mmh.add_theme_constant_override("separation", 2)
+	mmv.add_child(mmh)
+	var mml := _label("N", 18, Vox.SLATE)
+	mml.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mmh.add_child(mml)
+	for b in [["-", func(): _minimap_size(-1)], ["+", func(): _minimap_size(1)], ["x", toggle_minimap]]:
+		var btn := _button(b[0], b[1])
+		btn.add_theme_font_size_override("font_size", 16)
+		btn.custom_minimum_size = Vector2(22, 0)
+		mmh.add_child(btn)
 	map_mini = MapView.new()
 	map_mini.font = _font
-	map_mini.custom_minimum_size = Vector2(220, 150)
 	map_mini.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	map_mini.clip_contents = true
 	map_mini.open_full.connect(toggle_map)
-	mm.add_child(map_mini)
+	mmv.add_child(map_mini)
+	_minimap_size(0)
 
 	_term_text.append_text("[color=#5f574f]%s[/color]\n" % tr("# every action you take in the world is a real kubectl call.\n# click a command to copy it."))
 	tv.add_child(_term_text)
@@ -1186,7 +1200,9 @@ func _refresh_inspector() -> void:
 				if sv.ns == d.ns and sv.get("pods") != null and d.name in sv.pods:
 					svcs.append(sv.name)
 			lines.append(_kv("services", ", ".join(svcs) if svcs else "[color=#5f574f]%s[/color]" % tr("none route traffic here")))
-			lines.append_array(_usage_lines([d]))
+			var usage := _usage_lines([d])
+			for i in usage.size():
+				lines.insert(3 + i, usage[i])
 			buttons.append(["LOGS [L]", func(): open_logs(d), "", false, Kubectl.logs(d.ns, d.name, "", false, true)])
 			var del := {"action": "delete_pod", "ns": d.ns, "name": d.name}
 			buttons.append(["DELETE POD", func(): _delete_pod(d), "DangerButton", ro, Kubectl.for_action(del)])
@@ -1564,6 +1580,18 @@ func toggle_stats() -> void:
 	_sync_view()
 
 
+const MINIMAP_SIZES := [Vector2(110, 75), Vector2(160, 110), Vector2(220, 150), Vector2(300, 210)]
+
+
+func _minimap_size(step: int) -> void:
+	Settings.minimap_size = clampi(Settings.minimap_size + step, 0, MINIMAP_SIZES.size() - 1)
+	map_mini.custom_minimum_size = MINIMAP_SIZES[Settings.minimap_size]
+	# Smaller map = zoomed out a bit so it still shows the surroundings.
+	map_mini.zoom = [0.6, 0.8, 1.0, 1.0][Settings.minimap_size]
+	if step != 0:
+		Settings.save()
+
+
 func toggle_minimap() -> void:
 	Settings.minimap = not Settings.minimap
 	Settings.save()
@@ -1716,8 +1744,10 @@ func _layout() -> void:
 	scroll.custom_minimum_size = Vector2(lw, clampf(lwant, 60, sz.y - top - bottom - 50))
 	_legend.size = Vector2.ZERO
 	var mm: Control = _game_root.get_node("Minimap")
+	var msz: Vector2 = mm.get_combined_minimum_size()
 	mm.offset_bottom = -bottom
-	mm.offset_top = -bottom - 150
+	mm.offset_top = -bottom - msz.y
+	mm.offset_right = 10 + msz.x
 	# Centered dialogs: size to content, center, keep on screen.
 	var full := _modal_layer.size
 	for p in [_confirm_panel, _build_panel]:

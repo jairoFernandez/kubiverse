@@ -156,7 +156,12 @@ func main() {
 	mux.HandleFunc("POST /api/action", b.auth(b.handleAction))
 	mux.HandleFunc("POST /api/kubectl", b.auth(b.handleKubectl))
 	if *webDir != "" {
-		mux.Handle("/", http.FileServer(http.Dir(*webDir)))
+		fs := http.FileServer(http.Dir(*webDir))
+		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Always revalidate: a rebuilt game must never run from a stale cache.
+			w.Header().Set("Cache-Control", "no-cache")
+			fs.ServeHTTP(w, r)
+		}))
 		log.Printf("serving web build from %s", *webDir)
 	}
 

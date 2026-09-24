@@ -16,6 +16,7 @@ var mission_idx := 0
 var lang := ""
 var always_run := false
 var minimap := true
+var minimap_size := 2
 
 
 func _ready() -> void:
@@ -30,6 +31,7 @@ func _ready() -> void:
 		lang = cf.get_value("ui", "lang", lang)
 		always_run = cf.get_value("ui", "always_run", always_run)
 		minimap = cf.get_value("ui", "minimap", minimap)
+		minimap_size = cf.get_value("ui", "minimap_size", minimap_size)
 
 
 func save() -> void:
@@ -43,6 +45,7 @@ func save() -> void:
 	cf.set_value("ui", "lang", lang)
 	cf.set_value("ui", "always_run", always_run)
 	cf.set_value("ui", "minimap", minimap)
+	cf.set_value("ui", "minimap_size", minimap_size)
 	cf.save(PATH)
 	changed.emit()
 

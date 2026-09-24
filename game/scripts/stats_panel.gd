@@ -34,7 +34,9 @@ static func probe(delta: float) -> void:
 	if OS.is_debug_build() and OS.get_static_memory_usage() > 0:
 		proc_rss = OS.get_static_memory_usage()
 	if OS.has_feature("web"):
-		var v = JavaScriptBridge.eval("(performance.memory ? performance.memory.usedJSHeapSize : 0)", true)
+		# WASM linear memory captured by a tiny script in the page (see
+		# export_presets.cfg head_include), plus the JS heap when available.
+		var v = JavaScriptBridge.eval("(window.__kcMem ? window.__kcMem.buffer.byteLength : 0) + (performance.memory ? performance.memory.usedJSHeapSize : 0)", true)
 		if v != null and float(v) > 0:
 			proc_rss = float(v)
 		return
@@ -79,7 +81,8 @@ func _process(delta: float) -> void:
 	var fps := Engine.get_frames_per_second()
 	L.append("%s %d  (%.1f ms)" % [k.call("fps"), fps, Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0])
 	var mi := OS.get_memory_info()
-	L.append("%s %s  (%s %s)" % [k.call("RAM"), mib(proc_rss) if proc_rss > 0 else "n/a", tr("system"), mib(float(mi.get("physical", 0)))])
+	var sys_ram := float(mi.get("physical", 0))
+	L.append("%s %s%s" % [k.call("RAM"), mib(proc_rss) if proc_rss > 0 else "n/a", ("  (%s %s)" % [tr("system"), mib(sys_ram)]) if sys_ram > 0 else ""])
 	if proc_cpu >= 0:
 		L.append("%s %.0f%%" % [k.call("process CPU"), proc_cpu])
 	L.append("%s %s" % [k.call("VRAM"), mib(Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED))])
