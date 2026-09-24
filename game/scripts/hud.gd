@@ -11,6 +11,9 @@ signal recenter_requested
 signal level_requested(level: String)
 signal goto_requested(kind: String, key: String, ns: String)
 signal fpv_requested
+signal add_cp_requested
+signal jetpack_requested
+signal watch_toggled(on: bool)
 
 const BG := Color(0.043, 0.051, 0.102, 0.92)
 const PANEL := Color(0.114, 0.169, 0.325, 0.96)
@@ -42,6 +45,10 @@ var _view_run: CheckBox
 var _view_minimap: CheckBox
 var _view_fpv: CheckBox
 var fpv := false
+var kubi: KubiPanel
+var watch: WatchPanel
+var flying := false
+var _view_jet: CheckBox
 var map_mini: MapView
 var stats: StatsPanel
 var _perf_label: Label
@@ -57,6 +64,8 @@ var _banner_body: Label
 var _banner_t := 0.0
 var _weapon_bar: HBoxContainer
 var _last_bad := -1
+var _guide_panel: PanelContainer
+var _guide_text: RichTextLabel
 var map_full: MapView
 var _map_panel: PanelContainer
 
@@ -655,6 +664,8 @@ func _build_game_ui() -> void:
 	_stats_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_stats_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	h.add_child(_stats_label)
+	h.add_child(_button("Y KUBI", toggle_kubi))
+	h.add_child(_button("O WATCH", toggle_watch))
 	h.add_child(_button("G LEGEND", toggle_legend))
 	h.add_child(_button("B BUILD", open_build, "GoButton"))
 	_chaos_btn = _button("C CHAOS", toggle_chaos)
@@ -702,6 +713,8 @@ func _build_game_ui() -> void:
 	vv.add_child(_view_minimap)
 	_view_fpv = _check("First person view  [P]", func(): fpv_requested.emit())
 	vv.add_child(_view_fpv)
+	_view_jet = _check("Jetpack flight  [Z / SPACE x2]", func(): jetpack_requested.emit())
+	vv.add_child(_view_jet)
 	_view_stats = _check("Performance & cluster stats  [F3]", toggle_stats)
 	vv.add_child(_view_stats)
 	_view_challenge = _check("Jump challenge (Mario platforms)", func():
@@ -1029,7 +1042,7 @@ func toggle_missions() -> void:
 
 
 func _fill_help() -> void:
-	var keys := [["WASD", "walk"], ["SHIFT/X", "run"], ["SPACE", "jump"], ["P", "first person"], ["E", "enter/use"], ["DRAG", "camera"],
+	var keys := [["WASD", "walk"], ["SHIFT/X", "run"], ["SPACE", "jump"], ["Z", "jetpack"], ["P", "first person"], ["E", "enter/use"], ["DRAG", "camera"],
 		["TAB", "next problem"], ["M", "map"], ["J", "missions"], ["G", "legend + all keys"]]
 	_help.text = "   ".join(keys.map(func(k): return "[color=#ffec27]%s[/color] [color=#c2c3c7]%s[/color]" % [tr(k[0]), tr(k[1])]))
 
@@ -1092,7 +1105,7 @@ func _build_legend() -> void:
 		[Vox.YELLOW, "Fence = cordoned, red light = NotReady"],
 		[Vox.WHITE, "Cloud = pods waiting for the scheduler"],
 		["h", "KEYS"],
-		[Vox.LAVENDER, "WASD walk, SHIFT (hold) or X (toggle) run, SPACE jump\nE enter/use/inspect, P first person, DRAG pan, RIGHT-DRAG rotate\nQ/R rotate 90, WHEEL zoom, M map, N minimap, J missions\nTAB next problem, L logs, B build, H system ns\nK all lines, T terminal, V view menu, C chaos + F blaster\nBACKSPACE plant, HOME recenter"],
+		[Vox.LAVENDER, "WASD walk, SHIFT (hold) or X (toggle) run, SPACE jump\nZ or SPACE twice: jetpack (hold SPACE up, CTRL down)\nE enter/use/inspect, P first person, DRAG pan, RIGHT-DRAG rotate\nQ/R rotate 90, WHEEL zoom, M map, N minimap, J missions\nTAB next problem, L logs, B build, H system ns\nK all lines, T terminal, V view menu, C chaos + F blaster\nBACKSPACE plant, HOME recenter"],
 	]
 	for r in rows:
 		if typeof(r[0]) == TYPE_STRING:
@@ -1130,6 +1143,8 @@ func _sync_view() -> void:
 	# the terminal back to type a command).
 	_terminal.visible = Settings.terminal and (not fpv or _term_input.has_focus())
 	_view_run.set_pressed_no_signal(Settings.always_run)
+	if _view_jet:
+		_view_jet.set_pressed_no_signal(flying)
 	_view_minimap.set_pressed_no_signal(Settings.minimap)
 	_view_fpv.set_pressed_no_signal(fpv)
 	_view_stats.set_pressed_no_signal(stats.visible)
@@ -1139,6 +1154,21 @@ func _sync_view() -> void:
 		map_mini.get_parent().visible = Settings.minimap and not stats.visible and not fpv
 	for b in _lang_btns:
 		b.theme_type_variation = "GoButton" if b.get_meta("lang") == Settings.lang else ""
+
+
+func toggle_kubi() -> void:
+	if kubi.visible:
+		kubi.visible = false
+	else:
+		kubi.open()
+
+
+func toggle_watch() -> void:
+	if watch.visible:
+		watch.visible = false
+	else:
+		watch.open()
+	watch_toggled.emit(watch.visible)
 
 
 func toggle_view() -> void:
@@ -1319,6 +1349,37 @@ func node_terminal(node_name: String, is_cp: bool) -> void:
 		_term_input.text = "describe node " + node_name
 	_term_input.grab_focus()
 	_term_input.caret_column = _term_input.text.length()
+
+
+## Why and how to add a control-plane to a REAL cluster: it is an
+## infrastructure operation (a new machine), not something the Kubernetes
+## API can do, so the game explains the steps for this kind of cluster.
+func show_cp_guide() -> void:
+	var ctx: String = K8s.state.get("context", "")
+	var server: String = K8s.state.get("server", "")
+	var n: int = K8s.state.get("nodes", []).filter(func(x): return "control-plane" in x.get("roles", []) or "master" in x.get("roles", [])).size()
+	var lines := []
+	lines.append("[color=#ffec27]%s[/color]" % tr("Adding a control-plane means adding a MACHINE: it is done on the infrastructure, not through the Kubernetes API, so the game cannot do it for you. This is how:"))
+	lines.append("")
+	lines.append(tr("This cluster has %d control-plane node(s). Use an odd number (3 or 5): etcd needs a majority, so 3 tolerate 1 failure and 5 tolerate 2.") % n)
+	lines.append("")
+	var cmds := []
+	if ctx.begins_with("kind-"):
+		lines.append("[color=#83769c]kind[/color]  " + tr("kind cannot add nodes to a running cluster: create one with several control-plane nodes."))
+		cmds = ["kind create cluster --config deploy/kind-ha.yaml", "make cluster-ha"]
+	elif server.contains("eks.amazonaws.com") or server.contains("azmk8s.io") or server.contains("gke") or ctx.begins_with("gke_") or ctx.contains(":cluster/"):
+		lines.append("[color=#83769c]" + tr("managed") + "[/color]  " + tr("Your provider runs the control-plane (it is not shown as nodes) and makes it highly available: choose a regional / HA tier."))
+	else:
+		lines.append("[color=#83769c]kubeadm[/color]  " + tr("1) on an existing control-plane, upload the certificates and get the key; 2) print the join command; 3) run it on the NEW machine with --control-plane; 4) check."))
+		cmds = ["sudo kubeadm init phase upload-certs --upload-certs",
+			"kubeadm token create --print-join-command",
+			"sudo kubeadm join <api-endpoint>:6443 --token <token> --discovery-token-ca-cert-hash sha256:<hash> --control-plane --certificate-key <key>",
+			"kubectl get nodes -l node-role.kubernetes.io/control-plane"]
+		lines.append(tr("Requires controlPlaneEndpoint (a load balancer in front of the API servers) set when the cluster was created."))
+	for c in cmds:
+		lines.append("[color=#ffec27]$[/color] [url=%s]%s[/url]" % [c, c])
+	_guide_text.text = "\n".join(lines)
+	_guide_panel.visible = true
 
 
 ## Short explanation of the area you just walked into (fades after a while).
@@ -1578,6 +1639,9 @@ func _refresh_inspector() -> void:
 			lines.append(_kv("kubelet", "%s %s/%s" % [d.kubelet, d.os, d.arch]))
 			lines.append(_kv("pods here", str(_insp_target.slots.size())))
 			lines.append(_kv("age", _age(d.get("age", 0))))
+			if _insp_target.is_control_plane():
+				var add := {"action": "add_control_plane"}
+				buttons.append(["+ CONTROL-PLANE", func(): add_cp_requested.emit(), "GoButton", false, Kubectl.for_action(add)])
 			if d.unschedulable:
 				var req := {"action": "uncordon", "name": d.name}
 				buttons.append(["UNCORDON", func(): K8s.action(req), "GoButton", ro, Kubectl.for_action(req)])
@@ -1737,6 +1801,14 @@ func _build_modals() -> void:
 	_modal_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_modal_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_modal_layer)
+	kubi = KubiPanel.new()
+	kubi.visible = false
+	kubi.build(self)
+	_modal_layer.add_child(kubi)
+	watch = WatchPanel.new()
+	watch.visible = false
+	watch.build(self)
+	_modal_layer.add_child(watch)
 
 	# Toast
 	_toast = _label("", 28, Vox.GREEN)
@@ -1834,6 +1906,26 @@ func _build_modals() -> void:
 	ch.add_child(_button("YES, DO IT [ENTER]", _confirm_yes, "DangerButton"))
 	cv.add_child(ch)
 
+	# Control-plane guide
+	_guide_panel = _modal(60)
+	_guide_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	var gv := VBoxContainer.new()
+	gv.add_theme_constant_override("separation", 10)
+	_guide_panel.add_child(gv)
+	var gh := HBoxContainer.new()
+	gv.add_child(gh)
+	var gt := _label("ADD A CONTROL-PLANE", 30, Vox.YELLOW)
+	gt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	gh.add_child(gt)
+	gh.add_child(_button("CLOSE [ESC]", func(): _guide_panel.visible = false))
+	_guide_text = _rich(24)
+	_guide_text.fit_content = false
+	_guide_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_guide_text.meta_underlined = false
+	_guide_text.selection_enabled = true
+	_guide_text.meta_clicked.connect(func(m): _copy(str(m)))
+	gv.add_child(_guide_text)
+
 	# Build menu
 	_build_panel = _modal(-1)
 	var bv := VBoxContainer.new()
@@ -1915,11 +2007,11 @@ func toggle_minimap() -> void:
 
 
 func is_modal_open() -> bool:
-	return _map_panel.visible or _logs_panel.visible or _confirm_panel.visible or _build_panel.visible or _connect_root.visible
+	return _guide_panel.visible or _map_panel.visible or _logs_panel.visible or _confirm_panel.visible or _build_panel.visible or _connect_root.visible
 
 
 func close_modals() -> bool:
-	for p in [_confirm_panel, _build_panel, _map_panel, _logs_panel, _view_panel, _alarm_panel, _legend]:
+	for p in [_confirm_panel, _build_panel, _guide_panel, _map_panel, _logs_panel, _view_panel, _alarm_panel, _legend, kubi, watch]:
 		if p.visible:
 			p.visible = false
 			_sync_view()
@@ -2066,6 +2158,14 @@ func _layout() -> void:
 	mm.offset_bottom = -bottom
 	mm.offset_top = -bottom - msz.y
 	mm.offset_right = 10 + msz.x
+	# Kubi on the left, the watchtower on the right (over the inspector).
+	var pw := clampf(sz.x * 0.4, 360.0, 640.0)
+	for p in [kubi, watch]:
+		var ph: float = sz.y - top - bottom
+		if p == watch and watch.collapsed:
+			ph = watch.get_combined_minimum_size().y
+		p.size = Vector2(pw, ph)
+		p.position = Vector2(10.0 if p == kubi else sz.x - pw - 10.0, top)
 	# Centered dialogs: size to content, center, keep on screen.
 	var full := _modal_layer.size
 	for p in [_confirm_panel, _build_panel]:
@@ -2073,7 +2173,7 @@ func _layout() -> void:
 			var ps: Vector2 = p.get_combined_minimum_size().min(full - Vector2(20, 20))
 			p.size = ps
 			p.position = ((full - ps) * 0.5).floor()
-	for p in [_logs_panel, _map_panel]:
+	for p in [_logs_panel, _map_panel, _guide_panel]:
 		var m: float = p.get_meta("margin")
 		p.offset_left = m
 		p.offset_top = m

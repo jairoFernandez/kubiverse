@@ -54,10 +54,15 @@ type Bridge struct {
 	dirty   bool
 	last    []byte // last encoded snapshot message
 	clients map[*client]struct{}
+	watch   *watchState
 }
 
 type client struct {
-	send chan []byte
+	send  chan []byte
+	addr  string
+	ip    string
+	agent string
+	since time.Time
 }
 
 func main() {
@@ -70,8 +75,15 @@ func main() {
 		webDir     = flag.String("web", "", "optional directory with the Godot web export to serve at /")
 		origins    = flag.String("allow-origin", "", "extra comma-separated browser origins allowed to call the API (localhost is always allowed)")
 		dataDir    = flag.String("data", defaultDataDir(), "where kubeconfigs added from the game are stored")
+		llmURL     = flag.String("llm-url", llm.URL, "Ollama URL for the in-game assistant (\"\" disables it); keep it local: cluster data is sent to it")
+		llmModel   = flag.String("llm-model", llm.Model, "Ollama model for the in-game assistant (auto = best installed local model)")
+		audit      = flag.String("audit-dir", auditDir, "directory with API server audit logs (<dir>/<context>/**/audit.log) for WATCHTOWER mode")
 	)
 	flag.Parse()
+	llm.URL, llm.Model, auditDir = *llmURL, *llmModel, *audit
+	if u, err := url.Parse(llm.URL); llm.URL != "" && (err != nil || !isLoopback(u.Hostname())) {
+		log.Printf("WARNING: assistant LLM at %s is not on this machine: questions send cluster data (status, events, log lines) there", llm.URL)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -95,6 +107,8 @@ func main() {
 	mux.HandleFunc("GET /api/logs", hub.cluster((*Bridge).handleLogs))
 	mux.HandleFunc("POST /api/action", hub.cluster((*Bridge).handleAction))
 	mux.HandleFunc("POST /api/kubectl", hub.cluster((*Bridge).handleKubectl))
+	mux.HandleFunc("GET /api/assistant", hub.cluster((*Bridge).handleAssistantStatus))
+	mux.HandleFunc("POST /api/assistant", hub.cluster((*Bridge).handleAssistant))
 	if *webDir != "" {
 		fs := http.FileServer(http.Dir(*webDir))
 		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -166,6 +180,7 @@ func startBridge(root context.Context, cc clientcmd.ClientConfig, ctxName, kubec
 		}
 	}
 	b.watchEvents(ctx, f)
+	b.startWatch(ctx, f)
 	log.Printf("[%s] connecting to %s ...", ctxName, cfg.Host)
 	f.Start(ctx.Done())
 	syncCtx, syncCancel := context.WithTimeout(ctx, 25*time.Second)
@@ -287,7 +302,8 @@ func (b *Bridge) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conn.SetReadLimit(1 << 20)
-	c := &client{send: make(chan []byte, 16)}
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	c := &client{send: make(chan []byte, 16), addr: r.RemoteAddr, ip: ip, agent: shortAgent(r.UserAgent()), since: time.Now()}
 	b.mu.Lock()
 	b.clients[c] = struct{}{}
 	last := b.last
@@ -303,6 +319,11 @@ func (b *Bridge) handleWS(w http.ResponseWriter, r *http.Request) {
 	ctx := conn.CloseRead(r.Context())
 	if last != nil {
 		c.send <- last
+	}
+	if b.watch != nil {
+		if wm := b.watchMessage(true); wm != nil {
+			b.broadcast(wm)
+		}
 	}
 	ping := time.NewTicker(20 * time.Second)
 	defer ping.Stop()
@@ -336,4 +357,13 @@ func cacheHandler(fn func(any)) cache.ResourceEventHandlerFuncs {
 		AddFunc:    fn,
 		UpdateFunc: func(_, n any) { fn(n) },
 	}
+}
+
+func isLoopback(host string) bool {
+	host = strings.Trim(host, "[]")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

@@ -38,9 +38,16 @@ var challenge := false                 # energy room: Mario jumps instead of bri
 var movers := []                       # [{idx, node, base, amp, speed}] bobbing platforms
 var coins := []                        # [{node, pos}] collectibles (energy room)
 var pipes := {}                        # node name (or "@hub") -> warp pipe position
+var etcd_members: Array = []           # control-plane node names (etcd quorum)
 const STEP := 0.35                     # max height you can walk up without jumping
 var walk_segments := []                # [[a: Vector2, b: Vector2, half_width]] bridges
 var blockers: Array[Rect2] = []        # solid XZ areas
+var blocker_heights := {}              # Rect2 -> how tall it is (default block_h)
+var block_h := 3.0                     # default height of solids on this level
+var fly_ceiling := 14.0                # the jetpack can't go higher than this
+var fpv := false                       # first-person view: tone down fx near the lens
+var _tops: Array[float] = []
+var _tops_frame := -1
 var limbo_center := Vector3.ZERO
 
 var _static: Node3D
@@ -171,6 +178,9 @@ func _begin_static(sig: String) -> bool:
 	pipes.clear()
 	void_level = false
 	blockers.clear()
+	blocker_heights.clear()
+	block_h = 3.0
+	fly_ceiling = 14.0
 	return true
 
 
@@ -197,11 +207,12 @@ func door_near(p: Vector3, reach := 1.8) -> Dictionary:
 func _add_walk(r: Rect2, y := 0.0) -> int:
 	walk_rects.append(r)
 	walk_heights.append(y)
+	fly_ceiling = maxf(fly_ceiling, y + 10.0)
 	return walk_rects.size() - 1
 
 
 ## Highest walkable surface under q at or below `max_y` (-INF if none).
-func ground_below(q: Vector2, max_y: float) -> float:
+func _floor_below(q: Vector2, max_y: float) -> float:
 	var best := -INF
 	for i in walk_rects.size():
 		if walk_heights[i] <= max_y and walk_rects[i].has_point(q):
@@ -212,14 +223,44 @@ func ground_below(q: Vector2, max_y: float) -> float:
 	return best
 
 
+## Highest surface at or below max_y under q: floors, bridges and the tops
+## of solids (roofs you can land on with the jetpack). -INF if none.
+func ground_below(q: Vector2, max_y: float) -> float:
+	var best := _floor_below(q, max_y)
+	for i in blockers.size():
+		if blockers[i].has_point(q):
+			var top := blocker_top(i)
+			if top <= max_y:
+				best = maxf(best, top)
+	return best
+
+
+## World height of the top of blocker i (its floor + its height).
+func blocker_top(i: int) -> float:
+	var f := Engine.get_process_frames()
+	if _tops_frame != f or _tops.size() != blockers.size():
+		_tops_frame = f
+		_tops.clear()
+		for b in blockers:
+			var y := _floor_below(b.get_center(), INF)
+			_tops.append((0.0 if y == -INF else y) + float(blocker_heights.get(b, block_h)))
+	return _tops[i]
+
+
+## Floor height under q ignoring roofs of solids (-INF if none).
+func floor_y(q: Vector2) -> float:
+	return _floor_below(q, INF)
+
+
 ## Highest surface under q regardless of height (-INF if none).
 func surface_y(q: Vector2) -> float:
 	return ground_below(q, INF)
 
 
 func _blocked(q: Vector2, feet: float) -> bool:
-	for b in blockers:
-		if b.grow(0.3).has_point(q):
+	for i in blockers.size():
+		# Flying (or standing on a roof) above a solid: it's not in the way.
+		if feet < blocker_top(i) - 0.05 and blockers[i].grow(0.3).has_point(q):
 			return true
 	# The side of a higher platform is a wall.
 	for i in walk_rects.size():
@@ -345,6 +386,8 @@ func _apply_plant(s: Dictionary) -> void:
 	blockers.clear()
 	for b in buildings.values():
 		blockers.append(b.footprint())
+		blocker_heights[b.footprint()] = b.h + 0.2  # flat roof
+	fly_ceiling = 16.0
 
 
 func _build_plant_ground(g: Rect2, n: int, cols: int, cw: float, cd: float, gw: float, gd: float) -> void:
@@ -478,9 +521,14 @@ func _apply_hall(s: Dictionary, ns: String) -> void:
 		spawn = exit_pos + Vector3(1.6, 0, -1.2)
 	blockers.clear()
 	for line in lines.values():
-		blockers.append_array(line.blockers())
+		var lb: Array[Rect2] = line.blockers()
+		blockers.append_array(lb)
+		blocker_heights[lb[0]] = 2.2   # console
+		blocker_heights[lb[1]] = 1.95  # belt: higher than a jump, pods stay off-limits
 	for dk in services.values():
 		blockers.append(Rect2(dk.target.x - 0.5, dk.target.z - 1.1, 1.0, 2.2))
+	block_h = 2.2
+	fly_ceiling = 7.0
 	limbo_center = Vector3(-100, -100, -100)
 
 
@@ -546,23 +594,39 @@ func _apply_power(s: Dictionary) -> void:
 	# The control-plane is the centre of the room (where you arrive); the
 	# workers orbit around it at different heights. Managed clusters (EKS,
 	# GKE...) hide their control-plane: a plain hub platform is used instead.
+	var cps: Array = names.filter(func(k): return islands[k].is_control_plane())
 	var center_name := ""
-	for k in names:
-		if islands[k].is_control_plane():
-			center_name = k
-			break
-	var workers := names.filter(func(k): return k != center_name)
 	var hub := Vector2(5, 5)
-	if center_name != "":
+	var ring_cps: Array = []   # with 2+ control-planes they surround an etcd plaza
+	etcd_members = cps
+	if cps.size() == 1:
+		center_name = cps[0]
 		var cp: NodeIsland = islands[center_name]
 		cp.target = Vector3.ZERO
 		if cp.position == Vector3.ZERO:
 			cp.position = cp.target
 		hub = Vector2(cp.size, cp.size) * 0.5
+	elif cps.size() > 1:
+		hub = Vector2(4.5, 4.5)
+		ring_cps = cps
+		var cps_size: float = islands[cps[0]].size
+		var rc := hub.x + cps_size * 0.5 + 3.0
+		if cps.size() > 2:
+			rc = maxf(rc, (cps_size + 3.0) / (2.0 * sin(PI / cps.size())))
+		for k in cps.size():
+			var a := -PI * 0.5 + TAU * k / cps.size()
+			var cpi: NodeIsland = islands[cps[k]]
+			cpi.target = Vector3(cos(a) * rc, 0, sin(a) * rc)
+			if cpi.position == Vector3.ZERO:
+				cpi.position = cpi.target
+	var workers := names.filter(func(k): return not islands[k].is_control_plane())
+	var inner := hub.length()
+	if not ring_cps.is_empty():
+		inner = ring_cps.map(func(k): return Vector2(islands[k].target.x, islands[k].target.z).length() + islands[k].size * 0.5).max()
 	var biggest := 0.0
 	for k in workers:
 		biggest = maxf(biggest, islands[k].size)
-	var r := hub.length() + biggest * 0.5 + 9.0
+	var r := inner + biggest * 0.5 + 9.0
 	if workers.size() > 1:
 		r = maxf(r, (biggest + 6.0) / (2.0 * sin(PI / workers.size())))
 	for i in workers.size():
@@ -572,6 +636,8 @@ func _apply_power(s: Dictionary) -> void:
 		isl.target = Vector3(cos(a) * r, 0.8 + (i % 3) * 0.7, sin(a) * r)
 		if isl.position == Vector3.ZERO:
 			isl.position = isl.target
+	# Everything that is reached by a bridge from the centre.
+	workers = ring_cps + workers
 	limbo_center = Vector3(0, 6.0, -hub.y - 3.0)
 	var sig := "power|%s|%s" % [challenge, center_name] + str(names.map(func(k): return [k, islands[k].target, islands[k].size]))
 	if _begin_static(sig):
@@ -580,6 +646,8 @@ func _apply_power(s: Dictionary) -> void:
 			_add_walk(Rect2(-hub.x, -hub.y, hub.x * 2, hub.y * 2), 0.0)
 			Vox.box(_static, Vector3(hub.x * 2, 0.4, hub.y * 2), Vector3(0, -0.2, 0), Color("3b3f5e"))
 			Vox.box(_static, Vector3(hub.x * 2 - 1, 1.2, hub.y * 2 - 1), Vector3(0, -1.0, 0), Vox.SLATE)
+			if not ring_cps.is_empty():
+				_build_etcd_plaza(ring_cps)
 		else:
 			_add_walk(Rect2(-hub.x, -hub.y, hub.x * 2, hub.y * 2), 0.0)
 			# The castle tower in the control-plane's corner is solid.
@@ -722,6 +790,23 @@ func _build_stones(hub: Vector2, isl: NodeIsland, idx: int) -> void:
 			coins.append({"node": coin, "pos": coin.position})
 
 
+## With several control-planes the centre is an etcd plaza: one pillar per
+## member (lit = node Ready) around a crystal, showing the quorum.
+func _build_etcd_plaza(cps: Array) -> void:
+	Vox.box(_static, Vector3(2.0, 0.4, 2.0), Vector3(0, 0.2, 0), Vox.SLATE)
+	var crystal := Vox.box(_static, Vector3(0.9, 1.4, 0.9), Vector3(0, 1.2, 0), Vox.BLUE, 2.0)
+	crystal.rotation.y = PI * 0.25
+	blockers.append(Rect2(-1.0, -1.0, 2.0, 2.0))
+	blocker_heights[blockers[-1]] = 1.95
+	for k in cps.size():
+		var a := -PI * 0.5 + TAU * k / cps.size()
+		var p := Vector3(cos(a), 0, sin(a)) * 2.8
+		var ready: bool = islands[cps[k]].data.get("ready", true)
+		Vox.box(_static, Vector3(0.45, 1.6, 0.45), p + Vector3(0, 0.8, 0), Vox.SILVER)
+		Vox.box(_static, Vector3(0.55, 0.35, 0.55), p + Vector3(0, 1.75, 0), Vox.GREEN if ready else Vox.RED, 2.5)
+		blockers.append(Rect2(p.x - 0.3, p.z - 0.3, 0.6, 0.6))
+
+
 ## Easy mode: a continuous plank walkway with gentle steps (each rise is
 ## below STEP, so you just walk up it) from the centre to an island.
 func _build_walkway(hub: Vector2, isl: NodeIsland) -> void:
@@ -790,6 +875,7 @@ func _build_pipe(pos: Vector3, to_node: String) -> void:
 	Vox.box(node, Vector3(1.15, 0.3, 1.15), Vector3(0, 1.1, 0), Vox.GREEN)
 	Vox.box(node, Vector3(0.8, 0.04, 0.8), Vector3(0, 1.26, 0), Color("0b2a12"), 0.0, false)
 	blockers.append(Rect2(pos.x - 0.55, pos.z - 0.55, 1.1, 1.1))
+	blocker_heights[blockers[-1]] = 1.26  # you can stand on a pipe, Mario-style
 	doors.append({"pos": pos + Vector3(0, 0, 0.9), "to": "warp:" + to_node, "text": "warp pipe to %s|" + (to_node if to_node != "@hub" else "hub")})
 
 
@@ -813,6 +899,7 @@ func _build_kiosk(pos: Vector3, node_name: String, is_cp: bool) -> void:
 	screen.rotation.x = deg_to_rad(-15)
 	Vox.box(k, Vector3(0.8, 0.55, 0.08), Vector3(0, 1.45, -0.1), Color("0b0d1a"))
 	blockers.append(Rect2(pos.x - 0.5, pos.z - 0.35, 1.0, 0.7))
+	blocker_heights[blockers[-1]] = 1.95
 	doors.append({"pos": pos + Vector3(0, 0, 0.9), "to": "term:" + node_name, "text": "use the terminal of %s|" + node_name})
 
 
@@ -869,6 +956,14 @@ func flame(pos: Vector3, size := 1.0) -> void:
 		"life": 0.7, "max": 0.7, "g": -1.0, "fire": true})
 
 
+## Jetpack exhaust: a hot block shooting down and cooling to red.
+func exhaust(pos: Vector3, size := 1.0) -> void:
+	var m := Vox.box(_fx_root, Vector3.ONE * 0.2 * size, pos, Vox.YELLOW, 3.0, false)
+	m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_particles.append({"m": m, "v": Vector3(randf_range(-0.4, 0.4), randf_range(-5.0, -3.0), randf_range(-0.4, 0.4)),
+		"life": 0.3, "max": 0.3, "g": 0.0, "fire": true})
+
+
 ## Plays a sound through the Sfx autoload when it exists (not in tests).
 func sfx(name: String, pos = null) -> void:
 	var s := get_node_or_null("/root/Sfx")
@@ -898,7 +993,8 @@ func flash(pos: Vector3, col: Color, size := 1.0) -> void:
 ## Energy bolt with a trail; calls on_hit when it arrives.
 func bolt(from: Vector3, to: Vector3, col: Color, on_hit: Callable, speed := 22.0) -> void:
 	var m := _glow(Vector3(0.32, 0.32, 0.32), from, col, 4.0)
-	flash(from, col, 0.35)
+	if not fpv:  # first person has its own muzzle flash on the gun
+		flash(from, col, 0.35)
 	var dur := maxf(0.05, from.distance_to(to) / speed)
 	var tw := create_tween()
 	tw.tween_method(func(t: float):
@@ -917,8 +1013,8 @@ func shockwave(pos: Vector3, col: Color) -> void:
 	flash(pos + Vector3(0, 0.3, 0), col, 1.2)
 	for i in 20:
 		var a := TAU * i / 20.0
-		var m := _glow(Vector3(0.3, 0.2, 0.3), pos + Vector3(0, 0.15, 0), col, 2.0)
-		_particles.append({"m": m, "v": Vector3(cos(a), 0.6, sin(a)) * 7.0, "life": 0.5, "g": 3.0})
+		var m := _glow(Vector3(0.3, 0.2, 0.3) * (0.6 if fpv else 1.0), pos + Vector3(0, 0.15, 0), col, 2.0)
+		_particles.append({"m": m, "v": Vector3(cos(a), 0.15 if fpv else 0.6, sin(a)) * 7.0, "life": 0.5, "g": 3.0})
 	shake_requested.emit(0.35)
 
 
@@ -931,7 +1027,7 @@ func beam(from: Vector3, to: Vector3, col: Color, dur := 0.5) -> void:
 	tw.tween_method(func(t: float):
 		var w := 1.0 + sin(t * 60.0) * 0.5
 		ray.scale = Vector3(w, w, 1.0)
-		if randf() < 0.5:
+		if randf() < 0.5 and not (fpv and fmod(t * 3.0, 1.0) < 0.12):
 			var ring := _glow(Vector3(0.5, 0.5, 0.06), from.lerp(to, fmod(t * 3.0, 1.0)), Vox.WHITE, 3.0)
 			ring.look_at_from_position(ring.position, to, Vector3.UP)
 			_particles.append({"m": ring, "v": Vector3.ZERO, "life": 0.15, "g": 0.0}), 0.0, 1.0, dur)
@@ -1208,6 +1304,12 @@ func labels(player_pos: Vector3) -> Array:
 	var dn := door_near(player_pos, 3.0)
 	if not dn.is_empty():
 		out.append({"pos": dn.pos + Vector3(0, 1.2, 0), "text": "E: " + _door_text(dn), "sub": "", "color": Vox.YELLOW, "big": false})
+	if level == "power" and etcd_members.size() > 1:
+		var n := etcd_members.size()
+		var ok := etcd_members.filter(func(k): return islands.has(k) and islands[k].data.get("ready", true)).size()
+		var quorum := n / 2 + 1
+		out.append({"pos": Vector3(0, 3.2, 0), "text": tr("etcd quorum: %d of %d members up") % [ok, n],
+			"sub": tr("needs %d to work, tolerates %d failure(s)") % [quorum, n - quorum], "color": Vox.GREEN if ok >= quorum else Vox.RED, "big": true})
 	var pending := pods.values().filter(func(b): return b.node_name == "" and not b.dying).size()
 	if level == "power" and pending > 0:
 		out.append({"pos": limbo_center + Vector3(0, 1.5, 0), "text": tr("scheduler queue"), "sub": tr("%d pods waiting for a node") % pending, "color": Vox.WHITE, "big": true})

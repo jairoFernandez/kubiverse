@@ -2,12 +2,17 @@ class_name Player
 extends Node3D
 ## The cluster operator: a little voxel astronaut with a kubectl blaster.
 ## Walks, runs Pokémon-style (hold SHIFT or toggle running shoes with X),
-## jumps (SPACE), and respects the world's physical limits.
+## jumps (SPACE), flies with a jetpack (Z, or double-tap SPACE) and
+## respects the world's physical limits.
 
 const WALK_SPEED := 5.5
 const RUN_SPEED := 10.5
 const JUMP_SPEED := 8.6
 const GRAVITY := 24.0
+const FLY_SPEED := 8.0
+const FLY_RUN_SPEED := 13.0
+const FLY_UP := 6.5
+const FLY_DOWN := 7.5
 
 var cam_yaw := 0.0
 var input_enabled := true
@@ -37,6 +42,15 @@ var _dust_cd := 0.0
 var _lean := 0.0
 var _first_person := false
 var _gun_tip: MeshInstance3D
+
+# Jetpack
+var flying := false             # jetpack mode on (may be standing on the ground)
+var thrust := 0.0               # 0 hover .. 1 full thrust (visual/sound)
+var _jetpack: Node3D
+var _jet_flames: Array[MeshInstance3D] = []
+var _jet_fx_cd := 0.0
+var _last_space := -1.0
+signal flight_changed(on: bool)
 
 
 func set_weapon_color(c: Color) -> void:
@@ -71,6 +85,18 @@ func _ready() -> void:
 		_arms.append(Vox.box(_body, Vector3(0.16, 0.42, 0.18), Vector3(x, 0.66, 0), Vox.WHITE))
 	var gun := Vox.box(_arms[1], Vector3(0.14, 0.14, 0.5), Vector3(0, -0.12, 0.2), Vox.SLATE)
 	_gun_tip = Vox.box(gun, Vector3(0.1, 0.1, 0.08), Vector3(0, 0, 0.28), Vox.YELLOW, 2.0, false)
+	# Jetpack: two tanks with nozzles over the backpack, shown in flight mode.
+	_jetpack = Node3D.new()
+	_body.add_child(_jetpack)
+	for x in [-0.17, 0.17]:
+		Vox.box(_jetpack, Vector3(0.26, 0.62, 0.26), Vector3(x, 0.78, -0.48), Vox.RED)
+		Vox.box(_jetpack, Vector3(0.28, 0.08, 0.28), Vector3(x, 1.1, -0.48), Vox.SILVER)
+		Vox.box(_jetpack, Vector3(0.18, 0.14, 0.18), Vector3(x, 0.42, -0.48), Vox.SLATE)
+		var fl := Vox.box(_jetpack, Vector3(0.14, 0.4, 0.14), Vector3(x, 0.15, -0.48), Vox.ORANGE, 4.0, false)
+		fl.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_jet_flames.append(fl)
+		Vox.box(fl, Vector3(0.08, 0.5, 0.08), Vector3(0, -0.05, 0), Vox.YELLOW, 5.0, false)
+	_jetpack.visible = false
 
 
 func body() -> Node3D:
@@ -116,6 +142,29 @@ func on_ground() -> bool:
 	return _grounded
 
 
+## Turns the jetpack on/off. Off in mid-air means falling, as expected.
+func set_flying(on: bool) -> void:
+	if on == flying:
+		return
+	flying = on
+	_jetpack.visible = on
+	_sfx("jet_on" if on else "jet_off")
+	if on:
+		_vy = maxf(_vy, 3.0)  # a little hop to take off
+		_grounded = false
+		if world:
+			world.poof(global_position + Vector3(0, 0.1, 0), Vox.SILVER)
+	flight_changed.emit(on)
+
+
+## Nozzle positions in world space (for flame particles).
+func nozzles() -> Array[Vector3]:
+	var out: Array[Vector3] = []
+	for f in _jet_flames:
+		out.append(f.global_position + Vector3(0, -0.2, 0))
+	return out
+
+
 var _fire_t := 0.0
 
 
@@ -133,6 +182,15 @@ func _sfx(name: String) -> void:
 func jump() -> void:
 	if not input_enabled:
 		return
+	# Double-tap SPACE toggles the jetpack (like creative-mode flying).
+	var now := Time.get_ticks_msec() / 1000.0
+	var double := now - _last_space < 0.3
+	_last_space = -1.0 if double else now
+	if double:
+		set_flying(not flying)
+		return
+	if flying:
+		return  # while flying SPACE is held to climb (see _process)
 	if on_ground() or _coyote > 0.0:
 		_do_jump()
 	else:
@@ -169,7 +227,10 @@ func _process(delta: float) -> void:
 	# Running shoes: SHIFT inverts the "always run" setting.
 	var shift := input_enabled and Input.is_physical_key_pressed(KEY_SHIFT)
 	running = moving and (shift != Settings.always_run)
-	var step := dir * (RUN_SPEED if running else WALK_SPEED) * delta
+	var speed := RUN_SPEED if running else WALK_SPEED
+	if flying and not _grounded:
+		speed = FLY_RUN_SPEED if running else FLY_SPEED
+	var step := dir * speed * delta
 	var feet := position.y
 	position = world.move_player(position, step, feet) if world else position + step
 
@@ -179,7 +240,9 @@ func _process(delta: float) -> void:
 	_ground = world.ground_below(Vector2(position.x, position.z), feet + World.STEP) if world else 0.0
 	if world and world.walk_rects.is_empty():
 		_ground = 0.0  # level not loaded yet: don't fall through nothing
-	if _vy > 0.0 or feet > _ground + 0.02 or _ground == -INF:
+	if flying:
+		_fly(delta)
+	elif _vy > 0.0 or feet > _ground + 0.02 or _ground == -INF:
 		_vy -= GRAVITY * delta
 		position.y += _vy * delta
 		_grounded = false
@@ -208,6 +271,7 @@ func _process(delta: float) -> void:
 			coin.emit()
 	_squash = move_toward(_squash, 0.0, delta * 1.5)
 
+	_jet_visuals(delta)
 	if moving and not _first_person:
 		_facing = lerp_angle(_facing, atan2(dir.x, dir.z), clampf(delta * 14.0, 0.0, 1.0))
 	if moving:
@@ -217,7 +281,10 @@ func _process(delta: float) -> void:
 			_sfx("step")
 	else:
 		_walk = lerpf(_walk, roundf(_walk / PI) * PI, clampf(delta * 10.0, 0.0, 1.0))
-	_lean = lerpf(_lean, 0.28 if running else 0.0, clampf(delta * 8.0, 0.0, 1.0))
+	var lean_to := 0.28 if running else 0.0
+	if flying and not _grounded:
+		lean_to = 0.45 if moving else 0.08
+	_lean = lerpf(_lean, lean_to, clampf(delta * 8.0, 0.0, 1.0))
 
 	# Dust puffs behind the feet while running
 	_dust_cd -= delta
@@ -228,7 +295,11 @@ func _process(delta: float) -> void:
 	var amp := 0.3 if running else 0.15
 	_body.rotation = Vector3(_lean, _facing, 0)
 	_body.position.y = absf(sin(_walk)) * (0.12 if running else 0.07) if on_ground() else 0.0
+	if flying and not _grounded:
+		_body.position.y = sin(Time.get_ticks_msec() * 0.004) * 0.06  # hover bob
 	_body.scale = Vector3(1.0 + _squash * 0.5, 1.0 - _squash, 1.0 + _squash * 0.5)
+	if flying and not _grounded:
+		amp = 0.05  # legs dangle
 	_legs[0].position.z = sin(_walk) * amp
 	_legs[1].position.z = -sin(_walk) * amp
 	_arms[0].rotation.x = -sin(_walk) * amp * 2.2
@@ -244,3 +315,55 @@ func _process(delta: float) -> void:
 		_shadow.global_position.y = gy + 0.02
 		var sh := clampf(1.0 - hgt * 0.25, 0.35, 1.0)
 		_shadow.scale = Vector3(sh, 1, sh)
+
+
+## Jetpack vertical control: hold SPACE to climb, CTRL to descend, nothing
+## to hover. Lands on any floor or roof; can't go through the ceiling.
+func _fly(delta: float) -> void:
+	var up := input_enabled and Input.is_physical_key_pressed(KEY_SPACE)
+	var down := input_enabled and (Input.is_physical_key_pressed(KEY_CTRL) or Input.is_physical_key_pressed(KEY_META))
+	var target := 0.0
+	if up:
+		target = FLY_UP
+	elif down:
+		target = -FLY_DOWN
+	_vy = move_toward(_vy, target, delta * 22.0)
+	thrust = move_toward(thrust, 1.0 if up else (0.1 if down else 0.45), delta * 5.0)
+	if _grounded and not up and _ground != -INF and position.y <= _ground + 0.02:
+		thrust = 0.0
+		position.y = _ground if _ground != -INF else position.y
+		_vy = 0.0
+		return
+	position.y += _vy * delta
+	var ceiling: float = world.fly_ceiling if world else 14.0
+	if position.y > ceiling:
+		position.y = ceiling
+		_vy = minf(_vy, 0.0)
+	_grounded = false
+	if _ground != -INF and position.y <= _ground:
+		position.y = _ground
+		if _vy < -2.0:
+			_squash = 0.15
+			_sfx("land")
+		_vy = 0.0
+		_grounded = true
+
+
+func _jet_visuals(delta: float) -> void:
+	var airborne := flying and not _grounded
+	var t := thrust if airborne else 0.0
+	for f in _jet_flames:
+		f.visible = airborne
+		var flick := randf_range(0.8, 1.2)
+		f.scale = Vector3(1.0, (0.5 + t * 1.3) * flick, 1.0)
+		f.position.y = 0.3 - 0.2 * f.scale.y
+	var s := get_node_or_null("/root/Sfx")
+	if s:
+		s.set_jet((1.0 + t) if airborne else 0.0)
+	_jet_fx_cd -= delta
+	if airborne and world and _jet_fx_cd <= 0.0:
+		_jet_fx_cd = 0.05 if t > 0.6 else 0.1
+		for n in nozzles():
+			world.exhaust(n, 0.6 + t * 0.6)
+			if randf() < 0.4:
+				world.smoke(n + Vector3(0, -0.3, 0), Color("c8c2b4"))

@@ -6,6 +6,7 @@ extends Node
 
 signal state_changed(state: Dictionary)
 signal event(ev: Dictionary)
+signal watch(data: Dictionary)   # simulated WATCHTOWER visitors (demo only)
 
 var nodes := {}      # name -> {name, ready, unschedulable, roles, ...}
 var workloads := {}  # "ns/kind/name" -> {kind, ns, name, desired, image, behaviour, containers}
@@ -19,6 +20,16 @@ var _dirty := true
 var _ip := 10
 var _chaos_t := 15.0
 var _field_node := ""
+var _watch_t := 2.0
+var _visitors := {}
+# Demo cast for WATCHTOWER mode: [user, agent, ip, groups, delay before arriving]
+const CAST := [
+	["kubernetes-admin", "kubectl/v1.33.9", "127.0.0.1", ["system:masters"], 0.0],
+	["alice@dev-team", "kubectl/v1.32.2", "10.0.4.21", ["developers"], 6.0],
+	["system:serviceaccount:argocd:argocd-application-controller", "argocd-application-controller/v2.13", "10.244.1.7", ["system:serviceaccounts"], 12.0],
+	["ci-deployer", "helm/v3.16.2", "172.18.0.9", ["ci"], 25.0],
+	["unknown", "curl/8.7.1", "203.0.113.66", ["system:authenticated"], 45.0],
+]
 
 
 func start() -> void:
@@ -82,6 +93,10 @@ func _process(delta: float) -> void:
 		_tick = 0.0
 	if _dirty:
 		_emit()
+	_watch_t -= delta
+	if _watch_t <= 0.0:
+		_watch_t = randf_range(2.0, 4.0)
+		_watch_tick()
 
 
 func _random_chaos() -> void:
@@ -303,6 +318,16 @@ func action(req: Dictionary) -> Dictionary:
 				_svc(ns, n, "ClusterIP", n, ["80/TCP"])
 			_dirty = true
 			return {"ok": true, "message": "deployment %s/%s created" % [ns, n]}
+		"add_control_plane":
+			var i := 2
+			while nodes.has("control-plane-%d" % i):
+				i += 1
+			var nn := "control-plane-%d" % i
+			_node(nn, ["control-plane"])
+			_ev("", "Node", nn, "RegisteredNode", "Node %s joined as control-plane (kubeadm join --control-plane)" % nn, "Normal")
+			_ev("kube-system", "Pod", "etcd-" + nn, "Started", "etcd member added: the cluster now has %d members" % nodes.values().filter(func(n): return "control-plane" in n.roles).size(), "Normal")
+			_dirty = true
+			return {"ok": true, "message": "node %s joined as control-plane" % nn}
 		"delete_service":
 			if not services.has(ns + "/" + n):
 				return {"ok": false, "error": "services \"%s\" not found" % n}
@@ -510,3 +535,59 @@ func _describe(pos: Array, ns: String) -> Dictionary:
 		return {"ok": true, "output": "Name:          %s\nRoles:         %s\nUnschedulable: %s\nConditions:\n  Ready  %s\nCapacity:\n  cpu:   %s\n  memory: %s\nNon-terminated Pods: (%d in total)" % [
 			n, ",".join(nd.roles) if nd.roles else "<none>", nd.unschedulable, nd.ready, nd.cpu, nd.memory, here]}
 	return {"ok": false, "output": "error: demo 'describe' supports pods and nodes"}
+
+
+# ------------------------------------------------------------ watchtower
+
+## Simulated people using the demo cluster, in the bridge's format.
+func _watch_tick() -> void:
+	var now := int(Time.get_unix_time_from_system())
+	var actions := []
+	for c in CAST:
+		if _clock < c[4]:
+			continue
+		var key: String = "audit|%s|%s" % [c[0], c[1]]
+		var v: Dictionary = _visitors.get(key, {})
+		var fresh := v.is_empty()
+		if fresh:
+			v = {"key": key, "user": c[0], "groups": c[3], "agent": c[1], "ips": [c[2]], "source": "audit",
+				"first": now, "last": now, "requests": 0, "writes": 0, "denied": 0, "secrets": false, "self": false,
+				"last_action": "", "last_ns": "", "last_resource": "", "last_name": ""}
+			_visitors[key] = v
+		elif randf() < 0.5:
+			continue
+		var a := _visitor_action(c[0])
+		v.requests += 1
+		v.last = now
+		v.last_action = a.verb
+		v.last_resource = a.resource
+		v.last_ns = a.ns
+		v.last_name = a.name
+		if a.write:
+			v.writes += 1
+		if a.code == 403:
+			v.denied += 1
+		if a.resource == "secrets":
+			v.secrets = true
+		if fresh or a.write or a.code == 403 or a.resource == "secrets":
+			a.merge({"key": key, "user": c[0], "agent": c[1], "ip": c[2], "time": now, "source": "audit", "self": false, "new": fresh})
+			actions.append(a)
+	watch.emit({"audit": true, "audit_dir": "(demo)", "visitors": _visitors.values(), "actions": actions})
+
+
+func _visitor_action(user: String) -> Dictionary:
+	var pick := func(ns: String) -> String:
+		var ps := pods.values().filter(func(p): return p.ns == ns)
+		return "" if ps.is_empty() else ps.pick_random().name
+	match user:
+		"alice@dev-team":
+			if randf() < 0.3:
+				return {"verb": "delete", "resource": "pods", "ns": "shop", "name": pick.call("shop"), "code": 200, "write": true}
+			return {"verb": ["get", "list"].pick_random(), "resource": "pods", "ns": "shop", "name": "", "code": 200, "write": false}
+		"system:serviceaccount:argocd:argocd-application-controller":
+			return {"verb": "patch", "resource": "deployments", "ns": "shop", "name": "frontend", "code": 200, "write": true}
+		"ci-deployer":
+			return {"verb": ["update", "get"].pick_random(), "resource": "deployments", "ns": "payments", "name": "ledger", "code": 200, "write": randf() < 0.5}
+		"unknown":
+			return {"verb": "list", "resource": "secrets", "ns": ["payments", "kube-system", "default"].pick_random(), "name": "", "code": 403, "write": false}
+	return {"verb": ["get", "list"].pick_random(), "resource": ["pods", "nodes", "deployments"].pick_random(), "ns": "", "name": "", "code": 200, "write": false}

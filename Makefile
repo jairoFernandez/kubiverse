@@ -2,7 +2,7 @@ GODOT  ?= godot
 BRIDGE := bridge/bin/k8s-bridge
 ADDR   ?= 127.0.0.1:8088
 
-.PHONY: test metrics-server cluster cluster-delete scenario scenario-delete play-kind serve-web-kind all bridge bridge-all game-import web macos linux windows native run-bridge play play-demo serve-web demo-apply demo-delete clean
+.PHONY: test metrics-server cluster cluster-delete cluster-ha cluster-ha-delete scenario scenario-delete play-kind serve-web-kind all bridge bridge-all game-import web macos linux windows native run-bridge play play-demo serve-web demo-apply demo-delete clean
 
 all: bridge web
 
@@ -69,6 +69,17 @@ cluster:
 
 cluster-delete:
 	kind delete cluster --name kubecraft
+
+## High availability: 3 control-planes (etcd quorum) + 2 workers.
+AUDIT_DIR := $(HOME)/.kubecraft/audit
+cluster-ha:
+	mkdir -p $(AUDIT_DIR)/kind-kubecraft-ha/cp1 $(AUDIT_DIR)/kind-kubecraft-ha/cp2 $(AUDIT_DIR)/kind-kubecraft-ha/cp3
+	sed -e "s|@AUDIT@|$(AUDIT_DIR)/kind-kubecraft-ha|" -e "s|@POLICY@|$(CURDIR)/deploy/audit-policy.yaml|" deploy/kind-ha.yaml > $(AUDIT_DIR)/kind-ha.yaml
+	kind create cluster --config $(AUDIT_DIR)/kind-ha.yaml
+	kubectl --context kind-kubecraft-ha apply -f deploy/demo.yaml
+
+cluster-ha-delete:
+	kind delete cluster --name kubecraft-ha
 
 scenario:
 	kubectl --context $(KIND_CTX) apply -f deploy/complex.yaml

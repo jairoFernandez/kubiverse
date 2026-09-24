@@ -47,7 +47,15 @@ API: `GET /api/contexts`, `POST /api/kubeconfig {name, content}` y `DELETE /api/
 make cluster         # kind: 1 control-plane + 3 workers (uno "GPU" con taint) + metrics-server + escenario
 make serve-web-kind  # bridge en :8089 contra kind-kubecraft -> http://127.0.0.1:8089
 make cluster-delete
+make cluster-ha      # kind HA: 3 control-planes + 2 workers (plaza de etcd) + auditoría para el vigía
+make cluster-ha-delete
 ```
+
+### Varios control-planes (HA)
+
+Con 2 o más control-planes la sala de energía muestra la **plaza de etcd**: un cristal por miembro (verde = Ready, rojo = caído) y un letrero con el quórum (`3 de 3 miembros activos, necesita 2, tolera 1 caída`). Lo típico son 3 o 5 (número impar para el quórum de etcd).
+
+En el inspector de un control-plane hay un botón **+ CONTROL-PLANE**. En modo demo añade uno al momento; en un cluster real abre una guía con los pasos para kind, clusters gestionados (EKS/GKE/AKS: el proveedor los gestiona) y kubeadm (`kubeadm token create --print-join-command` + `kubeadm init phase upload-certs --upload-certs` + `kubeadm join ... --control-plane`). Añadir un control-plane es una operación de infraestructura: la API de Kubernetes no puede hacerlo, por eso el juego no finge hacerlo.
 
 [`deploy/complex.yaml`](deploy/complex.yaml) crea cinco namespaces:
 
@@ -81,6 +89,8 @@ Por defecto, **puentes de tablones** con escalones suaves llevan a cada isla sin
 | WASD / flechas | andar |
 | SHIFT (mantener) / X (alternar) | correr con "zapatillas" estilo Pokémon: más rápido, inclinado y levantando polvo |
 | ESPACIO | saltar |
+| Z · ESPACIO dos veces | jetpack: mantén ESPACIO para subir, CTRL para bajar, sin tocar nada flota |
+| Y · O | Kubi, el asistente · modo vigía |
 | E | entrar por una puerta / usar / inspeccionar lo más cercano |
 | clic · arrastrar · arrastrar con botón derecho · rueda | inspeccionar · mover cámara · rotar · zoom |
 | M / N | mapa completo (clic = viaje rápido) / minimapa |
@@ -133,6 +143,27 @@ Todo el sonido se **genera por código** con un pequeño sintetizador chiptune (
 ## Capacidad de los nodos
 
 Cada isla tiene dos medidores (CPU azul y memoria rosa) que muestran lo **reservado por los requests** de sus pods frente a lo asignable del nodo: verde, amarillo o rojo según la presión. Su letrero dice, por ejemplo, "cpu 700m/4.0, mem 896 MiB/8 GiB". El panel del nodo separa lo reservado (lo único que mira el scheduler), lo libre y el uso real (metrics-server). Un pod Pending muestra el mensaje del scheduler con el motivo exacto, por ejemplo "0/4 nodes are available: 2 Insufficient cpu, 2 node(s) had untolerated taint(s)", y lo que pide.
+
+## Jetpack (Z)
+
+Z (o ESPACIO dos veces) enciende el jetpack: dos tanques con llamas en la mochila y sonido de motor. Mantén ESPACIO para subir, CTRL para bajar; soltando todo flota. Vuela por encima de naves, consolas y tuberías y se puede **aterrizar en los tejados**. Tiene un techo por nivel (más bajo dentro de las naves). Apagarlo en el aire = caer.
+
+## Kubi, el asistente (Y)
+
+Un dron tipo "Pokédex" que te sigue, mira hacia el problema más cercano (con una flecha) y avisa en un bocadillo cuando algo se rompe. Y abre su panel:
+
+- **Problemas** del cluster, peor primero, con un **diagnóstico integrado** (funciona siempre, también en web/demo): por qué pasa (ImagePullBackOff, CrashLoopBackOff, OOMKilled, sin sitio en ningún nodo con los números de CPU/memoria, taints, selectores, PVC, readiness, nodos NotReady o acordonados...), pasos para arreglarlo y comandos. Los comandos de lectura se ejecutan en la terminal al hacer clic; los que cambian algo solo se escriben para que los revises y pulses Enter. Botones: ir allí, logs del contenedor que falló, reiniciar el workload, borrar el pod, uncordon (siempre con confirmación).
+- **Pregúntale**: chat con un **modelo de lenguaje local** vía [Ollama](https://ollama.com) (`ollama serve`). El bridge le pasa el estado, eventos y últimas líneas de log del objeto seleccionado junto con el diagnóstico integrado. Con `--llm-model auto` (por defecto) usa el mejor modelo local instalado (gemma4, qwen3.5, llama3.2...) y **nunca** elige modelos `:cloud`, para que los datos del cluster no salgan de tu máquina. Lo que dice el modelo nunca se ejecuta solo.
+
+## Modo vigía (O)
+
+Kubernetes no tiene una API de "quién está conectado". El vigía combina tres fuentes:
+
+1. **Auditoría del API server** (identidad real: usuario, grupos, IP de origen, herramienta, verbo y recurso, y si fue denegado). Hay que activarla en el cluster; el bridge lee `~/.kubecraft/audit/<contexto>/**/audit.log` (`--audit-dir`). `make cluster-ha` crea un cluster kind con la auditoría ya activada ([`deploy/audit-policy.yaml`](deploy/audit-policy.yaml): solo metadatos, nunca el contenido de Secrets ni de las peticiones). En clusters gestionados la auditoría va al proveedor (EKS → CloudWatch, GKE → Cloud Audit Logs, AKS → Diagnostic settings).
+2. **managedFields**: qué *herramienta* cambió algo (kubectl-edit, helm, argocd...), en cualquier cluster, sin identidad.
+3. **Jugadores de KubeCraft** conectados a este bridge.
+
+Con el vigía abierto cada identidad aparece como un **fantasma** que camina hacia lo que toca (a la puerta del namespace, al pod, a la isla del nodo) y lanza un rayo cuando escribe. Una identidad nueva, un acceso denegado (401/403) o tocar Secrets dispara una **alarma**. El panel se puede minimizar (`_`) sin apagar el modo. Filtra el ruido interno (nodos, controladores de kube-system); el propio bridge se marca como "este bridge" y se oculta.
 
 ## Primera persona (P)
 
@@ -200,6 +231,9 @@ Las *export templates* se instalan desde el editor (Editor → Manage Export Tem
 --token SECRET       exige X-Bridge-Token / ?token= (también K8SGAME_TOKEN)
 --web DIR            sirve el build web en /
 --allow-origin URLS  orígenes web extra permitidos (p.ej. si publicas el juego en otro host)
+--llm-url URL        Ollama para Kubi (por defecto http://127.0.0.1:11434; "" lo desactiva; si no es local, avisa)
+--llm-model NAME     modelo de Ollama (auto = el mejor local instalado, nunca ":cloud")
+--audit-dir DIR      logs de auditoría para el vigía (por defecto ~/.kubecraft/audit)
 ```
 
 Parámetros URL del build web: `?bridge=http://host:8088`, `?token=...`, `?demo=1`.
@@ -216,7 +250,8 @@ El juego ejecuta acciones **reales** con las credenciales de tu kubeconfig.
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| GET | `/api/ws` | WebSocket: `{"type":"state","data":Snapshot}` (≤3/s, coalescido) y `{"type":"event","data":{...}}` |
+| GET | `/api/ws` | WebSocket: `{"type":"state","data":Snapshot}` (≤3/s, coalescido), `{"type":"event","data":{...}}` y `{"type":"watch","data":{audit, visitors, actions}}` (vigía) |
+| GET · POST | `/api/assistant` | estado del LLM · `{"question","kind","ns","name","lang","diagnosis"}` → `{"ok","answer","model"}` |
 | GET | `/api/state` | Snapshot actual en JSON |
 | GET | `/api/logs?ns=&pod=&container=&tail=&previous=1` | Logs de un contenedor |
 | POST | `/api/kubectl` | `{"line": "get pods -A"}` → `{"ok", "exit_code", "output"}` (kubectl real con las restricciones de arriba) |

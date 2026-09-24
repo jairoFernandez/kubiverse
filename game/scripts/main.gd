@@ -28,8 +28,20 @@ var _fyaw := 0.0
 var _fpitch := 0.0
 var _bob := 0.0
 var _viewmodel: Node3D        # first-person weapon in the corner of the screen
-const VM_POS := Vector3(0.2, -0.17, -0.42)
-var _recoil := 0.0
+const VM_POS := Vector3(0.24, -0.23, -0.6)
+var _recoil := 0.0            # spring: 0 = at rest, >0 = kicked back
+var _recoil_v := 0.0
+var _vm_shake := 0.0          # seconds of weapon vibration left (ray, freeze)
+var _vm_dip := 0.0            # 1 = lowered out of view (reload)
+var _vm_parts := {}           # "flash", "blade", "warhead" -> Node3D
+var _fpv_light: OmniLight3D   # muzzle light on the surroundings
+# Kubi, the assistant drone, and the WATCHTOWER ghosts
+var _kubi: Kubi
+var _kubi_sig := ""           # problem list signature (refresh the panel on change)
+var _kubi_count := 0
+var _kubi_t := 0.0
+var _kubi_seen: Entity        # last inspected entity Kubi commented on
+var _ghosts := {}             # visitor key -> VisitorGhost
 # Day/night cycle driven by the cluster clock
 var _env: Environment
 var _sun: DirectionalLight3D
@@ -113,6 +125,9 @@ func _ready() -> void:
 	player = Player.new()
 	player.world = world
 	_vp.add_child(player)
+	_kubi = Kubi.new()
+	_kubi.target = player
+	_vp.add_child(_kubi)
 	player.fell.connect(func():
 		if hud.is_connect_visible() or world.walk_rects.is_empty():
 			player.teleport(world.spawn)
@@ -123,6 +138,10 @@ func _ready() -> void:
 		world.poof(player.global_position + Vector3(0, 1, 0), Vox.WHITE)
 		Sfx.play("fall")
 		hud.toast(tr("You fell into the void! Back to the hub."), false))
+	player.flight_changed.connect(func(on: bool):
+		hud.flying = on
+		hud._sync_view()
+		hud.toast(tr("Jetpack ON: hold SPACE to climb, CTRL to descend, Z to switch off") if on else tr("Jetpack OFF"), true))
 	player.coin.connect(func():
 		Sfx.play("coin")
 		hud.toast(tr("Coins: %d") % player.coins, true))
@@ -145,6 +164,11 @@ func _ready() -> void:
 	_vp.add_child(_fcam)
 	_viewmodel = Node3D.new()
 	_fcam.add_child(_viewmodel)
+	_fpv_light = OmniLight3D.new()
+	_fpv_light.position = Vector3(0.2, -0.1, -1.0)
+	_fpv_light.omni_range = 4.5
+	_fpv_light.light_energy = 0.0
+	_fcam.add_child(_fpv_light)
 	_build_viewmodel(0)
 
 	hud = Hud.new()
@@ -156,6 +180,13 @@ func _ready() -> void:
 		hud.show_connect(true))
 	hud.recenter_requested.connect(func(): _pan = Vector3.ZERO)
 	hud.fpv_requested.connect(_toggle_fpv)
+	hud.jetpack_requested.connect(func(): player.set_flying(not player.flying))
+	hud.add_cp_requested.connect(func():
+		if K8s.mode == K8s.Mode.DEMO:
+			K8s.action({"action": "add_control_plane"})
+			hud.banner(tr("NEW CONTROL-PLANE"), tr("A new castle joins the etcd plaza. With 2 members etcd still needs both (no fault tolerance yet); with 3 it survives the loss of 1."))
+		else:
+			hud.show_cp_guide())
 	hud.level_requested.connect(_go_level)
 	hud.goto_requested.connect(_goto)
 
@@ -191,7 +222,21 @@ func _ready() -> void:
 			# The level only exists once the first snapshot arrives.
 			_need_spawn = false
 			player.teleport(world.spawn)
-		missions.notify("state"))
+		missions.notify("state")
+		_kubi_state(s))
+	K8s.watch_updated.connect(func(w):
+		hud.watch.update(w)
+		_update_ghosts(w.get("actions", [])))
+	hud.watch.intruder.connect(_on_intruder)
+	hud.kubi.act.connect(_kubi_act)
+	hud.kubi.thinking.connect(func(on: bool):
+		_kubi.mood = "thinking" if on else "ok"
+		if on:
+			_kubi.say("...", 60.0, Vox.BLUE))
+	hud.kubi.answered.connect(func(text: String):
+		_kubi.mood = "talking"
+		_kubi.say(text.get_slice("\n", 0).left(80), 8.0)
+		get_tree().create_timer(8.0).timeout.connect(func(): _kubi.mood = "alert" if _kubi_count > 0 else "ok"))
 	K8s.action_done.connect(func(ok, _m, req):
 		if ok:
 			world.poof(player.global_position + Vector3(0, 2.2, 0), Vox.GREEN)
@@ -283,17 +328,65 @@ func _screenshot_and_quit(path: String) -> void:
 		# Face the screen's right so the shots stay in view.
 		var right := (_pivot.global_basis * _cam.basis).x
 		player.set_facing(atan2(right.x, right.z))
+		if "--fpv" in OS.get_cmdline_user_args():
+			_toggle_fpv()
+			await get_tree().create_timer(0.4).timeout
 		for i in Weapons.LIST.size():
 			var w: Dictionary = Weapons.LIST[i]
 			_weapon = i
 			player.set_weapon_color(w.color)
+			_build_viewmodel(i)
+			await get_tree().process_frame
 			var from := player.muzzle()
+			if _fpv:
+				from = _fpv_muzzle()
 			_fire_anim(w, from, _miss_point(), func(): pass)
+			if _fpv:
+				await RenderingServer.frame_post_draw
+				get_viewport().get_texture().get_image().save_png(base.replace(".png", "_%s_0.png" % w.id))
 			var wait := {"blaster": 0.12, "hammer": 0.3, "ray": 0.25, "freeze": 0.2, "cutter": 0.2, "nuke": 0.75}
 			await get_tree().create_timer(wait[w.id]).timeout
 			await RenderingServer.frame_post_draw
 			get_viewport().get_texture().get_image().save_png(base.replace(".png", "_%s.png" % w.id))
 			await get_tree().create_timer(1.2).timeout
+		get_tree().quit()
+		return
+	if "--fly" in OS.get_cmdline_user_args():
+		# Dev: take off with the jetpack, climb, capture iso + first person.
+		var base := ""
+		for x in OS.get_cmdline_user_args():
+			if x.begins_with("--shot="):
+				base = x.substr(7)
+		_zoom_target = 8.0
+		_zoom = 8.0
+		player.set_flying(true)
+		player.thrust = 1.0
+		for i in 50:
+			player.position.y += 0.06
+			await get_tree().process_frame
+		await get_tree().create_timer(0.3).timeout
+		print("FLY y=%.2f flying=%s" % [player.position.y, player.flying])
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png(base.replace(".png", "_iso.png"))
+		# Land on the roof of the first hall.
+		var bl: FactoryBuilding = world.buildings.values()[0]
+		player.position = bl.target + Vector3(0, 6.0, 0)
+		var ctrl := InputEventKey.new()
+		ctrl.physical_keycode = KEY_CTRL
+		ctrl.pressed = true
+		Input.parse_input_event(ctrl)
+		for i in 90:
+			await get_tree().process_frame
+		ctrl = ctrl.duplicate()
+		ctrl.pressed = false
+		Input.parse_input_event(ctrl)
+		print("ROOF y=%.2f expected %.2f grounded=%s" % [player.position.y, bl.h + 0.2, player.on_ground()])
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png(base.replace(".png", "_roof.png"))
+		_toggle_fpv()
+		await get_tree().create_timer(0.5).timeout
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png(base.replace(".png", "_fpv.png"))
 		get_tree().quit()
 		return
 	if "--weapon-test" in OS.get_cmdline_user_args():
@@ -337,12 +430,44 @@ func _screenshot_and_quit(path: String) -> void:
 		print("AUTODOOR exited: ", world.level, " near shop door: ", player.global_position.distance_to(b2.door_position()) < 3.0)
 		get_tree().quit()
 		return
+	if "--cp-guide" in OS.get_cmdline_user_args():
+		hud.show_cp_guide()
+		await get_tree().create_timer(0.5).timeout
+	if "--add-cp" in OS.get_cmdline_user_args():
+		hud.add_cp_requested.emit()
+		await get_tree().create_timer(1.5).timeout
 	if "--stats" in OS.get_cmdline_user_args():
 		hud.toggle_stats()
 		await get_tree().create_timer(1.0).timeout
 	if "--build" in OS.get_cmdline_user_args():
 		hud.open_build()
 		await get_tree().create_timer(0.5).timeout
+	if "--kubi" in OS.get_cmdline_user_args():
+		hud.toggle_kubi()
+		await get_tree().create_timer(1.0).timeout
+		for x in OS.get_cmdline_user_args():
+			if x.begins_with("--kubi-ask="):
+				for d in Diagnose.problems(K8s.state):
+					if d.name.begins_with("giant"):
+						hud.kubi.select(d)
+				hud.kubi.ask(x.substr(11))
+				await get_tree().create_timer(30.0).timeout
+	if "--watch" in OS.get_cmdline_user_args():
+		hud.toggle_watch()
+		_update_ghosts([])
+		await get_tree().create_timer(12.0).timeout
+		print("WATCH audit=%s " % hud.watch.data.get("audit"), hud.watch.data.visitors.map(func(v): return "%s|%s|%s|denied=%d" % [v.user, v.agent, v.source, int(v.get("denied", 0))]))
+		if "--collapse" in OS.get_cmdline_user_args():
+			hud.watch.set_collapsed(true)
+			hud.toggle_kubi()
+			hud.toggle_kubi()
+			var gp: Vector3 = _ghosts.values()[0].goal if not _ghosts.is_empty() else world.spawn
+			player.teleport(_standable_near(gp + Vector3(2, 0, 3)))
+			_pan = Vector3.ZERO
+			_zoom_target = 14.0
+			await get_tree().create_timer(2.5).timeout
+			print("GHOSTS ", _ghosts.size(), " ", _ghosts.values().map(func(g): return g.global_position.round()))
+			print("KUBI ", _kubi.global_position.round(), " player ", player.global_position.round(), " visible ", _kubi.visible)
 	if "--map" in OS.get_cmdline_user_args():
 		hud.toggle_map()
 		await get_tree().create_timer(0.5).timeout
@@ -383,7 +508,13 @@ func _go_level(l: String) -> void:
 
 
 func _on_level_changed(l: String) -> void:
+	var keep := [hud.kubi.visible, hud.watch.visible]
 	hud.close_modals()
+	hud.kubi.visible = keep[0]
+	hud.watch.visible = keep[1]
+	for g in _ghosts.values():
+		g.queue_free()
+	_ghosts.clear()
 	player.teleport(world.spawn)
 	# Coming back to the plant: stand in front of the door you came out of.
 	if l == "plant" and _prev_level != "plant":
@@ -467,6 +598,7 @@ func _process(delta: float) -> void:
 	_update_daylight(delta)
 	_auto_doors()
 	_update_zone()
+	_kubi_tick(delta)
 	var busy := hud.is_modal_open() or get_viewport().gui_get_focus_owner() is LineEdit
 	player.input_enabled = not busy
 	if _fpv and busy and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
@@ -511,6 +643,7 @@ func _toggle_fpv() -> void:
 	hud.overlay.crosshair = _fpv
 	player.set_first_person(_fpv)
 	_viewmodel.visible = _fpv
+	world.fpv = _fpv
 	if _fpv:
 		# Look where the isometric camera was looking.
 		_fyaw = deg_to_rad(_yaw)
@@ -535,6 +668,7 @@ func _build_viewmodel(i: int) -> void:
 	var col: Color = w.color
 	var g := Node3D.new()
 	_viewmodel.add_child(g)
+	_vm_parts.clear()
 	# Arm and glove
 	Vox.box(g, Vector3(0.16, 0.16, 0.5), Vector3(0.05, -0.12, 0.35), Vox.WHITE)
 	Vox.box(g, Vector3(0.18, 0.2, 0.18), Vector3(0.0, -0.05, 0.05), Vox.BLUE)
@@ -555,9 +689,20 @@ func _build_viewmodel(i: int) -> void:
 		"cutter":
 			var blade := Vox.box(g, Vector3(0.04, 0.3, 0.3), Vector3(0, 0.12, -0.55), col, 2.0, false)
 			blade.rotation.x = 0.6
+			_vm_parts.blade = blade
 		"nuke":
 			Vox.box(g, Vector3(0.24, 0.24, 0.7), Vector3(0, 0.14, -0.2), Vox.FOREST)
-			Vox.box(g, Vector3(0.18, 0.18, 0.22), Vector3(0, 0.14, -0.62), col, 2.0)
+			_vm_parts.warhead = Vox.box(g, Vector3(0.18, 0.18, 0.22), Vector3(0, 0.14, -0.62), col, 2.0)
+	# Muzzle flash: a star of glowing blocks, shown for a couple of frames.
+	var fl := Node3D.new()
+	fl.position = Vector3(0, 0.08, -0.62 if w.id != "nuke" else -0.78)
+	g.add_child(fl)
+	Vox.box(fl, Vector3(0.22, 0.22, 0.22), Vector3.ZERO, Vox.WHITE, 5.0, false)
+	Vox.box(fl, Vector3(0.7, 0.08, 0.08), Vector3.ZERO, col, 5.0, false)
+	Vox.box(fl, Vector3(0.08, 0.7, 0.08), Vector3.ZERO, col, 5.0, false)
+	Vox.box(fl, Vector3(0.1, 0.1, 0.5), Vector3(0, 0, -0.25), col.lightened(0.4), 5.0, false)
+	fl.visible = false
+	_vm_parts.flash = fl
 	# Drawn on top of everything (no depth test) so it never clips into walls.
 	for mi in g.find_children("*", "MeshInstance3D", true, false):
 		var m: StandardMaterial3D = mi.material_override.duplicate()
@@ -568,9 +713,9 @@ func _build_viewmodel(i: int) -> void:
 		m.next_pass = null
 		mi.material_override = m
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_viewmodel.scale = Vector3.ONE * 0.5
+	_viewmodel.scale = Vector3.ONE * 0.42
 	_viewmodel.position = VM_POS
-	_viewmodel.rotation = Vector3(0.05, 0.18, 0)
+	_viewmodel.rotation = Vector3(0.04, 0.07, 0)
 	_viewmodel.visible = _fpv
 
 
@@ -582,12 +727,22 @@ func _update_fpv(delta: float) -> void:
 	var bob := sin(_bob) * (0.07 if player.running else 0.04) if player.moving else 0.0
 	_fcam.global_position = player.head_position() + Vector3(0, bob, 0)
 	_fcam.rotation = Vector3(_fpitch, _fyaw, 0)
-	# Weapon sway while walking, kick back when firing
-	_recoil = move_toward(_recoil, 0.0, delta * 3.0)
-	var sway := Vector3(sin(_bob * 0.5) * 0.02, absf(sin(_bob)) * 0.02, 0) if player.moving else Vector3.ZERO
-	_viewmodel.position = VM_POS + sway + Vector3(0, _recoil * 0.03, _recoil * 0.1)
+	# Weapon sway while walking; recoil is a damped spring (snappy kick,
+	# smooth settle) instead of a linear slide.
+	_recoil_v += (-170.0 * _recoil - 18.0 * _recoil_v) * delta
+	_recoil += _recoil_v * delta
+	_fcam.rotation.x += _recoil * 0.03
+	var sway := Vector3(sin(_bob * 0.5) * 0.015, absf(sin(_bob)) * 0.015, 0) if player.moving else Vector3.ZERO
+	if player.flying and not player.on_ground():
+		sway = Vector3(0, sin(Time.get_ticks_msec() * 0.004) * 0.01, 0)
+	var jitter := Vector3.ZERO
+	if _vm_shake > 0.0:
+		_vm_shake -= delta
+		jitter = Vector3(randf_range(-1, 1), randf_range(-1, 1), 0) * 0.006
+	_viewmodel.position = VM_POS + sway + jitter + Vector3(0, _recoil * 0.025 - _vm_dip * 0.3, _recoil * 0.09)
 	if not _viewmodel.has_meta("swing"):
-		_viewmodel.rotation.x = 0.05 + _recoil * 0.5
+		_viewmodel.rotation.x = 0.04 + _recoil * 0.35 - _vm_dip * 0.6
+	_fpv_light.light_energy = move_toward(_fpv_light.light_energy, 0.0, delta * 40.0)
 
 
 ## Hour of day (0-24) from the cluster clock in the player's time zone.
@@ -645,6 +800,16 @@ func _update_labels() -> void:
 				continue
 			l.screen = cam.unproject_position(l.pos) * _px / _ui
 			items.append(l)
+		# Kubi's speech bubble and the watchtower ghosts' name tags.
+		var extra := []
+		if _kubi.visible and _kubi.bubble != "":
+			extra.append({"pos": _kubi.global_position + Vector3(0, 0.7, 0), "text": _kubi.bubble.left(80), "color": _kubi.bubble_color, "big": false})
+		for g in _ghosts.values():
+			extra.append({"pos": g.global_position + Vector3(0, 1.9, 0), "text": g.label, "color": g.color, "big": false, "small": true})
+		for l in extra:
+			if not cam.is_position_behind(l.pos):
+				l.screen = cam.unproject_position(l.pos) * _px / _ui
+				items.append(l)
 	hud.overlay.items = items
 	hud.overlay.queue_redraw()
 
@@ -753,6 +918,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_EQUAL, KEY_KP_ADD: _zoom_target = clampf(_zoom_target * 0.85, ZOOM_MIN, ZOOM_MAX)
 			KEY_MINUS, KEY_KP_SUBTRACT: _zoom_target = clampf(_zoom_target * 1.15, ZOOM_MIN, ZOOM_MAX)
 			KEY_SPACE: player.jump()
+			KEY_Z: player.set_flying(not player.flying)
+			KEY_Y: hud.toggle_kubi()
+			KEY_O:
+				hud.toggle_watch()
+				_update_ghosts([])
 			KEY_P: _toggle_fpv()
 			KEY_F3: hud.toggle_stats()
 			KEY_SLASH, KEY_QUOTELEFT:
@@ -1002,7 +1172,7 @@ func _blast() -> void:
 	var tgt := _aim(w.target)
 	var from := player.muzzle()
 	if _fpv:
-		from = _viewmodel.global_transform * Vector3(0, 0.08, -0.55)
+		from = _fpv_muzzle()
 	var to: Vector3 = tgt.pos if not tgt.is_empty() else _miss_point()
 	if tgt.is_empty():
 		_fire_anim(w, from, to, func(): world.sfx("miss", to))
@@ -1041,6 +1211,14 @@ func _blast() -> void:
 	_fire_anim(w, from, to, act)
 
 
+## First person: shots start a little ahead of the camera, lined up with
+## the gun's muzzle on screen (starting at the muzzle itself, a few cm
+## from the lens, made projectiles fill the whole screen).
+func _fpv_muzzle() -> Vector3:
+	var b := _fcam.global_basis
+	return _fcam.global_position - b.z * 1.7 + b.x * 0.42 - b.y * 0.32
+
+
 ## Where a shot goes when nothing is in range: straight ahead, as far as
 ## that weapon reaches (the hammer hits the ground right in front of you).
 func _miss_point() -> Vector3:
@@ -1056,7 +1234,7 @@ func _fire_anim(w: Dictionary, from: Vector3, to: Vector3, on_impact: Callable) 
 	player.fire_pose()
 	match w.id:
 		"blaster":
-			_recoil = 0.6
+			_kick(0.9, col)
 			world.sfx("blaster")
 			world.bolt(from, to, col, func():
 				world.sfx("hit", to)
@@ -1069,36 +1247,89 @@ func _fire_anim(w: Dictionary, from: Vector3, to: Vector3, on_impact: Callable) 
 			world.shockwave(ground, col)
 			on_impact.call()
 		"ray":
-			_recoil = 0.3
+			_kick(0.35, col)
+			_vm_shake = 0.5
 			world.sfx("ray")
 			world.beam(from, to, col, 0.5)
 			await get_tree().create_timer(0.4).timeout
 			world.flash(to, col, 0.8)
 			on_impact.call()
 		"freeze":
-			_recoil = 0.4
+			_kick(0.4, col)
+			_vm_shake = 0.35
 			world.sfx("freeze")
 			world.spray(from, to, col)
 			await get_tree().create_timer(0.35).timeout
 			world.ice(Vector3(to.x, player.global_position.y if world.surface_y(Vector2(to.x, to.z)) == -INF else world.surface_y(Vector2(to.x, to.z)), to.z), col)
 			on_impact.call()
 		"cutter":
-			_recoil = 0.5
+			_kick(0.6, col)
+			_throw_blade()
 			world.sfx("cutter")
 			world.boomerang(from, to, col, on_impact)
 		"nuke":
-			_recoil = 1.5
+			_kick(1.8, col)
+			_reload_nuke()
 			world.sfx("nuke_launch")
 			world.rocket(from, to, func():
 				world.sfx("explosion", to)
 				on_impact.call())
 
 
-## Hammer: the first-person weapon swings down.
+## First person: recoil impulse + muzzle flash + a flash of light.
+func _kick(strength: float, col: Color) -> void:
+	_recoil_v += strength * 9.0
+	if not _fpv:
+		return
+	var fl: Node3D = _vm_parts.get("flash")
+	if fl:
+		fl.visible = true
+		fl.rotation.z = randf() * TAU
+		fl.scale = Vector3.ONE * randf_range(0.8, 1.2) * (1.4 if strength > 1.0 else 1.0)
+		get_tree().create_timer(0.06).timeout.connect(func():
+			if is_instance_valid(fl):
+				fl.visible = false)
+	_fpv_light.light_color = col
+	_fpv_light.light_energy = 1.0 + strength * 0.8
+
+
+## Hammer: wind up, slam down, then bring it back.
 func _swing() -> void:
+	_viewmodel.set_meta("swing", true)
 	var tw := create_tween()
-	tw.tween_property(_viewmodel, "rotation:x", -1.1, 0.1)
-	tw.tween_property(_viewmodel, "rotation:x", 0.05, 0.25)
+	tw.tween_property(_viewmodel, "rotation:x", 0.7, 0.1).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+	tw.tween_property(_viewmodel, "rotation:x", -1.25, 0.07).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tw.tween_callback(func(): _recoil_v -= 4.0)
+	tw.tween_interval(0.08)
+	tw.tween_property(_viewmodel, "rotation:x", 0.04, 0.28).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	tw.tween_callback(func(): _viewmodel.remove_meta("swing"))
+
+
+## Cutter: the blade leaves the gun and snaps back when the boomerang returns.
+func _throw_blade() -> void:
+	var b: Node3D = _vm_parts.get("blade")
+	if b == null:
+		return
+	b.visible = false
+	await get_tree().create_timer(0.6).timeout
+	if is_instance_valid(b):
+		b.visible = true
+		_recoil_v += 3.0
+
+
+## Nuke: the warhead is gone after launch; lower the tube, reload, raise it.
+func _reload_nuke() -> void:
+	var wh: Node3D = _vm_parts.get("warhead")
+	if wh:
+		wh.visible = false
+	var tw := create_tween()
+	tw.tween_interval(0.35)
+	tw.tween_property(self, "_vm_dip", 1.0, 0.25).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tw.tween_callback(func():
+		if is_instance_valid(wh):
+			wh.visible = true
+		Sfx.play("click"))
+	tw.tween_property(self, "_vm_dip", 0.0, 0.35).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
 
 
 func _boom(p: Vector3, col: Color, big: bool) -> void:
@@ -1155,3 +1386,197 @@ func _workload_of(pod: Dictionary) -> Dictionary:
 			return w
 	return {}
 
+
+
+# ------------------------------------------------------------ Kubi
+
+## New snapshot: count problems, refresh the panel, speak up when it gets worse.
+func _kubi_state(s: Dictionary) -> void:
+	var probs := Diagnose.problems(s)
+	var sig := ",".join(probs.map(func(d): return "%s/%s/%s/%s" % [d.kind, d.ns, d.name, d.title]))
+	if sig != _kubi_sig:
+		_kubi_sig = sig
+		if hud.kubi.visible:
+			hud.kubi.refresh(s)
+	if probs.size() > _kubi_count and not hud.is_connect_visible():
+		_kubi.say(Diagnose.bubble(probs), 7.0, Vox.ORANGE)
+		Sfx.play("alarm")
+	elif probs.is_empty() and _kubi_count > 0:
+		_kubi.say(tr("All good!"), 4.0, Vox.GREEN)
+	_kubi_count = probs.size()
+	if _kubi.mood in ["ok", "alert"]:
+		_kubi.mood = "alert" if _kubi_count > 0 else "ok"
+
+
+func _kubi_tick(delta: float) -> void:
+	_kubi.visible = not hud.is_connect_visible()
+	_kubi_t -= delta
+	if _kubi_t > 0.0:
+		return
+	_kubi_t = 0.4
+	# Point at the closest problem on this level.
+	var best := Vector3.INF
+	var best_d := 1e9
+	var me := player.global_position
+	for d in Diagnose.problems(K8s.state):
+		var e: Entity = null
+		match world.level:
+			"plant": e = world.buildings.get(d.ns) if d.ns != "" else null
+			"power": e = world.islands.get(d.name) if d.kind == "Node" else world.islands.get(_pod_node(d))
+			_: e = world.pods.get(d.ns + "/" + d.name) if d.kind == "Pod" else null
+		if e == null or not is_instance_valid(e):
+			continue
+		var dist := me.distance_to(e.global_position)
+		if dist < best_d:
+			best_d = dist
+			best = e.global_position
+	_kubi.look_at_pos = best
+	# Comment on what you are inspecting, if it is broken.
+	var ins := hud.inspected()
+	if ins != _kubi_seen:
+		_kubi_seen = ins
+		var d := {}
+		if ins is PodBot:
+			d = Diagnose.pod(ins.data, K8s.state)
+		elif ins is NodeIsland:
+			var nd: Dictionary = ins.data
+			if not nd.get("ready", true) or nd.get("unschedulable", false):
+				d = Diagnose.node(nd, K8s.state)
+		if not d.is_empty() and d.sev >= 1:
+			_kubi.say("%s  [Y]" % d.title, 6.0, Vox.ORANGE)
+			if hud.kubi.visible:
+				hud.kubi.select(d)
+
+
+func _pod_node(d: Dictionary) -> String:
+	for p in K8s.state.get("pods", []):
+		if p.ns == d.ns and p.name == d.name:
+			return p.get("node", "")
+	return ""
+
+
+## Buttons in Kubi's panel.
+func _kubi_act(id: String, d: Dictionary) -> void:
+	var pod := {}
+	for p in K8s.state.get("pods", []):
+		if p.ns == d.ns and p.name == d.name:
+			pod = p
+	match id:
+		"goto":
+			if d.kind == "Node":
+				_goto("node", d.name, "")
+			else:
+				_goto("pod", d.ns + "/" + d.name, d.ns)
+		"logs", "logs_prev":
+			if not pod.is_empty():
+				hud.open_logs(pod)
+		"describe":
+			hud._term_cmd("-n %s describe pod %s" % [d.ns, d.name])
+			if not Settings.terminal:
+				hud.toggle_terminal()
+		"restart":
+			var ok_kind: String = pod.get("owner_kind", "")
+			var req := {"action": "restart", "kind": ok_kind, "ns": d.ns, "name": pod.get("owner_name", "")}
+			hud.confirm(tr("Restart %s %s?") % [ok_kind, req.name], func(): K8s.action(req), Kubectl.for_action(req))
+		"delete_pod":
+			var req := {"action": "delete_pod", "ns": d.ns, "name": d.name}
+			hud.confirm(tr("Delete pod %s?") % d.name, func(): K8s.action(req), Kubectl.for_action(req))
+		"uncordon":
+			var req := {"action": "uncordon", "name": d.name}
+			hud.confirm(tr("Uncordon node %s?") % d.name, func(): K8s.action(req), Kubectl.for_action(req))
+
+
+# ------------------------------------------------------------ watchtower
+
+func _on_intruder(v: Dictionary, why: String) -> void:
+	var who: String = v.get("user", "?")
+	var tool := WatchPanel.tool_name(str(v.get("agent", "")))
+	var ip: String = v.get("ip", "") if v.has("ip") else ", ".join(v.get("ips", []))
+	hud.banner(tr("WATCHTOWER: %s") % why.to_upper(), "%s (%s) %s\n%s %s %s" % [who, tool, ip,
+		v.get("verb", v.get("last_action", "")), v.get("resource", v.get("last_resource", "")), v.get("ns", v.get("last_ns", ""))])
+	Sfx.play("alarm")
+	_kubi.say(tr("Watch out! %s: %s") % [why, who], 6.0, Vox.RED)
+	var g: VisitorGhost = _ghosts.get(v.get("key", ""))
+	if g:
+		g.alarm()
+
+
+## Ghosts for the people using the cluster (only while the tower is open).
+func _update_ghosts(actions: Array) -> void:
+	if not hud.watch.visible:
+		for g in _ghosts.values():
+			g.queue_free()
+		_ghosts.clear()
+		return
+	var alive := {}
+	for v in hud.watch.visible_visitors():
+		if v.get("source", "") == "player" or alive.size() >= 8:
+			continue
+		var goal := _watch_goal(v)
+		if goal == Vector3.INF:
+			continue
+		alive[v.key] = true
+		var g: VisitorGhost = _ghosts.get(v.key)
+		if g == null:
+			g = VisitorGhost.new()
+			_vp.add_child(g)
+			g.setup(v.key, WatchPanel.color_for(v.key), "")
+			g.global_position = goal + Vector3(6, 0, 6).rotated(Vector3.UP, randf() * TAU)
+			_ghosts[v.key] = g
+			world.poof(g.global_position + Vector3(0, 1, 0), g.color)
+		g.goal = goal
+		var who: String = v.user if v.user != "" else "?"
+		g.set_text("%s · %s" % [who.get_slice(":", who.get_slice_count(":") - 1), WatchPanel.tool_name(v.agent)])
+	for k in _ghosts.keys():
+		if not alive.has(k):
+			world.poof(_ghosts[k].global_position + Vector3(0, 1, 0), Vox.WHITE)
+			_ghosts[k].queue_free()
+			_ghosts.erase(k)
+	# Writes: the ghost zaps what it changed.
+	for a in actions:
+		var g: VisitorGhost = _ghosts.get(a.get("key", ""))
+		if g and a.get("write", false):
+			world.zap(g.global_position + Vector3(0, 1.2, 0), g.goal + Vector3(0, 0.8, 0))
+		elif g and int(a.get("code", 0)) in [401, 403]:
+			g.alarm()
+
+
+## Where a visitor's ghost stands on the current level (INF = not here).
+func _watch_goal(v: Dictionary) -> Vector3:
+	var ns: String = v.get("last_ns", "")
+	var res: String = v.get("last_resource", "")
+	var name: String = v.get("last_name", "")
+	var jitter := Vector3(1.4, 0, 0).rotated(Vector3.UP, float(abs(str(v.key).hash()) % 628) / 100.0)
+	var p := Vector3.INF
+	match world.level:
+		"plant":
+			if world.buildings.has(ns):
+				p = world.buildings[ns].door_position() + Vector3(0, 0, 1.5) + jitter
+			elif res.begins_with("nodes") and world.buildings.has("@power"):
+				p = world.buildings["@power"].door_position() + Vector3(0, 0, 1.5) + jitter
+			else:
+				p = world.spawn + jitter * 2.0
+		"power":
+			if res.begins_with("nodes") and world.islands.has(name):
+				p = world.islands[name].target + jitter
+			else:
+				p = jitter * 1.5
+		_:
+			if "ns:" + ns != world.level:
+				return Vector3.INF
+			var e: Entity = world.pods.get(ns + "/" + name)
+			if e == null:
+				for k in world.lines:
+					if str(k).ends_with("/" + name):
+						e = world.lines[k]
+			p = (e.target + Vector3(0, 0, 1.8) if e else world.spawn) + jitter
+	var y := world.floor_y(Vector2(p.x, p.z))
+	p.y = y if y != -INF else 0.0
+	return p
+
+
+func _first_bad_pod() -> String:
+	for p in K8s.state.get("pods", []):
+		if PodBot.categorize(p) == "crash":
+			return p.ns + "/" + p.name
+	return ""

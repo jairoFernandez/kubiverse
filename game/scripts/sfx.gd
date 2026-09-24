@@ -14,6 +14,8 @@ var _night := 0.0          # 0 = day music, 1 = night music
 var _listener := Vector3.ZERO
 var _last_play := {}       # name -> msec, to avoid machine-gun repeats
 var _music_task := -1
+var _jet: AudioStreamPlayer  # jetpack engine loop
+var _jet_level := 0.0
 
 
 func _exit_tree() -> void:
@@ -28,6 +30,12 @@ func _ready() -> void:
 		add_child(p)
 		_players.append(p)
 	_build_sfx()
+	# Jetpack: a seamless loop of hiss + rumble (flat envelope so it loops).
+	var jet := mix(voice("noise", 2600, 2600, 1.0, 0.35, 0.0, 0.0), voice("noise", 260, 260, 1.0, 0.6, 0.0, 0.0))
+	_jet = AudioStreamPlayer.new()
+	_jet.stream = to_wav(normalize(jet, 0.7), true)
+	_jet.volume_db = -80.0
+	add_child(_jet)
 	_music_day = AudioStreamPlayer.new()
 	_music_night = AudioStreamPlayer.new()
 	for m in [_music_day, _music_night]:
@@ -143,6 +151,8 @@ func _build_sfx() -> void:
 		jingle = mix(jingle, voice("square", k[0], k[0], 0.18, 0.2), k[1])
 	jingle = mix(jingle, voice("tri", 1047, 1047, 0.5, 0.25), 0.4)
 	s.jingle = jingle
+	s.jet_on = mix(voice("noise", 400, 3000, 0.35, 0.4, 0.02, 0.7), voice("saw", 90, 260, 0.3, 0.15))
+	s.jet_off = mix(voice("noise", 2400, 300, 0.3, 0.3, 0.001, 1.2), voice("saw", 200, 70, 0.25, 0.12))
 	for k in s:
 		_sounds[k] = to_wav(normalize(s[k], 0.85))
 
@@ -166,6 +176,21 @@ func play(name: String, at = null, pitch_jitter := 0.06) -> void:
 	p.pitch_scale = 1.0 + randf_range(-pitch_jitter, pitch_jitter)
 	p.volume_db = linear_to_db(vol * Settings.sfx_volume)
 	p.play()
+
+
+## Jetpack engine: 0 = off, 1 = idle hover, 2 = full thrust.
+func set_jet(level: float) -> void:
+	if _jet == null:
+		return
+	_jet_level = move_toward(_jet_level, level, 0.15)
+	if _jet_level <= 0.01 or Settings.sfx_volume <= 0.0:
+		if _jet.playing:
+			_jet.stop()
+		return
+	if not _jet.playing:
+		_jet.play()
+	_jet.pitch_scale = 0.8 + _jet_level * 0.25
+	_jet.volume_db = linear_to_db(clampf(0.18 + _jet_level * 0.2, 0.0, 1.0) * Settings.sfx_volume)
 
 
 func set_listener(pos: Vector3) -> void:

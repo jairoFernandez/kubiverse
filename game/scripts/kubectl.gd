@@ -33,6 +33,8 @@ static func for_action(req: Dictionary) -> String:
 			return "kubectl %sdelete %s/%s" % [_ns(ns), kind, n]
 		"delete_service":
 			return "kubectl %sdelete service %s" % [_ns(ns), n]
+		"add_control_plane":
+			return "kubeadm join <api-endpoint>:6443 --token <t> --discovery-token-ca-cert-hash sha256:<h> --control-plane --certificate-key <k>   # on the new machine"
 	return "# unknown action"
 
 

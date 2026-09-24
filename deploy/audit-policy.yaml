@@ -1,0 +1,19 @@
+# Audit policy for KubeCraft's WATCHTOWER mode: who talks to the API server.
+# Metadata only (user, verb, resource, source IP, user agent): request and
+# response bodies (e.g. Secret values) are never logged.
+apiVersion: audit.k8s.io/v1
+kind: Policy
+omitStages: [RequestReceived]
+rules:
+  # Cluster internals: very chatty and not interesting.
+  - level: None
+    users: ["system:kube-proxy", "system:kube-scheduler", "system:kube-controller-manager", "system:apiserver"]
+  - level: None
+    userGroups: ["system:nodes"]
+  - level: None
+    nonResourceURLs: ["/healthz*", "/readyz*", "/livez*", "/version", "/openapi*", "/api", "/apis*"]
+  - level: None
+    verbs: ["watch"]
+  - level: None
+    resources: [{group: "coordination.k8s.io", resources: ["leases"]}]
+  - level: Metadata

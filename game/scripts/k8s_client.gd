@@ -7,6 +7,7 @@ signal cluster_event(ev: Dictionary)
 signal connection_changed(status: String, detail: String)
 signal action_started(req: Dictionary)
 signal action_done(ok: bool, message: String, req: Dictionary)
+signal watch_updated(data: Dictionary)   # WATCHTOWER: visitors + recent actions
 
 enum Mode { OFFLINE, BRIDGE, DEMO }
 
@@ -84,6 +85,7 @@ func start_demo() -> void:
 	add_child(_mock)
 	_mock.state_changed.connect(_on_state)
 	_mock.event.connect(func(ev): cluster_event.emit(ev))
+	_mock.watch.connect(func(w): watch_updated.emit(w))
 	connection_changed.emit("online", "demo cluster (simulated)")
 	_mock.start()
 
@@ -148,6 +150,12 @@ func _process(delta: float) -> void:
 					_on_state(msg["data"])
 				"event":
 					cluster_event.emit(msg["data"])
+				"watch":
+					var w: Dictionary = msg["data"]
+					for k in ["visitors", "actions"]:
+						if w.get(k) == null:
+							w[k] = []
+					watch_updated.emit(w)
 	elif st == WebSocketPeer.STATE_CLOSED:
 		_ws = null
 		_reconnect_in = 2.0
@@ -196,6 +204,30 @@ func run_kubectl(line: String, cb: Callable) -> void:
 			cb.call(bool(data.get("ok", false)), str(data.get("output", ""))))
 
 
+## Assistant (Kubi) status: cb({llm: bool, model, error?}).
+func assistant_status(cb: Callable) -> void:
+	if mode != Mode.BRIDGE:
+		cb.call({"llm": false, "demo": mode == Mode.DEMO})
+		return
+	_http(HTTPClient.METHOD_GET, "/api/assistant" + _q(), "", func(ok: bool, data):
+		cb.call(data if ok else {"llm": false, "error": str(data)}))
+
+
+## Asks the bridge's language model. req = {question, kind, ns, name, lang,
+## diagnosis}. cb(ok, answer_or_error). Small local models take a while.
+func ask_assistant(req: Dictionary, cb: Callable) -> void:
+	if mode != Mode.BRIDGE:
+		cb.call(false, "no bridge")
+		return
+	_http_to(base_url, token, HTTPClient.METHOD_POST, "/api/assistant" + _q(), JSON.stringify(req), func(ok: bool, data):
+		if not ok:
+			cb.call(false, str(data))
+		elif data.get("ok", false):
+			cb.call(true, str(data.get("answer", "")))
+		else:
+			cb.call(false, str(data.get("error", "unknown error"))), 150.0)
+
+
 ## cb(ok: bool, text: String)
 func fetch_logs(ns: String, pod: String, container: String, previous: bool, cb: Callable) -> void:
 	if mode == Mode.DEMO:
@@ -217,9 +249,9 @@ func _http(method: int, path: String, body: String, cb: Callable) -> void:
 	_http_to(base_url, token, method, path, body, cb)
 
 
-func _http_to(url: String, tok: String, method: int, path: String, body: String, cb: Callable) -> void:
+func _http_to(url: String, tok: String, method: int, path: String, body: String, cb: Callable, timeout := 20.0) -> void:
 	var req := HTTPRequest.new()
-	req.timeout = 20.0
+	req.timeout = timeout
 	add_child(req)
 	req.request_completed.connect(func(result: int, code: int, _headers, raw: PackedByteArray):
 		req.queue_free()
