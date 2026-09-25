@@ -12,6 +12,17 @@ func _init() -> void:
 		assert(WebHost.is_local(o), o)
 	for o in ["https://jairo.github.io", "https://kubiverse.dev", "https://172.32.0.1", "https://8.8.8.8"]:
 		assert(not WebHost.is_local(o), o)
+	# The way down to the Underground: ↑ ↑ ↓ ↓ ← → S T A R T (↑ ↑ ↑ still counts).
+	var sc := SecretCode.new()
+	var hits := 0
+	for k in [KEY_UP, KEY_UP, KEY_UP, KEY_DOWN, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_S, KEY_T, KEY_A, KEY_R, KEY_T]:
+		if sc.feed(SecretCode.token(k)):
+			hits += 1
+	assert(hits == 1, "secret code")
+	for k in [KEY_UP, KEY_UP, KEY_DOWN, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_S, KEY_T]:
+		sc.feed(SecretCode.token(k))
+	assert(sc.armed() and sc.typed() == "ST", sc.typed())
+	assert(not sc.feed(SecretCode.token(KEY_X)) and sc.pos == 0, "a wrong letter resets it")
 	# Kubi's dynamic missions: a hot node gives a bottleneck mission with the
 	# biggest pod named, and its VERIFY step passes once the node cools down.
 	var hs := {"nodes": [{"name": "n1", "cpu_m": 1000, "mem_bytes": 1 << 30}, {"name": "n2", "cpu_m": 1000, "mem_bytes": 1 << 30}],

@@ -343,6 +343,14 @@ Lighting follows the **cluster's time** (the bridge's clock, in your time zone),
 
 A hall whose namespace has failing pods catches fire: voxel flames on the roof and windows, a flickering orange light and bursts of *glitch* (the building shakes, color stripes appear and the sign gets corrupted). The intensity grows with the number of failing pods.
 
+## Secrets
+
+<details><summary>Spoiler: there is something under the cluster</summary>
+
+On the surface, press ↑ ↑ ↓ ↓ ← → and type `START`: you go down to **KUBIVERSE: UNDERGROUND**, a hidden arcade with minigames (Whack-a-Pod, OOM Snake, and a cabinet waiting for the next one). High scores are kept per game. ESC takes you back up. Nothing down there touches the cluster.
+
+</details>
+
 ## Languages
 
 English and Spanish (the system language is detected; change it on the start screen or in **V > Language**). English is the source language; translations live in [`game/scripts/i18n.gd`](game/scripts/i18n.gd). To add another language: create another dictionary like `ES` and add it to `LANGS`.

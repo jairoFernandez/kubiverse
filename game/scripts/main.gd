@@ -16,6 +16,7 @@ const LEVEL_ZOOM := {"plant": 34.0, "power": 38.0, "engine": 40.0}
 var world: World
 var player: Player
 var hud: Hud
+var underground: Underground   # the hidden arcade (↑ ↑ ↓ ↓ ← →, then START)
 var missions: Missions
 
 var _vpc: SubViewportContainer
@@ -197,6 +198,10 @@ func _ready() -> void:
 	hud.touch_mode_changed.connect(func():
 		hud.touch = _want_touch()
 		_apply_scale())
+	underground = Underground.new()
+	underground.font = hud._font
+	underground.player = player
+	add_child(underground)
 	hud.disconnect_requested.connect(func():
 		_need_spawn = true
 		K8s.disconnect_all()
@@ -331,6 +336,29 @@ func _screenshot_and_quit(path: String) -> void:
 		if arg.begins_with("--level="):
 			_go_level(arg.substr(8))
 			await get_tree().create_timer(2.5).timeout
+		if arg.begins_with("--underground"):
+			# --underground (the arcade) or --underground=whack|snake|over
+			var what := arg.get_slice("=", 1) if "=" in arg else ""
+			if what == "prompt":
+				# The surface prompt while START is being typed.
+				for k in [KEY_UP, KEY_UP, KEY_DOWN, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_S, KEY_T]:
+					var ev := InputEventKey.new()
+					ev.keycode = k
+					ev.pressed = true
+					Input.parse_input_event(ev)
+					await get_tree().process_frame
+				print("PROMPT armed=", underground.code.armed(), " visible=", underground._prompt.visible, " text=", underground._prompt.text, " rect=", underground._prompt.get_global_rect())
+				continue
+			underground.open(what != "descend")
+			if what in ["whack", "snake"]:
+				underground._sel = 0 if what == "whack" else 1
+				underground.start_game(what)
+				await get_tree().create_timer(3.0).timeout
+			elif what == "over":
+				underground.start_game("whack")
+				underground._score = 180
+				underground._game_over("TIME'S UP", "demo")
+			await get_tree().create_timer(1.0).timeout
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--enter-pod="):
 			# The running pod with the most containers in that namespace.
