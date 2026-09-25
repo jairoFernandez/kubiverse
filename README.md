@@ -347,7 +347,7 @@ A hall whose namespace has failing pods catches fire: voxel flames on the roof a
 
 <details><summary>Spoiler: there is something under the cluster</summary>
 
-On the surface, press ↑ ↑ ↓ ↓ ← → and type `START`: you go down to **KUBIVERSE: UNDERGROUND**, a hidden arcade with minigames (Whack-a-Pod, OOM Snake, and a cabinet waiting for the next one). High scores are kept per game. ESC takes you back up. Nothing down there touches the cluster.
+On the surface, press ↑ ↑ ↓ ↓ ← → and type `START`: you go down to **KUBIVERSE: UNDERGROUND**, a hidden arcade with minigames: Whack-a-Pod, OOM Snake, Kube Rally (a top-down race through the traffic) and Laser Tag (against three rogue pods among the racks), plus a cabinet waiting for the next one. High scores are kept per game. The bar on top always shows the cluster's alarms (click one to go up and look at it) and the way back to the surface (or ESC). Nothing down there touches the cluster.
 
 </details>
 

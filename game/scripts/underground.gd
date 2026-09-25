@@ -2,21 +2,33 @@ class_name Underground
 extends CanvasLayer
 ## KUBIVERSE: UNDERGROUND, the hidden arcade under the cluster (↑ ↑ ↓ ↓ ← →
 ## and type START). A pixel screen of 320×180 scaled to the window, with a
-## cabinet per minigame. Nothing here touches the cluster.
+## cabinet per minigame (scripts/arcade). Nothing here touches the cluster,
+## but the cluster's alarms stay in sight on the bar at the top, next to the
+## way back up.
 
 signal closed
+signal alarm_clicked(alarm: Dictionary)   # go up and look at it
 
 const W := 320
 const H := 180
+const BAR := 12            # the system bar above the screen (virtual px)
 const SAVE := "user://underground.cfg"
 const GAMES := [
 	{"id": "whack", "title": "WHACK-A-POD", "color": Color(0.95, 0.32, 0.3),
 		"blurb": "Restart the crashing pods.\nDon't hit the healthy ones."},
 	{"id": "snake", "title": "OOM SNAKE", "color": Color(0.6, 0.42, 1.0),
 		"blurb": "Eat requests, grow your memory.\nDon't bite yourself."},
+	{"id": "rally", "title": "KUBE RALLY", "color": Color(0.3, 0.8, 1.0),
+		"blurb": "Race down the service mesh.\nDodge the traffic, grab the coins."},
+	{"id": "laser", "title": "LASER TAG", "color": Color(0.35, 0.9, 0.45),
+		"blurb": "Tag the rogue pods in the server room.\nHide behind the racks."},
 	{"id": "soon", "title": "???", "color": Color(0.38, 0.38, 0.44),
 		"blurb": "Out of order.\nMore games are coming."},
 ]
+const CAB_W := 52.0
+const CAB_STEP := 62.0
+const CAB_X0 := 10.0
+const CAB_Y := 54.0
 const BG := Color(0.04, 0.035, 0.07)
 const ROCK := Color(0.12, 0.1, 0.16)
 const ROCK_HI := Color(0.2, 0.16, 0.26)
@@ -24,18 +36,20 @@ const TEXT := Color(0.92, 0.9, 1.0)
 const DIM := Color(0.55, 0.52, 0.66)
 const GOLD := Color(1.0, 0.8, 0.25)
 const GREEN := Color(0.35, 0.9, 0.45)
+const RED := Color(1.0, 0.3, 0.3)
 
 var font: Font
 var player: Node          # frozen while we are down here
+var alarms: Callable      # () -> Array of {sev, text, kind, key, ns}: the HUD's alarms
 var code := SecretCode.new()
 
 var _view: Control
 var _prompt: Label        # on the surface: "> STA_" while START is typed
-var _state := ""          # descend, hub, whack, snake, over
+var _state := ""          # descend, hub, play, over
 var _t := 0.0
 var _sel := 0
 var _best := {}
-var _score := 0
+var _game: ArcadeGame
 var _new_best := false
 var _over_title := ""
 var _over_why := ""
@@ -43,25 +57,7 @@ var _rng := RandomNumberGenerator.new()
 var _rocks: Array = []    # stalactites / stalagmites [x, width, height, top]
 var _shrooms: Array = []  # glowing mushrooms [x, y, hue]
 var _pops: Array = []     # floating texts {text, pos, t, color}
-
-# Whack-a-Pod
-var _holes: Array = []    # Vector2 centers
-var _pods: Array = []     # {hole, kind, t, life, hit}
-var _left := 0.0
-var _spawn := 0.0
-var _cursor := 4
-
-# OOM Snake
-const CELL := 8
-const GW := 36
-const GH := 17
-const GRID0 := Vector2(16, 32)
-var _snake: Array = []    # Vector2i, head first
-var _dir := Vector2i.RIGHT
-var _next_dir := Vector2i.RIGHT
-var _food := Vector2i.ZERO
-var _step := 0.0
-var _speed := 0.13
+var _alarm_i := 0         # which alarm the bar shows (they take turns)
 
 
 func _ready() -> void:
@@ -95,9 +91,6 @@ func _ready() -> void:
 		_rocks.append([_rng.randf_range(0, W), _rng.randf_range(6, 16), _rng.randf_range(8, 26), top])
 	for i in 9:
 		_shrooms.append([_rng.randf_range(8, W - 8), _rng.randf_range(160, 172), _rng.randf()])
-	for r in 3:
-		for c in 3:
-			_holes.append(Vector2(100 + c * 60, 62 + r * 38))
 	var cfg := ConfigFile.new()
 	if cfg.load(SAVE) == OK:
 		for g in GAMES:
@@ -124,6 +117,7 @@ func open(skip_descent := false) -> void:
 func close() -> void:
 	_view.visible = false
 	_state = ""
+	_game = null
 	if player:
 		player.set("frozen", false)
 	Sfx.play("door")
@@ -131,30 +125,48 @@ func close() -> void:
 
 
 func start_game(id: String) -> void:
-	_score = 0
-	_new_best = false
-	_pops.clear()
-	_t = 0.0
+	var g: ArcadeGame
 	match id:
-		"whack":
-			_state = "whack"
-			_pods.clear()
-			_left = 30.0
-			_spawn = 0.6
-			_cursor = 4
-		"snake":
-			_state = "snake"
-			_snake = [Vector2i(8, 8), Vector2i(7, 8), Vector2i(6, 8)]
-			_dir = Vector2i.RIGHT
-			_next_dir = _dir
-			_speed = 0.13
-			_step = 0.0
-			_place_food()
+		"whack": g = ArcadeWhack.new()
+		"snake": g = ArcadeSnake.new()
+		"rally": g = ArcadeRally.new()
+		"laser": g = ArcadeLaser.new()
 		_:
 			Sfx.play("error")
-			_pop(tr("OUT OF ORDER"), Vector2(80 + _sel * 80, 60), DIM)
+			pop(tr("OUT OF ORDER"), Vector2(CAB_X0 + _sel * CAB_STEP + CAB_W / 2, 50), DIM)
 			return
+	g.ug = self
+	g.start()
+	_game = g
+	_new_best = false
+	_pops.clear()
+	_state = "play"
+	_t = 0.0
 	Sfx.play("coin")
+
+
+## For the minigames: the round is over.
+func game_over(title: String, why: String) -> void:
+	_state = "over"
+	_t = 0.0
+	_over_title = title
+	_over_why = why
+	var id: String = GAMES[_sel].id
+	var score := _game.score
+	if score > int(_best.get(id, 0)):
+		_best[id] = score
+		_new_best = true
+		var cfg := ConfigFile.new()
+		cfg.load(SAVE)
+		cfg.set_value("best", id, score)
+		cfg.save(SAVE)
+		Sfx.play("jingle")
+	else:
+		Sfx.play("pod_death")
+
+
+func pop(text: String, at: Vector2, color: Color) -> void:
+	_pops.append({"text": text, "pos": at, "t": 0.0, "color": color})
 
 
 func _process(delta: float) -> void:
@@ -174,10 +186,9 @@ func _process(delta: float) -> void:
 				_state = "hub"
 				_t = 0.0
 				Sfx.play("jingle")
-		"whack":
-			_whack_tick(delta)
-		"snake":
-			_snake_tick(delta)
+		"play":
+			_game.t += delta
+			_game.tick(delta)
 	for p in _pops:
 		p.t += delta
 		p.pos.y -= delta * 18.0
@@ -213,27 +224,12 @@ func _input(event: InputEvent) -> void:
 				start_game(GAMES[_sel].id)
 			elif k == KEY_ESCAPE:
 				close()
-		"whack":
+		"play":
 			if k == KEY_ESCAPE:
 				_state = "hub"
-			var n := _numpad(k)
-			if n >= 0:
-				_whack(n)
-			elif k in [KEY_LEFT, KEY_A] and _cursor % 3 > 0: _cursor -= 1
-			elif k in [KEY_RIGHT, KEY_D] and _cursor % 3 < 2: _cursor += 1
-			elif k in [KEY_UP, KEY_W] and _cursor >= 3: _cursor -= 3
-			elif k in [KEY_DOWN, KEY_S] and _cursor < 6: _cursor += 3
-			elif k in [KEY_SPACE, KEY_ENTER]: _whack(_cursor)
-		"snake":
-			var d := Vector2i.ZERO
-			match k:
-				KEY_UP, KEY_W: d = Vector2i.UP
-				KEY_DOWN, KEY_S: d = Vector2i.DOWN
-				KEY_LEFT, KEY_A: d = Vector2i.LEFT
-				KEY_RIGHT, KEY_D: d = Vector2i.RIGHT
-				KEY_ESCAPE: _state = "hub"
-			if d != Vector2i.ZERO and d != -_dir:
-				_next_dir = d
+				_game = null
+			else:
+				_game.key(k)
 		"over":
 			if k in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE] and _t > 0.5:
 				start_game(GAMES[_sel].id)
@@ -268,160 +264,61 @@ func _listen(event: InputEvent) -> void:
 
 
 func _click(p: Vector2) -> void:
+	# The system bar: the way up, and the alarm on show.
+	if p.y < 0:
+		if _surface_rect().has_point(p):
+			close()
+		elif _alarm_rect().has_point(p):
+			var list := _alarms()
+			if not list.is_empty():
+				var a: Dictionary = list[_alarm_i % list.size()]
+				close()
+				alarm_clicked.emit(a)
+		return
 	match _state:
 		"hub":
 			for i in GAMES.size():
-				if Rect2(52 + i * 80, 58, 56, 92).has_point(p):
+				if Rect2(CAB_X0 + i * CAB_STEP, CAB_Y, CAB_W, 92).has_point(p):
 					if i == _sel:
 						start_game(GAMES[i].id)
 					else:
 						_sel = i
 						Sfx.play("click")
-			if Rect2(4, 164, 90, 14).has_point(p):
-				close()
-		"whack":
-			for i in _holes.size():
-				if p.distance_to(_holes[i]) < 22:
-					_cursor = i
-					_whack(i)
+		"play":
+			_game.click(p)
 		"over":
 			if _t > 0.5:
 				start_game(GAMES[_sel].id)
 
 
-static func _numpad(k: int) -> int:
-	# Laid out like a numeric keypad: 7 8 9 on top.
-	var n := -1
-	if k >= KEY_1 and k <= KEY_9:
-		n = k - KEY_1 + 1
-	elif k >= KEY_KP_1 and k <= KEY_KP_9:
-		n = k - KEY_KP_1 + 1
-	if n < 0:
-		return -1
-	var row := 2 - floori((n - 1) / 3.0)
-	return row * 3 + (n - 1) % 3
-
-
-# --- Whack-a-Pod -------------------------------------------------------------
-
-func _whack_tick(delta: float) -> void:
-	_left -= delta
-	if _left <= 0.0:
-		_game_over(tr("TIME'S UP"), tr("%d points of uptime saved") % _score)
-		return
-	var pace := 1.0 + (30.0 - _left) / 15.0     # 1x → 3x
-	_spawn -= delta * pace
-	if _spawn <= 0.0:
-		_spawn = _rng.randf_range(0.5, 0.9)
-		var free := []
-		for i in _holes.size():
-			if not _pods.any(func(p): return p.hole == i):
-				free.append(i)
-		if not free.is_empty():
-			var roll := _rng.randf()
-			var kind := "ok" if roll < 0.28 else ("oom" if roll < 0.45 else "crash")
-			var base: float = {"ok": 1.6, "oom": 0.9, "crash": 1.4}[kind]
-			var life := base / sqrt(pace)
-			_pods.append({"hole": free[_rng.randi() % free.size()], "kind": kind, "t": 0.0, "life": life, "hit": -1.0})
-	for p in _pods:
-		p.t += delta
-		if p.hit >= 0.0:
-			p.hit += delta
-	_pods = _pods.filter(func(p): return p.t < p.life and p.hit < 0.35)
-
-
-func _whack(hole: int) -> void:
-	for p in _pods:
-		if p.hole != hole or p.hit >= 0.0:
-			continue
-		p.hit = 0.0
-		var at: Vector2 = _holes[hole] + Vector2(0, -20)
-		match p.kind:
-			"crash":
-				_score += 10
-				_pop("+10", at, GREEN)
-				Sfx.play("hit")
-			"oom":
-				_score += 20
-				_pop("+20 OOM!", at, GOLD)
-				Sfx.play("coin")
-			"ok":
-				_score = maxi(0, _score - 15)
-				_pop(tr("-15 it was fine!"), at, Color(1, 0.4, 0.4))
-				Sfx.play("error")
-		return
-	Sfx.play("miss")
-
-
-# --- OOM Snake ---------------------------------------------------------------
-
-func _snake_tick(delta: float) -> void:
-	_step += delta
-	if _step < _speed:
-		return
-	_step = 0.0
-	_dir = _next_dir
-	var head: Vector2i = _snake[0] + _dir
-	if head.x < 0 or head.y < 0 or head.x >= GW or head.y >= GH:
-		_game_over("CrashLoopBackOff", tr("you ran into the node's wall"))
-		return
-	if head in _snake.slice(0, _snake.size() - 1):
-		_game_over("OOMKilled", tr("you ate your own memory"))
-		return
-	_snake.push_front(head)
-	if head == _food:
-		_score += 10
-		_speed = maxf(0.055, _speed - 0.004)
-		_pop("+%dMi" % 64, GRID0 + Vector2(head) * CELL, GOLD)
-		Sfx.play("coin")
-		_place_food()
-	else:
-		_snake.pop_back()
-
-
-func _place_food() -> void:
-	while true:
-		var f := Vector2i(_rng.randi() % GW, _rng.randi() % GH)
-		if not f in _snake:
-			_food = f
-			return
-
-
-func _game_over(title: String, why: String) -> void:
-	_state = "over"
-	_t = 0.0
-	_over_title = title
-	_over_why = why
-	var id: String = GAMES[_sel].id
-	if _score > int(_best.get(id, 0)):
-		_best[id] = _score
-		_new_best = true
-		var cfg := ConfigFile.new()
-		cfg.load(SAVE)
-		cfg.set_value("best", id, _score)
-		cfg.save(SAVE)
-		Sfx.play("jingle")
-	else:
-		Sfx.play("pod_death")
-
-
-func _pop(text: String, at: Vector2, color: Color) -> void:
-	_pops.append({"text": text, "pos": at, "t": 0.0, "color": color})
+func _alarms() -> Array:
+	return alarms.call() if alarms.is_valid() else []
 
 
 # --- drawing -----------------------------------------------------------------
 
+## Pixels per virtual pixel: the screen plus the bar fit the window.
 func _scale() -> float:
 	var s := _view.size
-	return maxf(1.0, floorf(minf(s.x / W, s.y / H) * 2.0) / 2.0)
+	return maxf(1.0, floorf(minf(s.x / W, s.y / (H + BAR)) * 2.0) / 2.0)
 
 
+## Screen position of the virtual (0, 0): the top-left of the game screen.
 func _origin() -> Vector2:
-	return ((_view.size - Vector2(W, H) * _scale()) / 2.0).floor()
+	var k := _scale()
+	return ((_view.size - Vector2(W, H + BAR) * k) / 2.0 + Vector2(0, BAR * k)).floor()
 
 
 func _to_virtual(p: Vector2) -> Vector2:
 	return (p - _origin()) / _scale()
+
+
+func _surface_rect() -> Rect2:
+	return Rect2(0, -BAR, 74, BAR)
+
+
+func _alarm_rect() -> Rect2:
+	return Rect2(78, -BAR, W - 78, BAR)
 
 
 func _paint() -> void:
@@ -432,25 +329,58 @@ func _paint() -> void:
 	match _state:
 		"descend": _paint_descend()
 		"hub": _paint_hub()
-		"whack": _paint_whack()
-		"snake": _paint_snake()
+		"play": _game.paint(v)
 		"over":
-			if GAMES[_sel].id == "snake": _paint_snake()
-			else: _paint_whack()
+			_game.paint(v)
 			_paint_over()
+	if _state == "play" and _game.help() != "":
+		text(_game.help(), Vector2(160, 177), 6, DIM, true)
 	for p in _pops:
-		_text(p.text, p.pos, 8, Color(p.color, 1.0 - p.t), true)
+		text(p.text, p.pos, 8, Color(p.color, 1.0 - p.t), true)
 	# CRT scanlines
 	for y in range(0, H, 2):
 		v.draw_rect(Rect2(0, y, W, 1), Color(0, 0, 0, 0.18))
+	# Whatever a game drew off the screen goes under the black.
+	v.draw_rect(Rect2(-W, -H, W * 3, H - BAR), Color.BLACK)
+	v.draw_rect(Rect2(-W, H, W * 3, H), Color.BLACK)
+	v.draw_rect(Rect2(-W, -BAR, W, H + BAR), Color.BLACK)
+	v.draw_rect(Rect2(W, -BAR, W, H + BAR), Color.BLACK)
+	_paint_system_bar()
 	v.draw_set_transform(Vector2.ZERO)
 
 
-func _text(s: String, at: Vector2, size: int, color: Color, center := false) -> void:
+## Always on top: the way back up and the cluster's alarms.
+func _paint_system_bar() -> void:
+	var v := _view
+	v.draw_rect(Rect2(0, -BAR, W, BAR), Color(0.02, 0.02, 0.04))
+	var sr := _surface_rect()
+	var hover := sr.has_point(_to_virtual(v.get_local_mouse_position()))
+	v.draw_rect(sr.grow(-1), Color(0.3, 0.28, 0.42) if hover else Color(0.18, 0.16, 0.26))
+	text("^ " + tr("SURFACE") + " (ESC)", Vector2(sr.get_center().x, -3), 6, TEXT, true)
+	var list := _alarms()
+	var ar := _alarm_rect()
+	if list.is_empty():
+		v.draw_rect(Rect2(ar.position.x + 2, -8, 4, 4), GREEN)
+		text(tr("cluster OK: no alarms"), Vector2(ar.position.x + 10, -3), 6, GREEN)
+		return
+	var bad := list.filter(func(a): return int(a.sev) >= 3).size()
+	_alarm_i = int(Time.get_ticks_msec() / 3000.0)
+	var a: Dictionary = list[_alarm_i % list.size()]
+	var c := RED if int(a.sev) >= 3 else GOLD
+	var blink := bad > 0 and fmod(Time.get_ticks_msec() / 1000.0, 1.0) < 0.5
+	v.draw_rect(Rect2(ar.position.x + 1, -BAR + 1, 50, BAR - 2), Color(c, 0.35 if blink else 0.2))
+	text(tr("ALARMS %d") % list.size(), Vector2(ar.position.x + 26, -3), 6, c, true)
+	var msg := str(a.text)
+	if msg.length() > 46:
+		msg = msg.substr(0, 43) + "..."
+	text(msg, Vector2(ar.position.x + 56, -3), 6, TEXT)
+
+
+## Text at the screen's resolution (a pixel font scaled below its size turns
+## to mush), at a virtual position.
+func text(s: String, at: Vector2, size: int, color: Color, center := false) -> void:
 	if font == null:
 		font = ThemeDB.fallback_font
-	# Drawn at the screen's resolution: a pixel font scaled below its size
-	# turns to mush.
 	var k := _scale()
 	var px := int(size * k)
 	var pos := _origin() + at * k
@@ -461,6 +391,20 @@ func _text(s: String, at: Vector2, size: int, color: Color, center := false) -> 
 	_view.draw_string(font, pos + Vector2(k, k), s, HORIZONTAL_ALIGNMENT_LEFT, -1, px, Color(0, 0, 0, color.a * 0.8))
 	_view.draw_string(font, pos, s, HORIZONTAL_ALIGNMENT_LEFT, -1, px, color)
 	_view.draw_set_transform(_origin(), 0.0, Vector2.ONE * k)
+
+
+func text_width(s: String, size: int) -> float:
+	if font == null:
+		font = ThemeDB.fallback_font
+	return font.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, int(size * _scale())).x / _scale()
+
+
+## A game's top bar: its name, the score and something on the right.
+func paint_bar(title: String, right: String) -> void:
+	_view.draw_rect(Rect2(0, 0, W, 14), Color(0, 0, 0, 0.55))
+	text(title, Vector2(6, 10), 8, TEXT)
+	text("%s  %d" % [tr("SCORE"), _game.score if _game else 0], Vector2(160, 10), 8, GOLD, true)
+	text(right, Vector2(W - 6 - text_width(right, 8), 10), 8, DIM)
 
 
 func _paint_descend() -> void:
@@ -479,11 +423,11 @@ func _paint_descend() -> void:
 	v.draw_rect(Rect2(130, cy, 60, 50), Color(0.25, 0.22, 0.32))
 	v.draw_rect(Rect2(134, cy + 4, 52, 42), Color(0.08, 0.07, 0.12))
 	v.draw_rect(Rect2(159, 0, 2, cy), Color(0.4, 0.4, 0.45))
-	_text("-%d m" % int(k * 1337), Vector2(160, cy + 30), 8, GOLD, true)
-	_text(tr("going down..."), Vector2(160, 150), 8, DIM, true)
+	text("-%d m" % int(k * 1337), Vector2(160, cy + 30), 8, GOLD, true)
+	text(tr("going down..."), Vector2(160, 150), 8, DIM, true)
 
 
-func _paint_cave() -> void:
+func paint_cave() -> void:
 	var v := _view
 	for r in _rocks:
 		var x: float = r[0]
@@ -505,39 +449,40 @@ func _paint_cave() -> void:
 
 func _paint_hub() -> void:
 	var v := _view
-	_paint_cave()
+	paint_cave()
 	# Title with a colour-cycling shadow.
-	_text("KUBIVERSE:", Vector2(160, 20), 8, DIM, true)
+	text("KUBIVERSE:", Vector2(160, 16), 8, DIM, true)
 	var hue := fmod(_t * 0.15, 1.0)
-	_text("UNDERGROUND", Vector2(161, 39), 16, Color.from_hsv(hue, 0.8, 0.9), true)
-	_text("UNDERGROUND", Vector2(160, 38), 16, TEXT, true)
+	text("UNDERGROUND", Vector2(161, 35), 16, Color.from_hsv(hue, 0.8, 0.9), true)
+	text("UNDERGROUND", Vector2(160, 34), 16, TEXT, true)
 	for i in GAMES.size():
 		var g: Dictionary = GAMES[i]
 		var sel := i == _sel
-		var x := 52.0 + i * 80.0
-		var y := 58.0 - (2.0 + sin(_t * 6.0) * 1.5 if sel else 0.0)
+		var x := CAB_X0 + i * CAB_STEP
+		var y := CAB_Y - (2.0 + sin(_t * 6.0) * 1.5 if sel else 0.0)
+		var gc: Color = g.color
 		if sel:
-			v.draw_rect(Rect2(x - 3, y - 3, 62, 98), Color(g.color, 0.25 + 0.15 * sin(_t * 5.0)))
+			v.draw_rect(Rect2(x - 3, y - 3, CAB_W + 6, 98), Color(gc, 0.25 + 0.15 * sin(_t * 5.0)))
 		# Cabinet: marquee, screen, panel, base.
-		v.draw_rect(Rect2(x, y, 56, 92), Color(0.16, 0.14, 0.22))
-		v.draw_rect(Rect2(x + 2, y + 2, 52, 12), g.color.darkened(0.2))
-		_text(g.title, Vector2(x + 28, y + 11), 8 if g.title.length() < 10 else 6, TEXT, true)
-		v.draw_rect(Rect2(x + 5, y + 18, 46, 34), Color(0.02, 0.02, 0.04))
-		_paint_attract(g.id, Rect2(x + 6, y + 19, 44, 32))
-		v.draw_rect(Rect2(x + 3, y + 56, 50, 12), Color(0.24, 0.22, 0.3))
-		v.draw_circle(Vector2(x + 14, y + 62), 3, Color(0.9, 0.2, 0.2))
-		v.draw_circle(Vector2(x + 30, y + 62), 2.5, GOLD)
-		v.draw_circle(Vector2(x + 40, y + 62), 2.5, Color(0.3, 0.6, 1.0))
-		v.draw_rect(Rect2(x + 6, y + 70, 44, 22), Color(0.12, 0.1, 0.17))
+		v.draw_rect(Rect2(x, y, CAB_W, 92), Color(0.16, 0.14, 0.22))
+		v.draw_rect(Rect2(x + 2, y + 2, CAB_W - 4, 12), gc.darkened(0.2))
+		var title: String = g.title
+		text(title, Vector2(x + CAB_W / 2, y + 11), 6 if title.length() > 4 else 8, TEXT, true)
+		v.draw_rect(Rect2(x + 4, y + 18, CAB_W - 8, 34), Color(0.02, 0.02, 0.04))
+		_paint_attract(g.id, Rect2(x + 5, y + 19, CAB_W - 10, 32))
+		v.draw_rect(Rect2(x + 3, y + 56, CAB_W - 6, 12), Color(0.24, 0.22, 0.3))
+		v.draw_circle(Vector2(x + 12, y + 62), 3, Color(0.9, 0.2, 0.2))
+		v.draw_circle(Vector2(x + 28, y + 62), 2.5, GOLD)
+		v.draw_circle(Vector2(x + 38, y + 62), 2.5, Color(0.3, 0.6, 1.0))
+		v.draw_rect(Rect2(x + 6, y + 70, CAB_W - 12, 22), Color(0.12, 0.1, 0.17))
 		var best := int(_best.get(g.id, 0))
 		if g.id != "soon":
-			_text("HI %d" % best, Vector2(x + 28, y + 84), 6, GOLD if best > 0 else DIM, true)
+			text("HI %d" % best, Vector2(x + CAB_W / 2, y + 84), 6, GOLD if best > 0 else DIM, true)
 	var g2: Dictionary = GAMES[_sel]
 	var lines: PackedStringArray = tr(g2.blurb).split("\n")
 	for j in lines.size():
-		_text(lines[j], Vector2(160, 162 + j * 8), 6, TEXT, true)
-	_text(tr("ESC: surface"), Vector2(6, 176), 6, DIM)
-	_text("< >  ENTER", Vector2(W - 6 - 40, 176), 6, DIM)
+		text(lines[j], Vector2(160, 162 + j * 8), 6, TEXT, true)
+	text("< >  ENTER", Vector2(W - 6 - 40, 176), 6, DIM)
 
 
 ## What each cabinet's screen shows while nobody plays it.
@@ -547,97 +492,48 @@ func _paint_attract(id: String, r: Rect2) -> void:
 		"whack":
 			for i in 3:
 				var up := sin(_t * 3.0 + i * 2.1) > 0.3
-				var c := Vector2(r.position.x + 8 + i * 14, r.position.y + 24)
+				var c := Vector2(r.position.x + 7 + i * 14, r.position.y + 24)
 				v.draw_rect(Rect2(c.x - 5, c.y, 10, 3), Color(0.1, 0.08, 0.1))
 				if up:
-					v.draw_rect(Rect2(c.x - 4, c.y - 8, 8, 8), Color(0.95, 0.3, 0.3) if i != 1 else GREEN)
+					v.draw_rect(Rect2(c.x - 4, c.y - 8, 8, 8), RED if i != 1 else GREEN)
 		"snake":
-			var n := 8
-			for i in n:
+			for i in 8:
 				var a := _t * 2.0 - i * 0.35
-				var p := r.get_center() + Vector2(cos(a) * 14, sin(a * 2.0) * 8)
+				var p := r.get_center() + Vector2(cos(a) * 13, sin(a * 2.0) * 8)
 				v.draw_rect(Rect2(p.floor(), Vector2(3, 3)), Color(0.6, 0.42, 1.0).lightened(0.3 if i == 0 else 0.0))
+		"rally":
+			v.draw_rect(Rect2(r.position.x + 10, r.position.y, r.size.x - 20, r.size.y), Color(0.13, 0.12, 0.16))
+			for i in 4:
+				var y := r.position.y + fmod(i * 10.0 + _t * 40.0, r.size.y)
+				v.draw_rect(Rect2(r.get_center().x, y, 1, 5), Color(1, 1, 1, 0.3))
+			var cx := r.get_center().x + sin(_t * 2.0) * 7.0
+			v.draw_rect(Rect2(cx - 3, r.end.y - 11, 6, 9), Color(0.3, 0.95, 1.0))
+			var oy := r.position.y + fmod(_t * 25.0, r.size.y)
+			v.draw_rect(Rect2(r.get_center().x + 5, oy, 6, 9), RED)
+		"laser":
+			var a := r.position + Vector2(6, r.size.y / 2)
+			var b := r.end - Vector2(8, r.size.y / 2 + sin(_t * 3.0) * 8.0)
+			v.draw_rect(Rect2(a - Vector2(2, 2), Vector2(4, 4)), Color(0.3, 0.95, 1.0))
+			v.draw_rect(Rect2(b - Vector2(2, 2), Vector2(4, 4)), RED)
+			if fmod(_t, 1.0) < 0.15:
+				v.draw_line(a, b, Color(0.3, 0.95, 1.0), 1.0)
 		_:
 			if fmod(_t, 1.2) < 0.9:
-				_text("???", r.get_center() + Vector2(0, 3), 8, DIM, true)
+				text("???", r.get_center() + Vector2(0, 3), 8, DIM, true)
 			for i in 10:
 				v.draw_rect(Rect2(r.position.x + _rng.randf() * r.size.x, r.position.y + _rng.randf() * r.size.y, 1, 1), Color(1, 1, 1, 0.3))
-
-
-func _paint_hud_bar(title: String, right: String) -> void:
-	_view.draw_rect(Rect2(0, 0, W, 14), Color(0, 0, 0, 0.5))
-	_text(title, Vector2(6, 10), 8, TEXT)
-	_text("%s  %d" % [tr("SCORE"), _score], Vector2(160, 10), 8, GOLD, true)
-	_text(right, Vector2(W - 6 - font.get_string_size(right, HORIZONTAL_ALIGNMENT_LEFT, -1, 8 * int(_scale())).x / _scale(), 10), 8, DIM)
-
-
-func _paint_whack() -> void:
-	var v := _view
-	_paint_cave()
-	_paint_hud_bar("WHACK-A-POD", "%ds" % ceili(maxf(_left, 0.0)))
-	for i in _holes.size():
-		var c: Vector2 = _holes[i]
-		v.draw_rect(Rect2(c.x - 18, c.y, 36, 7), Color(0.02, 0.02, 0.03))
-		v.draw_rect(Rect2(c.x - 20, c.y + 5, 40, 3), ROCK_HI)
-		if i == _cursor and _state == "whack":
-			v.draw_rect(Rect2(c.x - 21, c.y + 9, 42, 1), GOLD)
-		var n: int = [7, 8, 9, 4, 5, 6, 1, 2, 3][i]
-		_text(str(n), Vector2(c.x + 24, c.y + 8), 6, DIM)
-	for p in _pods:
-		var c: Vector2 = _holes[p.hole]
-		var rise := clampf(minf(p.t, p.life - p.t) / 0.15, 0.0, 1.0)
-		var col: Color = {"crash": Color(0.95, 0.3, 0.3), "oom": Color(0.7, 0.35, 1.0), "ok": GREEN}[p.kind]
-		if p.hit >= 0.0:
-			col = GREEN if p.kind != "ok" else Color(1, 0.5, 0.2)
-			rise = 1.0 - p.hit / 0.35
-		var hgt := 16.0 * rise
-		v.draw_rect(Rect2(c.x - 9, c.y - hgt, 18, hgt), col)
-		if hgt > 10:
-			# A little face: X eyes when crashing, dots when fine.
-			var ey := c.y - hgt + 5
-			if p.kind == "ok" or p.hit >= 0.0:
-				v.draw_rect(Rect2(c.x - 5, ey, 2, 2), Color.BLACK)
-				v.draw_rect(Rect2(c.x + 3, ey, 2, 2), Color.BLACK)
-			else:
-				for dx in [-5, 3]:
-					v.draw_line(Vector2(c.x + dx - 1, ey - 1), Vector2(c.x + dx + 2, ey + 2), Color.BLACK)
-					v.draw_line(Vector2(c.x + dx + 2, ey - 1), Vector2(c.x + dx - 1, ey + 2), Color.BLACK)
-			if p.kind == "oom" and p.hit < 0.0:
-				_text("OOM", Vector2(c.x, c.y - hgt - 3), 6, GOLD, true)
-	_text(tr("1-9, click or arrows + SPACE  ·  red/purple = broken, green = fine"), Vector2(160, 176), 6, DIM, true)
-
-
-func _paint_snake() -> void:
-	var v := _view
-	_paint_hud_bar("OOM SNAKE", "%d Mi" % (_snake.size() * 64))
-	v.draw_rect(Rect2(GRID0 - Vector2(2, 2), Vector2(GW, GH) * CELL + Vector2(4, 4)), ROCK_HI)
-	v.draw_rect(Rect2(GRID0, Vector2(GW, GH) * CELL), Color(0.02, 0.02, 0.05))
-	for x in range(0, GW, 4):
-		for y in range(0, GH, 4):
-			v.draw_rect(Rect2(GRID0 + Vector2(x, y) * CELL + Vector2(3, 3), Vector2(1, 1)), Color(1, 1, 1, 0.08))
-	# The request to eat: a blinking packet.
-	var fp := GRID0 + Vector2(_food) * CELL
-	v.draw_rect(Rect2(fp + Vector2(1, 1), Vector2(6, 6)), GOLD if fmod(_t, 0.4) < 0.3 else GOLD.darkened(0.3))
-	for i in _snake.size():
-		var sp := GRID0 + Vector2(_snake[i]) * CELL
-		var c := Color(0.6, 0.42, 1.0).lerp(Color(0.95, 0.3, 0.3), minf(float(_snake.size()) / 60.0, 1.0))
-		v.draw_rect(Rect2(sp + Vector2(0.5, 0.5), Vector2(7, 7)), c.lightened(0.35) if i == 0 else c)
-	var head := GRID0 + Vector2(_snake[0]) * CELL
-	v.draw_rect(Rect2(head + Vector2(2, 2), Vector2(1, 1)), Color.BLACK)
-	v.draw_rect(Rect2(head + Vector2(5, 2), Vector2(1, 1)), Color.BLACK)
-	_text(tr("arrows / WASD  ·  eat requests, don't hit the walls or yourself"), Vector2(160, 176), 6, DIM, true)
 
 
 func _paint_over() -> void:
 	var v := _view
 	v.draw_rect(Rect2(0, 0, W, H), Color(0, 0, 0, 0.6))
 	v.draw_rect(Rect2(60, 50, 200, 80), Color(0.08, 0.06, 0.12))
-	v.draw_rect(Rect2(60, 50, 200, 2), Color(0.95, 0.3, 0.3))
-	_text(_over_title, Vector2(160, 70), 16, Color(0.95, 0.35, 0.35), true)
-	_text(_over_why, Vector2(160, 84), 6, DIM, true)
-	_text("%s %d" % [tr("SCORE"), _score], Vector2(160, 100), 8, TEXT, true)
+	v.draw_rect(Rect2(60, 50, 200, 2), RED)
+	text(_over_title, Vector2(160, 70), 16, Color(0.95, 0.35, 0.35), true)
+	text(_over_why, Vector2(160, 84), 6, DIM, true)
+	text("%s %d" % [tr("SCORE"), _game.score], Vector2(160, 100), 8, TEXT, true)
 	if _new_best and fmod(_t, 0.5) < 0.35:
-		_text(tr("NEW HIGH SCORE!"), Vector2(160, 112), 8, GOLD, true)
+		text(tr("NEW HIGH SCORE!"), Vector2(160, 112), 8, GOLD, true)
 	elif not _new_best:
-		_text("HI %d" % int(_best.get(GAMES[_sel].id, 0)), Vector2(160, 112), 8, GOLD, true)
-	_text(tr("ENTER: again   ESC: arcade"), Vector2(160, 125), 6, DIM, true)
+		text("HI %d" % int(_best.get(GAMES[_sel].id, 0)), Vector2(160, 112), 8, GOLD, true)
+	text(tr("ENTER: again   ESC: arcade"), Vector2(160, 125), 6, DIM, true)

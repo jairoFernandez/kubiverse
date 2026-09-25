@@ -201,6 +201,8 @@ func _ready() -> void:
 	underground = Underground.new()
 	underground.font = hud._font
 	underground.player = player
+	underground.alarms = func() -> Array: return hud._alarms
+	underground.alarm_clicked.connect(func(a: Dictionary): hud.goto_requested.emit(a.kind, a.key, a.ns))
 	add_child(underground)
 	hud.disconnect_requested.connect(func():
 		_need_spawn = true
@@ -350,14 +352,15 @@ func _screenshot_and_quit(path: String) -> void:
 				print("PROMPT armed=", underground.code.armed(), " visible=", underground._prompt.visible, " text=", underground._prompt.text, " rect=", underground._prompt.get_global_rect())
 				continue
 			underground.open(what != "descend")
-			if what in ["whack", "snake"]:
-				underground._sel = 0 if what == "whack" else 1
+			var ids := ["whack", "snake", "rally", "laser"]
+			if what in ids:
+				underground._sel = ids.find(what)
 				underground.start_game(what)
 				await get_tree().create_timer(3.0).timeout
 			elif what == "over":
 				underground.start_game("whack")
-				underground._score = 180
-				underground._game_over("TIME'S UP", "demo")
+				underground._game.score = 180
+				underground.game_over("TIME'S UP", "demo")
 			await get_tree().create_timer(1.0).timeout
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--enter-pod="):
