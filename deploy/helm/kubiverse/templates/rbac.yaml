@@ -12,8 +12,15 @@ metadata:
   labels: {{- include "kubiverse.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: [nodes, namespaces, pods, pods/log, services, endpoints, events, configmaps, persistentvolumeclaims, resourcequotas, limitranges]
+    resources: [nodes, namespaces, pods, pods/log, services, endpoints, events, configmaps, persistentvolumeclaims, persistentvolumes, resourcequotas, limitranges]
     verbs: [get, list, watch]
+  {{- if .Values.secrets.listNames }}
+  # Which Secrets exist (the bridge asks for metadata only and drops the
+  # annotations), but RBAC can't tell list from read: off by default.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [list, watch]
+  {{- end }}
   - apiGroups: [apps]
     resources: [deployments, replicasets, statefulsets, daemonsets]
     verbs: [get, list, watch]

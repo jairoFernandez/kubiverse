@@ -52,6 +52,8 @@ func (d *stateDiff) next(s *Snapshot) (full, patch []byte) {
 	diffList(d, p, "volumes", s.Volumes, func(v Volume) string { return v.Namespace + "/" + v.Name }, func(v Volume) Volume { v.Age = 0; return v })
 	diffList(d, p, "storage_classes", s.StorageClasses, func(c StorageClass) string { return c.Name }, nil)
 	diffList(d, p, "apps", s.Apps, func(a ArgoApp) string { return a.Namespace + "/" + a.Name }, nil)
+	diffList(d, p, "pvs", s.PVs, func(v PV) string { return v.Name }, func(v PV) PV { v.Age = 0; return v })
+	diffList(d, p, "configs", s.Configs, func(c ConfigRef) string { return c.Kind + "/" + c.Namespace + "/" + c.Name }, func(c ConfigRef) ConfigRef { c.Age = 0; return c })
 	diffList(d, p, "certs", s.Certs, func(c Cert) string { return c.Namespace + "/" + c.Name }, func(c Cert) Cert { c.ExpiresIn /= 3600; return c })
 	m, _ := json.Marshal(s.Metrics)
 	if !bytes.Equal(m, d.metrics) {

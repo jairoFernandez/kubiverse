@@ -1010,6 +1010,33 @@ func _resources(s: Dictionary) -> void:
 		{"ns": "shop", "name": "redis-data", "status": "Bound", "capacity": "8Gi", "request": "8Gi", "class": "standard", "access": ["RWO"], "volume": "pvc-19ab", "pods": users.call("shop/StatefulSet/redis"), "age": 2592000},
 		{"ns": "ml", "name": "datasets", "status": "Pending", "capacity": "", "request": "500Gi", "class": "fast-ssd", "access": ["RWX"], "volume": "", "pods": [], "age": 5400},
 	]
+	# Real use of the claims (kubelet stats): redis is nearly full.
+	for v in s.volumes:
+		match str(v.name):
+			"redis-data": v["used_pct"] = 93.0
+			"data-broker-0": v["used_pct"] = 41.0
+			"data-broker-1": v["used_pct"] = 38.0
+	s["pvs"] = [
+		{"name": "pvc-3f1a", "capacity": "20Gi", "class": "standard", "reclaim": "Delete", "status": "Bound", "claim": "data/data-broker-0", "source": "rancher.io/local-path", "age": 864000},
+		{"name": "pvc-77c2", "capacity": "20Gi", "class": "standard", "reclaim": "Delete", "status": "Bound", "claim": "data/data-broker-1", "source": "rancher.io/local-path", "age": 864000},
+		{"name": "pvc-19ab", "capacity": "8Gi", "class": "standard", "reclaim": "Delete", "status": "Bound", "claim": "shop/redis-data", "source": "rancher.io/local-path", "age": 2592000},
+		{"name": "pvc-old-reports", "capacity": "50Gi", "class": "premium-rwo", "reclaim": "Retain", "status": "Released", "claim": "data/reports", "source": "pd.csi.storage.gke.io", "age": 7776000},
+	]
+	var who := func(wkey: String) -> Array:
+		return pods.values().filter(func(p): return p._wl == wkey and not p.deleting).map(func(p): return p.name)
+	var ledger: Array = who.call("payments/Deployment/ledger")
+	var fraud: Array = who.call("payments/Deployment/fraud-ai")
+	s["configs"] = [
+		{"kind": "Secret", "ns": "payments", "name": "db-credentials", "type": "opaque", "keys": ["password", "user"], "pods": ledger, "how": ["env"], "exists": "yes", "age": 7776000},
+		{"kind": "Secret", "ns": "payments", "name": "regcred", "type": "registry", "keys": [], "pods": fraud, "how": ["imagePull"], "exists": "yes", "age": 31536000},
+		{"kind": "Secret", "ns": "payments", "name": "stripe-key", "type": "opaque", "keys": [], "pods": fraud, "how": ["envFrom"], "exists": "no", "missing": fraud},
+		{"kind": "Secret", "ns": "payments", "name": "pay-tls", "type": "tls", "keys": [], "pods": [], "how": [], "exists": "yes", "cert": "pay-tls", "age": 5184000},
+		{"kind": "ConfigMap", "ns": "payments", "name": "ledger-config", "keys": [], "pods": ledger, "how": ["envFrom"], "exists": "yes", "age": 864000},
+		{"kind": "Secret", "ns": "shop", "name": "redis-auth", "type": "opaque", "keys": ["password"], "pods": who.call("shop/StatefulSet/redis") + who.call("shop/Deployment/cart"), "how": ["env"], "exists": "yes", "age": 2592000},
+		{"kind": "Secret", "ns": "shop", "name": "shop-tls", "type": "tls", "keys": [], "pods": [], "how": [], "exists": "yes", "cert": "shop-tls", "age": 2592000},
+		{"kind": "ConfigMap", "ns": "shop", "name": "frontend-config", "keys": ["API_URL", "FEATURE_FLAGS", "THEME"], "pods": who.call("shop/Deployment/frontend"), "how": ["volume", "env"], "exists": "yes", "age": 604800},
+		{"kind": "ConfigMap", "ns": "shop", "name": "old-banner", "keys": [], "pods": [], "how": [], "exists": "yes", "age": 31536000},
+	]
 	s["storage_classes"] = [
 		{"name": "standard", "provisioner": "rancher.io/local-path", "reclaim": "Delete", "binding": "WaitForFirstConsumer", "default": true, "expand": false},
 		{"name": "premium-rwo", "provisioner": "pd.csi.storage.gke.io", "reclaim": "Retain", "binding": "WaitForFirstConsumer", "default": false, "expand": true},

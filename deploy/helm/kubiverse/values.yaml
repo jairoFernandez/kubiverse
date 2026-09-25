@@ -57,3 +57,10 @@ resources:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+secrets:
+  # Show Secrets nobody uses and tell "missing" from "not allowed to know".
+  # The bridge only lists names (metadata), never values, but granting
+  # list on secrets lets the ServiceAccount read them: leave off unless you
+  # trust the pod. Without it, Secrets are drawn from what pods reference.
+  listNames: false

@@ -66,6 +66,12 @@ func _init() -> void:
 	assert(hv.kind == "volume" and hv.key == "ml/datasets" and hv.bad, str(hv))
 	assert(ClusterSearch.find(rs, "kind:app")[0].key == "payments", "app -> its namespace")
 	assert(ClusterSearch.find(rs, "shop.example.com")[0].kind == "namespace", "cert -> namespace")
+	# Secrets and PVs are searchable; a missing Secret is "bad".
+	var cs2 := {"configs": [{"kind": "Secret", "ns": "payments", "name": "stripe-key", "exists": "no", "pods": ["fraud-1"], "keys": []}],
+		"pvs": [{"name": "pvc-old", "status": "Released", "claim": "data/reports", "capacity": "50Gi"}]}
+	var hc: Dictionary = ClusterSearch.find(cs2, "kind:secret")[0]
+	assert(hc.kind == "config" and hc.key == "Secret/payments/stripe-key" and hc.bad, str(hc))
+	assert(ClusterSearch.find(cs2, "reports")[0].kind == "pv", "pv by its old claim")
 	# Kubi's dynamic missions: a hot node gives a bottleneck mission with the
 	# biggest pod named, and its VERIFY step passes once the node cools down.
 	var hs := {"nodes": [{"name": "n1", "cpu_m": 1000, "mem_bytes": 1 << 30}, {"name": "n2", "cpu_m": 1000, "mem_bytes": 1 << 30}],

@@ -74,6 +74,8 @@ static func mat(c: Color, glow := 0.0, outlined := true) -> StandardMaterial3D:
 		m.emission_enabled = true
 		m.emission = c
 		m.emission_energy_multiplier = glow
+	if c.a < 1.0:
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA  # ghosts (things that should exist and don't)
 	if outlined:
 		m.next_pass = outline_mat()
 	_mats[key] = m

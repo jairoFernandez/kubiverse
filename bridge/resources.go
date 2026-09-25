@@ -43,6 +43,8 @@ type Volume struct {
 	Volume    string   `json:"volume"` // the PV
 	Pods      []string `json:"pods"`
 	Age       int64    `json:"age"`
+	Used      int64    `json:"used,omitempty"`     // bytes (kubelet stats via Prometheus)
+	UsedPct   float64  `json:"used_pct,omitempty"` // of its capacity
 }
 
 type StorageClass struct {

@@ -71,6 +71,15 @@ static func for_view(kind: String, d: Dictionary) -> Array:
 	var ns: String = d.get("ns", "")
 	var n: String = d.get("name", "")
 	match kind:
+		"config":
+			var k := "secret" if str(d.get("kind", "")) == "Secret" else "configmap"
+			return [["what it is (sizes, not values)", "kubectl -n %s describe %s %s" % [ns, k, n]],
+				["its keys, without the values", "kubectl -n %s get %s %s -o go-template='{{range $k, $v := .data}}{{$k}}{{\"\\n\"}}{{end}}'" % [ns, k, n]],
+				["who uses it", "kubectl -n %s get pods -o yaml | grep -n %s" % [ns, n]]]
+		"pv":
+			return [["the volume", "kubectl get pv %s" % n], ["details", "kubectl describe pv %s" % n]]
+		"storageclass":
+			return [["the classes", "kubectl get storageclass"], ["this one", "kubectl describe storageclass %s" % n]]
 		"volume":
 			return [["the claim", "kubectl -n %s get pvc %s" % [ns, n]], ["why it is (not) bound: events", "kubectl -n %s describe pvc %s" % [ns, n]],
 				["the storage classes", "kubectl get storageclass"]]

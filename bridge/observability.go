@@ -44,6 +44,7 @@ type observability struct {
 	checked  time.Time
 	alerts   []Alert
 	alertsAt time.Time
+	volUse   map[string][2]float64 // "ns/claim" -> used, capacity (kubelet stats)
 }
 
 // Alert: a firing alert (Alertmanager, or a Prometheus rule).
@@ -305,6 +306,7 @@ func (b *Bridge) alertLoop(ctx context.Context) {
 	tick := time.NewTicker(30 * time.Second)
 	defer tick.Stop()
 	for {
+		b.fetchVolumeUse(ctx)
 		list, err := b.fetchAlerts(ctx)
 		if err == nil {
 			b.obs.mu.Lock()

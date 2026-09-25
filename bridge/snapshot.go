@@ -31,6 +31,8 @@ type Snapshot struct {
 	StorageClasses []StorageClass `json:"storage_classes"`
 	Apps           []ArgoApp      `json:"apps"`  // Argo CD Applications
 	Certs          []Cert         `json:"certs"` // cert-manager Certificates
+	PVs            []PV           `json:"pvs"`
+	Configs        []ConfigRef    `json:"configs"` // Secrets and ConfigMaps (never their values)
 }
 
 type Node struct {
@@ -317,6 +319,7 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 		})
 	}
 	b.fillResources(s, pods, now)
+	b.fillStorageAndConfig(s, pods, now)
 	return s, nil
 }
 

@@ -1329,7 +1329,7 @@ func _goto(kind: String, key: String, ns: String) -> void:
 		_pan = Vector3.ZERO
 		hud.inspect(bl)
 		return
-	var l := "power" if kind == "node" else "ns:" + ns
+	var l := "power" if kind == "node" else ("plant" if kind in ["pv", "storageclass"] else "ns:" + ns)
 	if world.level != l:
 		_go_level(l)
 	var e := world.find_entity(kind, key)

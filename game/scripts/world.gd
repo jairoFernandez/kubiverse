@@ -27,6 +27,16 @@ var buildings := {}  # ns -> FactoryBuilding ("@power" for the energy plant)
 var lines := {}      # "ns/kind/name" -> ProductionLine
 var services := {}   # "ns/name" -> ServicePortal (dock)
 var volumes := {}    # "ns/name" -> StorageTank (PVC)
+var configs := {}    # "Kind/ns/name" -> VaultBox (Secret safe / ConfigMap cabinet)
+var pv_tanks := {}   # PV name -> PVTank in the plant's storage yard
+var factories := {}  # StorageClass name -> StorageFactory
+var storage_yard := Rect2()   # where the yard is (plant), empty when there is no storage
+var _yard_notes: Array = []   # labels of the yard (its sign, "+N pv")
+var _hall_notes: Array = []   # signs of a hall's tank row and vault
+var _vault_pad: Node3D
+var _vault_sig := ""
+const YARD_COLS := 4
+const YARD_ROWS := 4
 var islands := {}    # node -> NodeIsland
 var pods := {}       # "ns/name" -> PodBot
 
@@ -177,6 +187,9 @@ func all_entities() -> Array:
 	out.append_array(islands.values())
 	out.append_array(services.values())
 	out.append_array(volumes.values())
+	out.append_array(configs.values())
+	out.append_array(pv_tanks.values())
+	out.append_array(factories.values())
 	out.append_array(lines.values())
 	if gate and is_instance_valid(gate):
 		out.append(gate)
@@ -206,6 +219,9 @@ func find_entity(kind: String, key: String) -> Entity:
 		"pod": return pods.get(key)
 		"service": return services.get(key)
 		"volume": return volumes.get(key)
+		"config": return configs.get(key)
+		"pv": return pv_tanks.get(key)
+		"storageclass": return factories.get(key)
 		"workload": return lines.get(key)
 	return null
 
@@ -242,6 +258,13 @@ func set_level(l: String) -> void:
 	lines.clear()
 	services.clear()
 	volumes.clear()
+	configs.clear()
+	_vault_pad = null
+	_vault_sig = ""
+	_hall_notes = []
+	pv_tanks.clear()
+	factories.clear()
+	storage_yard = Rect2()
 	islands.clear()
 	pods.clear()
 	_limbo_slots.clear()
@@ -516,6 +539,7 @@ func _apply_plant(s: Dictionary) -> void:
 	pw.target = Vector3(0, 0, 12.0)
 	if pw.position == Vector3.ZERO:
 		pw.position = pw.target
+	var yard_r := _apply_yard(s)
 	# The ENGINE ROOM stands south of the Kubernetes Quarter (west side).
 	var sys_i: int = blocks.map(func(bl): return bl.district).find("system")
 	var eng_x: float = (blocks[sys_i].x0 + blocks[sys_i].w * 0.5) if sys_i != -1 else minf(grid_l, -12.0) - 2.0
@@ -525,9 +549,12 @@ func _apply_plant(s: Dictionary) -> void:
 		engine_hall.world = self
 		_entities.add_child(engine_hall)
 	engine_hall.position = Vector3(eng_x, 0, 12.0)
-	var ground := Rect2(minf(minf(grid_l, -12.0), eng_x - EngineHall.W) - 6.0, -grid_d - 10.0, maxf(grid_r, 12.0) - minf(minf(grid_l, -12.0), eng_x - EngineHall.W) + 12.0, grid_d + 36.0)
-	if _begin_static("plant|%s|%s|%s" % [str(blocks), str(ground), Look.current]):
+	var right := maxf(maxf(grid_r, 12.0), yard_r + 4.0)
+	var ground := Rect2(minf(minf(grid_l, -12.0), eng_x - EngineHall.W) - 6.0, -grid_d - 10.0, right - minf(minf(grid_l, -12.0), eng_x - EngineHall.W) + 12.0, grid_d + 36.0)
+	if _begin_static("plant|%s|%s|%s|%s" % [str(blocks), str(ground), Look.current, str(storage_yard)]):
 		_build_plant_ground(ground, blocks, cell_w, cell_d, grid_d)
+		if storage_yard.size != Vector2.ZERO:
+			_build_yard(storage_yard)
 		Look.plant_extras(_static, ground, -2.0, [Vector3(0, 0, 12), engine_hall.position, Vector3(ground.end.x - 4.5, 0, ground.end.y - 7.0)])
 		for n in names:
 			var b: FactoryBuilding = buildings[n]
@@ -554,9 +581,105 @@ func _apply_plant(s: Dictionary) -> void:
 	blocker_heights[home.footprint()] = 2.6
 	blockers.append(engine_hall.footprint())
 	blocker_heights[engine_hall.footprint()] = EngineHall.H + 0.5
+	for t in pv_tanks.values():
+		var fr := Rect2(t.position.x - 1.0, t.position.z - 1.0, 2.0, 2.0)
+		blockers.append(fr)
+		blocker_heights[fr] = 3.2
+	for f in factories.values():
+		var fr := Rect2(f.position.x - 1.5, f.position.z - 1.1, 3.0, 2.2)
+		blockers.append(fr)
+		blocker_heights[fr] = 2.5
 	fly_ceiling = 16.0
 	# The city is centred on the gate (x = 0): make it as wide as the plant.
 	_apply_internet(s, cell_w, 2.0 * maxf(absf(grid_l), absf(grid_r)), grid_d)
+
+
+## The storage yard, east of the energy plant: a factory per StorageClass
+## along the north fence and the PersistentVolumes as tanks. Returns its
+## east edge (0 when there is nothing to show).
+func _apply_yard(s: Dictionary) -> float:
+	var pvs: Array = s.get("pvs", []) if s.get("pvs") != null else []
+	var classes: Array = s.get("storage_classes", []) if s.get("storage_classes") != null else []
+	var seen := {}
+	var fseen := {}
+	if pvs.is_empty() and classes.is_empty():
+		for k in pv_tanks.keys():
+			pv_tanks[k].queue_free()
+		pv_tanks.clear()
+		for k in factories.keys():
+			factories[k].queue_free()
+		factories.clear()
+		storage_yard = Rect2()
+		return 0.0
+	var use := {}
+	for v in s.get("volumes", []):
+		if v.get("used_pct") != null:
+			use["%s/%s" % [v.ns, v.name]] = float(v.used_pct)
+	var x0 := 10.0
+	var z0 := 3.0
+	var fw := 3.8
+	var w := maxf(classes.size() * fw, YARD_COLS * 3.2) + 3.0
+	for i in classes.size():
+		var c: Dictionary = classes[i]
+		fseen[c.name] = true
+		var f: StorageFactory = factories.get(c.name)
+		if f == null:
+			f = StorageFactory.new()
+			f.world = self
+			_entities.add_child(f)
+			factories[c.name] = f
+		f.update_data(c)
+		f.position = Vector3(x0 + 2.0 + i * fw, 0, z0 + 1.6)
+	# Broken first, then bound, then the rest; the yard holds 16 tanks.
+	var order: Array = pvs.duplicate()
+	order.sort_custom(func(a, b):
+		var ra: int = {"Failed": 0, "Released": 1, "Bound": 2}.get(str(a.status), 3)
+		var rb: int = {"Failed": 0, "Released": 1, "Bound": 2}.get(str(b.status), 3)
+		return ra < rb if ra != rb else str(a.name) < str(b.name))
+	var shown: Array = order.slice(0, YARD_COLS * YARD_ROWS)
+	for i in shown.size():
+		var p: Dictionary = shown[i]
+		seen[p.name] = true
+		var t: PVTank = pv_tanks.get(p.name)
+		if t == null:
+			t = PVTank.new()
+			t.world = self
+			_entities.add_child(t)
+			pv_tanks[p.name] = t
+		t.update_data(p, use.get(str(p.get("claim", "")), -1.0))
+		t.position = Vector3(x0 + 2.0 + (i % YARD_COLS) * 3.2, 0, z0 + 5.8 + floorf(i / float(YARD_COLS)) * 3.2)
+	for k in pv_tanks.keys():
+		if not seen.has(k):
+			pv_tanks[k].queue_free()
+			pv_tanks.erase(k)
+	for k in factories.keys():
+		if not fseen.has(k):
+			factories[k].queue_free()
+			factories.erase(k)
+	var rows := ceili(shown.size() / float(YARD_COLS))
+	storage_yard = Rect2(x0, z0, w, 5.0 + rows * 3.2 + 1.5)
+	_yard_notes = [{"pos": Vector3(x0 - 0.5, 2.2, storage_yard.get_center().y), "text": tr("STORAGE YARD (PersistentVolumes)"), "color": Vox.PEACH}]
+	if pvs.size() > shown.size():
+		_yard_notes.append({"pos": Vector3(x0 + w - 1.0, 1.5, storage_yard.end.y - 1.0), "text": "+%d pv" % (pvs.size() - shown.size()), "color": Vox.SILVER})
+	return storage_yard.end.x
+
+
+## The yard's ground, fence and sign (static).
+func _build_yard(r: Rect2) -> void:
+	var g := Node3D.new()
+	g.name = "StorageYard"
+	_static.add_child(g)
+	Vox.box(g, Vector3(r.size.x, 0.06, r.size.y), Vector3(r.get_center().x, 0.03, r.get_center().y), Color(0.34, 0.33, 0.3), 0.0, false)
+	for i in int(r.size.x / 1.2) + 1:
+		for z in [r.position.y, r.end.y]:
+			Vox.box(g, Vector3(0.12, 0.9, 0.12), Vector3(r.position.x + i * 1.2, 0.45, z), Color(0.7, 0.7, 0.72))
+	for i in int(r.size.y / 1.2) + 1:
+		for x in [r.position.x, r.end.x]:
+			if x == r.position.x and absf(r.position.y + i * 1.2 - r.get_center().y) < 1.5:
+				continue  # the gate
+			Vox.box(g, Vector3(0.12, 0.9, 0.12), Vector3(x, 0.45, r.position.y + i * 1.2), Color(0.7, 0.7, 0.72))
+	Vox.box(g, Vector3(r.size.x, 0.06, 0.06), Vector3(r.get_center().x, 0.85, r.position.y), Color(0.7, 0.7, 0.72))
+	Vox.box(g, Vector3(r.size.x, 0.06, 0.06), Vector3(r.get_center().x, 0.85, r.end.y), Color(0.7, 0.7, 0.72))
 
 
 ## Inside a pod: its detail arrived (or was refreshed).
@@ -1234,8 +1357,54 @@ func _apply_hall(s: Dictionary, ns: String) -> void:
 		if not vseen.has(vk):
 			volumes[vk].queue_free()
 			volumes.erase(vk)
-	var depth := maxf(maxf(rows * LINE_GAP, svcs.size() * DOCK_GAP), pvcs.size() * 2.6) + 6.0
-	var width := tank_x + 3.0 if not pvcs.is_empty() else dock_x + 6.0
+	# The vault: a safe per Secret, a filing cabinet per ConfigMap.
+	var cfgs: Array = s.get("configs", []).filter(func(c): return c.ns == ns) if s.get("configs") != null else []
+	var vault_x := (tank_x + 3.6) if not pvcs.is_empty() else dock_x + 4.0
+	var cseen := {}
+	for i in cfgs.size():
+		var c: Dictionary = cfgs[i]
+		var ck := "%s/%s/%s" % [c.kind, c.ns, c.name]
+		cseen[ck] = true
+		var vb: VaultBox = configs.get(ck)
+		if vb == null:
+			vb = VaultBox.new()
+			vb.world = self
+			_entities.add_child(vb)
+			configs[ck] = vb
+		vb.update_data(c)
+		vb.rotation.y = -PI * 0.5
+		vb.target = Vector3(vault_x + (i % 2) * 2.0, 0, 1.0 - floorf(i / 2.0) * 2.2)
+		if vb.position == Vector3.ZERO:
+			vb.position = vb.target
+	for ck in configs.keys():
+		if not cseen.has(ck):
+			configs[ck].queue_free()
+			configs.erase(ck)
+	# The vault room's floor (steel with hazard stripes) and the signs.
+	_hall_notes = []
+	if not pvcs.is_empty():
+		_hall_notes.append({"pos": Vector3(tank_x, 3.4, 2.6), "text": tr("TANKS (volume claims)"), "color": Vox.LAVENDER})
+	var vsig := "%s|%.1f|%d" % [ns, vault_x, cfgs.size()]
+	if vsig != _vault_sig or _vault_pad == null or not is_instance_valid(_vault_pad):
+		_vault_sig = vsig
+		if _vault_pad and is_instance_valid(_vault_pad):
+			_vault_pad.queue_free()
+		_vault_pad = null
+		if not cfgs.is_empty():
+			_vault_pad = Node3D.new()
+			_entities.add_child(_vault_pad)
+			var vrows := ceilf(cfgs.size() / 2.0)
+			var vd := vrows * 2.2 + 1.2
+			var vc := Vector3(vault_x + 1.0, 0.03, 1.0 - (vrows - 1) * 1.1)
+			Vox.box(_vault_pad, Vector3(4.4, 0.06, vd), vc, Color(0.26, 0.28, 0.33), 0.0, false)
+			for i in int(vd / 0.8):
+				var z := vc.z - vd * 0.5 + 0.4 + i * 0.8
+				Vox.box(_vault_pad, Vector3(0.3, 0.07, 0.4), Vector3(vc.x - 2.05, 0.035, z), Vox.YELLOW if i % 2 == 0 else Color(0.1, 0.1, 0.12), 0.0, false)
+				Vox.box(_vault_pad, Vector3(0.3, 0.07, 0.4), Vector3(vc.x + 2.05, 0.035, z), Vox.YELLOW if i % 2 == 0 else Color(0.1, 0.1, 0.12), 0.0, false)
+	if not cfgs.is_empty():
+		_hall_notes.append({"pos": Vector3(vault_x + 1.0, 3.2, 2.6), "text": tr("VAULT (Secrets and ConfigMaps)"), "color": Vox.YELLOW})
+	var depth := maxf(maxf(rows * LINE_GAP, svcs.size() * DOCK_GAP), maxf(pvcs.size() * 2.6, ceilf(cfgs.size() / 2.0) * 2.2)) + 6.0
+	var width := (vault_x + 4.0) if not cfgs.is_empty() else (tank_x + 3.0 if not pvcs.is_empty() else dock_x + 6.0)
 	var fl := Rect2(-3.0, -depth + 3.0, width, depth + 4.0)
 	if _begin_static("hall|%s|%s|%d|%s" % [ns, str(fl), loose.size(), Look.current]):
 		var nsc := Vox.ns_color(ns)
@@ -2000,8 +2169,53 @@ func _draw_beams() -> void:
 			if not hot and not lines_all:
 				continue
 			_beam(sv.beam_origin(), _pod_top(bot), col if hot else col.darkened(0.55), hot)
+	# Storage pipes (claim tank -> the pods that mount it) along the floor,
+	# and the vault's cables (safe / cabinet -> the pods that use it).
+	for tk in volumes.values():
+		for pname in tk.users():
+			var bot: PodBot = pods.get(tk.data.ns + "/" + pname)
+			if bot == null:
+				continue
+			var hot: bool = tk in focus or bot in focus
+			_pipe(tk.pipe_origin(), bot.global_position + Vector3(0, 0.3, 0), Color(0.55, 0.6, 0.7) if not hot else Vox.GREEN, hot)
+	for vb in configs.values():
+		var hot_box: bool = vb in focus
+		var col := VaultBox.type_color(vb.data)
+		for pname in vb.users():
+			var bot: PodBot = pods.get(vb.data.ns + "/" + pname)
+			if bot == null:
+				continue
+			var hot: bool = hot_box or bot in focus
+			if hot or lines_all:
+				_beam(vb.cable_origin(), _pod_top(bot), col if hot else col.darkened(0.55), hot)
+	# Plant: pipes from the yard to the halls whose claims live there.
+	if level == "plant" and storage_yard.size != Vector2.ZERO:
+		var done := {}
+		for t in pv_tanks.values():
+			var claim := str(t.data.get("claim", ""))
+			var ns := claim.get_slice("/", 0)
+			if claim == "" or done.has(ns) or not buildings.has(ns):
+				continue
+			done[ns] = true
+			var b: FactoryBuilding = buildings[ns]
+			_pipe(Vector3(storage_yard.position.x, 0.1, storage_yard.get_center().y), b.door_position() + Vector3(0, 0.1, 0), Color(0.45, 0.5, 0.6), t in focus or b in focus)
 	if _any_beam:
 		_beam_mesh.surface_end()
+
+
+## A pipe on the floor: out along x, then along z (with flow when hot).
+func _pipe(a: Vector3, b: Vector3, col: Color, flow: bool) -> void:
+	var y := 0.12
+	var p0 := Vector3(a.x, y, a.z)
+	var p1 := Vector3(b.x, y, a.z)
+	var p2 := Vector3(b.x, y, b.z)
+	for off in [0.0, 0.06]:
+		var o := Vector3(0, off, 0)
+		_beam(p0 + o, p1 + o, col, false)
+		_beam(p1 + o, p2 + o, col, false)
+	if flow:
+		_beam(p0 + Vector3(0, 0.1, 0), p1 + Vector3(0, 0.1, 0), col, true)
+		_beam(p1 + Vector3(0, 0.1, 0), p2 + Vector3(0, 0.1, 0), col, true)
 
 
 func _pod_top(bot: PodBot) -> Vector3:
@@ -2098,10 +2312,16 @@ func labels(player_pos: Vector3) -> Array:
 		out.append({"pos": l.anchor(), "text": l.label_text(), "sub": _hint(l, l.label_sub()), "color": l.label_color(), "big": true, "entity": l})
 	for dk in services.values():
 		out.append({"pos": dk.anchor(), "text": dk.label_text(), "sub": _hint(dk, dk.label_sub()), "color": dk.label_color(), "big": false, "entity": dk})
-	for tk in volumes.values():
+	for tk in volumes.values() + configs.values() + pv_tanks.values() + factories.values():
 		out.append({"pos": tk.anchor(), "text": tk.label_text(), "sub": _hint(tk, tk.label_sub()), "color": tk.label_color(), "big": false, "entity": tk})
 	for t in tunnels.values():
 		out.append({"pos": t.anchor(), "text": t.label_text(), "sub": _hint(t, t.label_sub()), "color": t.label_color(), "big": false, "entity": t})
+	if level.begins_with("ns:"):
+		for n in _hall_notes:
+			out.append({"pos": n.pos, "text": n.text, "sub": "", "color": n.color, "big": false, "small": true})
+	if level == "plant":
+		for n in _yard_notes:
+			out.append({"pos": n.pos, "text": n.text, "sub": "", "color": n.color, "big": false, "small": true})
 	for f in _floaters:
 		out.append({"pos": f.pos, "text": f.text, "sub": "", "color": f.color, "big": false, "small": true})
 	if engine_hall and is_instance_valid(engine_hall):

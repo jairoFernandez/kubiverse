@@ -1347,7 +1347,7 @@ func toggle_search() -> void:
 		_search_input.release_focus()
 
 
-const SEARCH_COLORS := {"namespace": Vox.BLUE, "workload": Vox.GREEN, "service": Vox.PEACH, "pod": Vox.WHITE, "node": Vox.YELLOW, "volume": Vox.LAVENDER}
+const SEARCH_COLORS := {"namespace": Vox.BLUE, "workload": Vox.GREEN, "service": Vox.PEACH, "pod": Vox.WHITE, "node": Vox.YELLOW, "volume": Vox.LAVENDER, "config": Vox.YELLOW, "pv": Vox.SILVER}
 
 func _fill_search() -> void:
 	for c in _search_list.get_children():
@@ -1441,6 +1441,16 @@ func _compute_alarms(s: Dictionary) -> Array:
 			by_sev[2].append(["pvc", v])
 		elif str(v.get("status", "")) == "Lost":
 			by_sev[3].append(["pvc", v])
+	for v in s.get("volumes", []):
+		var up := float(v.get("used_pct", 0)) if v.get("used_pct") != null else 0.0
+		if up >= 90.0:
+			by_sev[3 if up >= 97.0 else 2].append(["full", v])
+	for pv in s.get("pvs", []):
+		if str(pv.get("status", "")) in ["Released", "Failed"]:
+			by_sev[2 if pv.status == "Failed" else 1].append(["pv", pv])
+	for c in s.get("configs", []):
+		if str(c.get("exists", "")) == "no" and not (c.get("pods", []) as Array).is_empty():
+			by_sev[3].append(["cfgmissing", c])
 	for n in s.get("namespaces", []):
 		for q in (n.get("quota", []) if n.get("quota") != null else []):
 			if float(q.get("pct", 0)) >= 90.0:
@@ -1476,6 +1486,12 @@ func _compute_alarms(s: Dictionary) -> Array:
 					a["alert"] = d
 				"nodecond":
 					a.merge({"kind": "node", "key": d.name, "ns": ""})
+				"full":
+					a.merge({"kind": "volume", "key": d.ns + "/" + d.name, "ns": d.ns})
+				"pv":
+					a.merge({"kind": "pv", "key": str(d.name), "ns": ""})
+				"cfgmissing":
+					a.merge({"kind": "config", "key": "%s/%s/%s" % [d.kind, d.ns, d.name], "ns": d.ns})
 				"pvc":
 					a.merge({"kind": "volume", "key": d.ns + "/" + d.name, "ns": d.ns})
 				"quota":
@@ -1495,6 +1511,9 @@ func _compute_alarms(s: Dictionary) -> Array:
 					"stuck": a.text = tr("%s/%s  stuck in %s") % [d.ns, d.name, d.status]
 					"workload": a.text = tr("%s %s/%s  %d/%d ready") % [str(d.kind).to_lower(), d.ns, d.name, int(d.ready), int(d.desired)]
 					"nodecond": a.text = tr("node %s: %s") % [d.name, d.cond]
+					"full": a.text = tr("%s/%s  volume %d%% full") % [d.ns, d.name, int(d.used_pct)]
+					"pv": a.text = tr("pv %s %s (%s, was %s)") % [d.name, d.status, d.get("capacity", ""), d.get("claim", "")]
+					"cfgmissing": a.text = tr("%s %s/%s is MISSING: %d pods can't start") % [str(d.kind).to_lower(), d.ns, d.name, (d.get("pods", []) as Array).size()]
 					"pvc": a.text = tr("%s/%s  volume %s (class %s)") % [d.ns, d.name, d.status, d.get("class", "")]
 					"quota": a.text = tr("%s: quota %s at %d%% (%s of %s)") % [d.ns, d.q.resource, int(d.q.pct), d.q.used, d.q.hard]
 					"app": a.text = tr("Argo CD app %s: %s, %s") % [d.name, d.get("sync", "?"), d.get("health", "?")]
@@ -1615,6 +1634,9 @@ func _volume_lines(d: Dictionary) -> Array:
 	var st := str(d.get("status", ""))
 	out.append(_kv("status", "[color=#%s]%s[/color]" % [StorageTank.status_color(d).to_html(false), st]))
 	out.append(_kv("size", "%s  [color=#83769c](%s %s)[/color]" % [d.get("capacity", "-"), tr("asked"), d.get("request", "")]))
+	if d.get("used_pct") != null:
+		var up := float(d.used_pct)
+		out.append(_kv("used", "%s %d%%%s" % [StatsPanel.bar(up / 100.0, 12), int(up), ("  [color=#ff004d]%s[/color]" % tr("almost full")) if up >= 90.0 else ""]))
 	out.append(_kv("access", ", ".join(d.get("access", []))))
 	var cls := str(d.get("class", ""))
 	var sc: Dictionary = {}
@@ -1636,6 +1658,39 @@ func _volume_lines(d: Dictionary) -> Array:
 			out.append("[color=#ffec27]%s[/color]" % tr("WaitForFirstConsumer: the volume is created when a pod that uses it is scheduled."))
 		else:
 			out.append("[color=#ffec27]%s[/color]" % tr("Waiting for the provisioner: check its events (kubectl describe pvc)."))
+	return out
+
+
+## A Secret or ConfigMap: who uses it and how, never its values.
+func _config_lines(d: Dictionary) -> Array:
+	var out := []
+	var secret := str(d.kind) == "Secret"
+	out.append(_kv("namespace", d.ns))
+	if secret:
+		out.append(_kv("type", {"tls": tr("TLS certificate and key"), "registry": tr("registry credentials (imagePullSecret)")}.get(str(d.get("type", "")), tr("opaque (any data)"))))
+	match str(d.get("exists", "")):
+		"yes": out.append(_kv("exists", "[color=#00e436]%s[/color]" % tr("yes") + ("  [color=#83769c](%s)[/color]" % (tr("created %s ago") % _age(d.get("age", 0))) if float(d.get("age", 0)) > 0 else "")))
+		"no": out.append(_kv("exists", "[color=#ff004d]%s[/color]" % tr("NO: it is referenced but doesn't exist")))
+		_: out.append(_kv("exists", "[color=#83769c]%s[/color]" % tr("unknown (not allowed to list them): seen in the pods' specs")))
+	var keys: Array = d.get("keys", []) if d.get("keys") != null else []
+	if not keys.is_empty():
+		out.append(_kv("keys read", ", ".join(keys)))
+	var how: Array = d.get("how", []) if d.get("how") != null else []
+	var pods: Array = d.get("pods", []) if d.get("pods") != null else []
+	out.append(_kv("used by", (", ".join(pods.slice(0, 6)) + (" +%d" % (pods.size() - 6) if pods.size() > 6 else "")) if not pods.is_empty() else "[color=#83769c]%s[/color]" % tr("nobody (safe to clean up?)")))
+	if not how.is_empty():
+		out.append(_kv("as", ", ".join(how.map(func(h): return {"volume": tr("files (volume)"), "env": tr("env variables"), "envFrom": tr("all keys as env"), "imagePull": tr("to pull images")}.get(h, h)))))
+	var missing: Array = d.get("missing", []) if d.get("missing") != null else []
+	if not missing.is_empty():
+		out.append("[color=#ff004d]%s[/color]" % (tr("%s can't start (CreateContainerConfigError) until it exists.") % ", ".join(missing)))
+	if str(d.get("cert", "")) != "":
+		for c in K8s.state.get("certs", []):
+			if c.ns == d.ns and c.name == d.cert:
+				out.append(_kv("written by", "Certificate %s  [color=#83769c]%s[/color]" % [c.name, (tr("expires in %s") % _age(c.expires_in)) if float(c.get("expires_in", 0)) > 0 else ""]))
+	if "env" in how or "envFrom" in how:
+		out.append("[color=#83769c]%s[/color]" % tr("As env variables, a change only arrives when the pods restart; mounted as files, it updates in about a minute."))
+	if secret:
+		out.append("[color=#83769c]%s[/color]" % tr("Its values are never read or shown here (nor sent to the AI)."))
 	return out
 
 
@@ -3110,6 +3165,32 @@ func _refresh_inspector() -> void:
 		"volume":
 			_insp_title.text = tr("VOLUME CLAIM %s") % d.name
 			lines.append_array(_volume_lines(d))
+		"config":
+			_insp_title.text = ("SECRET %s" if d.kind == "Secret" else "CONFIGMAP %s") % d.name
+			lines.append_array(_config_lines(d))
+		"pv":
+			_insp_title.text = "PERSISTENT VOLUME %s" % d.name
+			lines.append(_kv("status", "[color=#%s]%s[/color]" % [PVTank.status_color(d).to_html(false), d.status]))
+			lines.append(_kv("size", str(d.get("capacity", ""))))
+			lines.append(_kv("claim", str(d.get("claim", "")) if str(d.get("claim", "")) != "" else tr("(none: free)")))
+			lines.append(_kv("class", str(d.get("class", ""))))
+			lines.append(_kv("reclaim", str(d.get("reclaim", ""))))
+			lines.append(_kv("source", str(d.get("source", ""))))
+			lines.append(_kv("age", _age(d.get("age", 0))))
+			match str(d.get("status", "")):
+				"Released":
+					lines.append("[color=#ffa300]%s[/color]" % tr("Its claim was deleted. With reclaim Retain the data is still there: back it up or delete the PV by hand; it won't be bound again as is."))
+				"Available":
+					lines.append("[color=#29adff]%s[/color]" % tr("Free: waiting for a claim that asks for its class and size."))
+		"storageclass":
+			_insp_title.text = "STORAGECLASS %s" % d.name
+			lines.append(_kv("provisioner", str(d.provisioner)))
+			lines.append(_kv("default", tr("yes: claims with no class get this one") if d.get("default", false) else tr("no")))
+			lines.append(_kv("reclaim", str(d.get("reclaim", ""))))
+			lines.append(_kv("binding", str(d.get("binding", ""))))
+			lines.append(_kv("expansion", tr("volumes can grow") if d.get("expand", false) else tr("fixed size")))
+			var bound: Array = K8s.state.get("pvs", []).filter(func(p): return p.get("class", "") == d.name)
+			lines.append(_kv("volumes", "%d" % bound.size()))
 		"node":
 			_insp_title.text = tr("NODE %s") % d.name
 			lines.append(_kv("status", ("[color=#00e436]Ready[/color]" if d.ready else "[color=#ff004d]NotReady[/color]") + ("  [color=#ffec27]%s[/color]" % tr("cordoned") if d.unschedulable else "")))

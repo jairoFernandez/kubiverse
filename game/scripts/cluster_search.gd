@@ -18,8 +18,10 @@ const KINDS := {
 	"pvc": "volume", "volume": "volume", "storage": "volume",
 	"app": "app", "argo": "app", "application": "app",
 	"cert": "cert", "certificate": "cert", "tls": "cert",
+	"secret": "config", "secrets": "config", "configmap": "config", "cm": "config", "config": "config",
+	"pv": "pv", "persistentvolume": "pv",
 }
-const ORDER := {"namespace": 0, "workload": 1, "service": 2, "pod": 3, "node": 4, "ingress": 5, "volume": 6, "app": 7, "cert": 8}
+const ORDER := {"namespace": 0, "workload": 1, "service": 2, "pod": 3, "node": 4, "ingress": 5, "volume": 6, "app": 7, "cert": 8, "config": 9, "pv": 10}
 # Row layout (arrays are much cheaper than dictionaries here).
 enum { KIND, NAME, HAY, NS, NODE, STATUS, IMAGE, IPS, BAD, SRC, RULE }
 
@@ -64,6 +66,13 @@ static func index(s: Dictionary) -> Array:
 		var cdns: Array = c.dns if c.get("dns") != null else []
 		rows.append(["cert", str(c.name).to_lower(), ("%s %s %s" % [c.ns, " ".join(cdns), c.get("issuer", "")]).to_lower(),
 			str(c.ns).to_lower(), "", "ready" if c.get("ready", false) else "not ready", "", [], not c.get("ready", false), c, null])
+	for c in _list(s, "configs"):
+		var ckeys: Array = c.keys if c.get("keys") != null else []
+		rows.append(["config", str(c.name).to_lower(), ("%s %s %s %s %s" % [c.ns, c.kind, c.get("type", ""), " ".join(ckeys), " ".join(c.get("pods", []) if c.get("pods") != null else [])]).to_lower(),
+			str(c.ns).to_lower(), "", str(c.get("exists", "")).to_lower(), "", [], str(c.get("exists", "")) == "no", c, null])
+	for pv in _list(s, "pvs"):
+		rows.append(["pv", str(pv.name).to_lower(), ("%s %s %s %s" % [pv.get("claim", ""), pv.get("class", ""), pv.get("status", ""), pv.get("source", "")]).to_lower(),
+			"", "", str(pv.get("status", "")).to_lower(), "", [], str(pv.get("status", "")) in ["Released", "Failed"], pv, null])
 	for ing in _list(s, "ingresses"):
 		var rules: Array = ing.rules if ing.get("rules") != null else []
 		for r in rules:
@@ -144,6 +153,12 @@ static func _result(r: Array) -> Dictionary:
 			return {"kind": "pod", "key": "%s/%s" % [d.ns, d.name], "ns": d.ns, "title": "%s/%s" % [d.ns, d.name], "bad": r[BAD],
 				"detail": "pod · %s · %d/%d%s%s" % [d.get("status", ""), int(d.get("ready", 0)), int(d.get("total", 0)),
 					(" · " + str(d.ip)) if str(d.get("ip", "")) != "" else "", (" · " + str(d.node)) if str(d.get("node", "")) != "" else ""]}
+	if r[KIND] == "config":
+		return {"kind": "config", "key": "%s/%s/%s" % [d.kind, d.ns, d.name], "ns": d.ns, "title": "%s/%s" % [d.ns, d.name], "bad": r[BAD],
+			"detail": "%s · %s%s" % [str(d.kind).to_lower(), ("MISSING" if r[BAD] else "%d pods" % (d.get("pods", []) as Array).size()), (" · " + str(d.type)) if str(d.get("type", "")) != "" else ""]}
+	if r[KIND] == "pv":
+		return {"kind": "pv", "key": str(d.name), "ns": "", "title": str(d.name), "bad": r[BAD],
+			"detail": "pv · %s · %s · %s" % [d.get("status", ""), d.get("capacity", ""), d.get("claim", "")]}
 	if r[KIND] == "volume":
 		return {"kind": "volume", "key": "%s/%s" % [d.ns, d.name], "ns": d.ns, "title": "%s/%s" % [d.ns, d.name], "bad": r[BAD],
 			"detail": "pvc · %s · %s · %s" % [d.get("status", ""), d.get("capacity", d.get("request", "")), d.get("class", "")]}

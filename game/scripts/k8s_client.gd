@@ -267,7 +267,7 @@ func _process(delta: float) -> void:
 		_reconnect_in = 2.0
 
 
-const COLLECTIONS := ["nodes", "namespaces", "pods", "workloads", "services", "ingresses", "alerts", "volumes", "storage_classes", "apps", "certs"]
+const COLLECTIONS := ["nodes", "namespaces", "pods", "workloads", "services", "ingresses", "alerts", "volumes", "storage_classes", "apps", "certs", "pvs", "configs"]
 var _seq := -1   # the bridge's number for the state we have (patches build on it)
 
 
@@ -332,8 +332,10 @@ func _on_patch(p: Dictionary) -> void:
 ## How the bridge names an item of a collection (bridge/delta.go).
 static func item_key(coll: String, it: Dictionary) -> String:
 	match coll:
-		"nodes", "namespaces", "storage_classes":
+		"nodes", "namespaces", "storage_classes", "pvs":
 			return str(it.name)
+		"configs":
+			return "%s/%s/%s" % [it.kind, it.ns, it.name]
 		"workloads":
 			return "%s/%s/%s" % [it.ns, it.kind, it.name]
 		"alerts":
@@ -342,6 +344,8 @@ static func item_key(coll: String, it: Dictionary) -> String:
 
 
 static func _sort_key(coll: String, it: Dictionary) -> String:
+	if coll == "configs":
+		return "%s/%s/%s" % [it.ns, it.kind, it.name]
 	if coll == "alerts":
 		return str({"critical": 0, "warning": 1, "info": 2}.get(it.get("severity", ""), 3)) + str(it.id)
 	if coll == "pods":

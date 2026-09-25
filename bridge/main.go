@@ -65,6 +65,7 @@ type Bridge struct {
 	ops        opsListers                      // HPAs and PDBs (each nil if not allowed)
 	obs        observability                   // Prometheus, Alertmanager, Loki
 	res        resListers                      // storage, policies, quotas, CRDs
+	store      storeListers                    // PVs, Secret/ConfigMap names
 	ctx        context.Context                 // lives as long as this cluster's bridge
 
 	mu      sync.Mutex
@@ -285,6 +286,7 @@ func startBridge(root context.Context, cfg *rest.Config, ctxName, kubeconfigPath
 	}
 	probeCancel()
 	b.addResources(ctx, f, cs, cfg, markDirty)
+	b.addStorageAndConfig(ctx, f, cs, cfg, markDirty)
 	b.watchEvents(ctx, f)
 
 	b.startWatch(ctx, f)
