@@ -1,8 +1,8 @@
-# KubeCraft
+# Kubiverse
 
 Tu cluster de Kubernetes **real** convertido en un mundo 3D pixel‑art (voxel) que puedes recorrer y operar.
 
-![KubeCraft conectado a un cluster real](docs/real-cluster.png)
+![Kubiverse conectado a un cluster real](docs/real-cluster.png)
 
 - **Motor:** Godot 4.7 (GDScript, renderer *Compatibility*) → exporta a **Web (WASM)**, **macOS**, **Linux** y **Windows** desde el mismo proyecto.
 - **Look pixel‑art 3D:** el mundo 3D se renderiza en un `SubViewport` a 1/3 de resolución y se escala con filtro *nearest*; materiales toon con paleta PICO‑8, contornos por *inverted hull*, cámara isométrica ortográfica con *pixel snapping*.
@@ -10,12 +10,16 @@ Tu cluster de Kubernetes **real** convertido en un mundo 3D pixel‑art (voxel) 
 
 ```
 ┌──────────────┐  WebSocket (snapshots + eventos)  ┌─────────────┐  client-go / informers  ┌──────────────┐
-│  KubeCraft   │ ◄──────────────────────────────── │ k8s-bridge  │ ◄─────────────────────► │ kube-apiserver│
+│  Kubiverse   │ ◄──────────────────────────────── │ k8s-bridge  │ ◄─────────────────────► │ kube-apiserver│
 │ (web/nativo) │ ──── HTTP /api/action, /api/logs ─►│  (Go)       │     (tu kubeconfig)     │   (real)      │
 └──────────────┘                                    └─────────────┘                         └──────────────┘
 ```
 
 ¿Por qué un bridge? Un navegador no puede hablar directamente con el API server (CORS, certificados cliente, plugins `exec` de EKS/GKE/AKS). Con el bridge, la versión web y la nativa usan exactamente el mismo protocolo y la autenticación queda en tu máquina.
+
+## Intro
+
+Al conectar un cluster, un vuelo de ~14 s presenta el mundo: el logo sobre el globo de Internet, la ciudad con tus dominios, la puerta Ingress y la planta; al final Kubi saluda. Cualquier tecla o toque la salta. En **VISTA** puedes desactivarla (**Intro al conectar**) o verla otra vez (**VER INTRO**). Los datos locales siguen en `~/.kubecraft` (nombre anterior del proyecto) para no perder configuraciones.
 
 ## La fábrica: niveles
 
@@ -225,7 +229,7 @@ Un dron tipo "Pokédex" que te sigue, mira hacia el problema más cercano (con u
 ### Motores de IA (todo local)
 
 - **Ollama**, si lo tienes (`ollama serve`): usa el mejor modelo instalado (gemma4, qwen3.5, llama3.2...) y desde AJUSTES puedes descargar modelos sugeridos en tu Ollama con barra de progreso.
-- **llama.cpp integrado**, sin instalar nada: desde AJUSTES KubeCraft descarga el build **oficial** de `github.com/ggml-org/llama.cpp` para tu sistema (~15 MB, verificado con el SHA256 que publica GitHub) y un modelo GGUF de una lista (Gemma 3 1B/4B/12B, Qwen 2.5 1.5B/3B/7B, Llama 3.2 3B) desde Hugging Face con **SHA256 fijado en el código**. Todo va a `~/.kubecraft/` y `llama-server` escucha solo en `127.0.0.1`; el bridge lo arranca al preguntar y lo para al salir.
+- **llama.cpp integrado**, sin instalar nada: desde AJUSTES Kubiverse descarga el build **oficial** de `github.com/ggml-org/llama.cpp` para tu sistema (~15 MB, verificado con el SHA256 que publica GitHub) y un modelo GGUF de una lista (Gemma 3 1B/4B/12B, Qwen 2.5 1.5B/3B/7B, Llama 3.2 3B) desde Hugging Face con **SHA256 fijado en el código**. Todo va a `~/.kubecraft/` y `llama-server` escucha solo en `127.0.0.1`; el bridge lo arranca al preguntar y lo para al salir.
 - Nunca se usan modelos `:cloud` ni servidores remotos: el juego no puede cambiar la URL del motor (solo el flag `--llm-url`).
 
 ## Modo vigía (O)
@@ -234,7 +238,7 @@ Kubernetes no tiene una API de "quién está conectado". El vigía combina tres 
 
 1. **Auditoría del API server** (identidad real: usuario, grupos, IP de origen, herramienta, verbo y recurso, y si fue denegado). Hay que activarla en el cluster; el bridge lee `~/.kubecraft/audit/<contexto>/**/audit.log` (`--audit-dir`). `make cluster-ha` crea un cluster kind con la auditoría ya activada ([`deploy/audit-policy.yaml`](deploy/audit-policy.yaml): solo metadatos, nunca el contenido de Secrets ni de las peticiones). En clusters gestionados la auditoría va al proveedor (EKS → CloudWatch, GKE → Cloud Audit Logs, AKS → Diagnostic settings).
 2. **managedFields**: qué *herramienta* cambió algo (kubectl-edit, helm, argocd...), en cualquier cluster, sin identidad.
-3. **Jugadores de KubeCraft** conectados a este bridge.
+3. **Jugadores de Kubiverse** conectados a este bridge.
 
 Con el vigía abierto cada identidad aparece como un **fantasma** que camina hacia lo que toca (a la puerta del namespace, al pod, a la isla del nodo) y lanza un rayo cuando escribe. Una identidad nueva, un acceso denegado (401/403) o tocar Secrets dispara una **alarma**. El panel se puede minimizar (`_`) sin apagar el modo. Filtra el ruido interno (nodos, controladores de kube-system); el propio bridge se marca como "este bridge" y se oculta.
 

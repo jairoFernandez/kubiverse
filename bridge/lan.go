@@ -116,7 +116,7 @@ func lanCert(dir string) (certFile, keyFile string, err error) {
 	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 62))
 	tpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "KubeCraft bridge (LAN)"},
+		Subject:      pkix.Name{CommonName: "Kubiverse bridge (LAN)"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,

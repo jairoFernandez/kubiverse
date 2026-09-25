@@ -3,7 +3,7 @@
 # alpine images) so it runs on a laptop.
 #   make scenario           kubectl apply -f deploy/complex.yaml
 #   make scenario-delete
-# What you'll see in KubeCraft:
+# What you'll see in Kubiverse:
 #   ecommerce      web shop: spread frontend, api, workers, postgres+redis
 #   data           3-broker StatefulSet, ETL CronJob (Completed pods), batch Job
 #   ml             training on the tainted GPU node, a pod that can NEVER be
@@ -334,7 +334,7 @@ spec:
           command: ["sh", "-c", "echo 'allocating...'; sleep 5; head -c 100m /dev/zero | tail > /dev/null"]
           resources: {requests: {cpu: 5m, memory: 16Mi}, limits: {memory: 32Mi}}
 # --------------------------------------------------------------- the Internet
-# Domains for the "Internet city" of KubeCraft. kind has no Ingress
+# Domains for the "Internet city" of Kubiverse. kind has no Ingress
 # controller, so their address stays pending, but the routes are shown.
 ---
 apiVersion: networking.k8s.io/v1

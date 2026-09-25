@@ -3,7 +3,7 @@ config_version=5
 
 [application]
 
-config/name="KubeCraft"
+config/name="Kubiverse"
 config/description="Explore and operate a real Kubernetes cluster as a 3D pixel-art world."
 run/main_scene="res://scenes/main.tscn"
 config/icon="res://icon.svg"

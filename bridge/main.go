@@ -1,5 +1,5 @@
 // k8s-bridge connects to a real Kubernetes cluster (using your kubeconfig)
-// and exposes a small, game-friendly HTTP + WebSocket API for KubeCraft.
+// and exposes a small, game-friendly HTTP + WebSocket API for Kubiverse.
 //
 // Browsers cannot talk to the kube-apiserver directly (CORS, client certs,
 // exec auth plugins), so both the native and the web build of the game go

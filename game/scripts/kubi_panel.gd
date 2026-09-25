@@ -454,7 +454,7 @@ func _fill_llama(lc: Dictionary, gguf: Array, cfg: Dictionary) -> void:
 			t.text += "\n[color=#ff004d]%s[/color]" % hud._esc(str(lc.error))
 		_llama_box.add_child(t)
 	else:
-		t.text = "[color=#ffa300]%s[/color] %s" % [tr("Not installed."), tr("KubeCraft can download the official build from github.com/ggml-org/llama.cpp (about 15 MB, SHA256 verified) into ~/.kubecraft.")]
+		t.text = "[color=#ffa300]%s[/color] %s" % [tr("Not installed."), tr("Kubiverse can download the official build from github.com/ggml-org/llama.cpp (about 15 MB, SHA256 verified) into ~/.kubecraft.")]
 		_llama_box.add_child(t)
 		if str(lc.get("platform", "")) != "":
 			_llama_box.add_child(hud._button("DOWNLOAD LLAMA.CPP", func(): _confirm_download("llamacpp", "",

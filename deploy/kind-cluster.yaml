@@ -1,4 +1,4 @@
-# Multi-node playground cluster for KubeCraft:
+# Multi-node playground cluster for Kubiverse:
 #   make cluster        (kind create cluster --config deploy/kind-cluster.yaml)
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4

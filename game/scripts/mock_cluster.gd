@@ -417,15 +417,20 @@ func _emit() -> void:
 			"ports": sv.ports, "selector": {"app": sv.app}, "pods": backends, "ready": ready, "external": ext, "node_ports": nps})
 	# Ingresses: domains of the demo shop, one route pointing to a Service that doesn't exist.
 	s["ingresses"] = [
-		{"ns": "shop", "name": "storefront", "class": "nginx", "tls": ["shop.kubecraft.dev"], "address": ["198.51.100.7"],
-			"rules": [{"host": "shop.kubecraft.dev", "path": "/", "service": "frontend", "port": "80"},
-				{"host": "shop.kubecraft.dev", "path": "/cart", "service": "cart", "port": "8080"}]},
+		{"ns": "shop", "name": "storefront", "class": "nginx", "tls": ["shop.kubiverse.dev"], "address": ["198.51.100.7"],
+			"rules": [{"host": "shop.kubiverse.dev", "path": "/", "service": "frontend", "port": "80"},
+				{"host": "shop.kubiverse.dev", "path": "/cart", "service": "cart", "port": "8080"}]},
 		{"ns": "payments", "name": "payments-api", "class": "nginx", "tls": [], "address": ["198.51.100.7"],
-			"rules": [{"host": "pay.kubecraft.dev", "path": "/", "service": "ledger", "port": "9000"},
-				{"host": "pay.kubecraft.dev", "path": "/fraud", "service": "fraud-ai", "port": "8501"}]},
-		{"ns": "monitoring", "name": "grafana", "class": "nginx", "tls": ["grafana.kubecraft.dev"], "address": ["198.51.100.7"],
-			"rules": [{"host": "grafana.kubecraft.dev", "path": "/", "service": "prometheus", "port": "9100"}]},
+			"rules": [{"host": "pay.kubiverse.dev", "path": "/", "service": "ledger", "port": "9000"},
+				{"host": "pay.kubiverse.dev", "path": "/fraud", "service": "fraud-ai", "port": "8501"}]},
+		{"ns": "monitoring", "name": "grafana", "class": "nginx", "tls": ["grafana.kubiverse.dev"], "address": ["198.51.100.7"],
+			"rules": [{"host": "grafana.kubiverse.dev", "path": "/", "service": "prometheus", "port": "9100"}]},
 	]
+	if "--many-hosts" in OS.get_cmdline_user_args():  # dev: stress the city layout
+		for i in 11:
+			var h := "app%d.%s.kubiverse.dev" % [i, ["eu", "us", "lab"][i % 3]]
+			s.ingresses.append({"ns": "shop", "name": "extra%d" % i, "class": "nginx", "tls": [h] if i % 2 == 0 else [], "address": [],
+				"rules": [{"host": h, "path": "/", "service": "frontend", "port": "80"}, {"host": h, "path": "/api", "service": "cart", "port": "8080"}]})
 	# Fake but plausible metrics-server data.
 	var m := {"available": true, "nodes": {}, "pods": {}}
 	for p in pods.values():

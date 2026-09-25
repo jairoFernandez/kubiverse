@@ -15,6 +15,7 @@ signal add_cp_requested
 signal jetpack_requested
 signal touch_mode_changed
 signal watch_toggled(on: bool)
+signal intro_requested
 
 const BG := Color(0.043, 0.051, 0.102, 0.92)
 const PANEL := Color(0.114, 0.169, 0.325, 0.96)
@@ -70,6 +71,7 @@ var flying := false
 var _view_jet: CheckBox
 var _view_click: CheckBox
 var _view_finished: CheckBox
+var _view_intro: CheckBox
 var _view_touch: Button
 var _vol_panel: PanelContainer
 var _vol_mute: CheckBox
@@ -394,7 +396,7 @@ func _build_connect_ui() -> void:
 	_connect_v = v
 	var title := Label.new()
 	_connect_title = title
-	title.text = "KUBECRAFT"
+	title.text = "KUBIVERSE"
 	title.add_theme_font_override("font", _title_font)
 	title.add_theme_font_size_override("font_size", 38)
 	title.add_theme_color_override("font_color", Vox.YELLOW)
@@ -722,7 +724,7 @@ func _build_game_ui() -> void:
 	bar.add_child(h)
 	var logo := Label.new()
 	logo.name = "Logo"
-	logo.text = "KUBECRAFT"
+	logo.text = "KUBIVERSE"
 	logo.add_theme_font_override("font", _title_font)
 	logo.add_theme_font_size_override("font_size", 16)
 	logo.add_theme_color_override("font_color", Vox.YELLOW)
@@ -821,6 +823,15 @@ func _build_game_ui() -> void:
 		if world:
 			world.apply_state(K8s.state))  # redraw with / without them
 	vv.add_child(_view_finished)
+	var ir := HBoxContainer.new()
+	_view_intro = _check("Intro when connecting", func():
+		Settings.intro = not Settings.intro
+		Settings.save())
+	ir.add_child(_view_intro)
+	ir.add_child(_button("PLAY INTRO", func():
+		close_top()
+		intro_requested.emit()))
+	vv.add_child(ir)
 	_view_touch = _button("", func():
 		Settings.touch = {"auto": "on", "on": "off", "off": "auto"}[Settings.touch]
 		Settings.save()
@@ -1281,6 +1292,8 @@ func _sync_view() -> void:
 		_view_click.set_pressed_no_signal(Settings.click_to_move)
 	if _view_finished:
 		_view_finished.set_pressed_no_signal(Settings.show_finished)
+	if _view_intro:
+		_view_intro.set_pressed_no_signal(Settings.intro)
 	if _view_touch:
 		_view_touch.text = tr("Touch controls: %s") % tr({"auto": "automatic", "on": "on", "off": "off"}[Settings.touch])
 	if _vol_mute:

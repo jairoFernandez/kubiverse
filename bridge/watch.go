@@ -26,7 +26,7 @@ import (
 //           bridge tails <audit-dir>/<context>/**/audit.log.
 //   fields  managedFields on objects: which *tool* last changed something
 //           (kubectl-edit, helm, argocd...). Works on any cluster, no identity.
-//   player  KubeCraft clients connected to this bridge.
+//   player  Kubiverse clients connected to this bridge.
 
 var auditDir = defaultAuditDir()
 
@@ -52,7 +52,7 @@ type Visitor struct {
 	LastRes    string   `json:"last_resource"`
 	LastName   string   `json:"last_name"`
 	Secrets    bool     `json:"secrets"` // has read or changed Secrets
-	Self       bool     `json:"self"`    // this bridge (KubeCraft itself)
+	Self       bool     `json:"self"`    // this bridge (Kubiverse itself)
 }
 
 type watchState struct {
@@ -371,9 +371,9 @@ func (b *Bridge) players() []Visitor {
 	for c := range b.clients {
 		agent := c.agent
 		if agent == "" {
-			agent = "KubeCraft"
+			agent = "Kubiverse"
 		}
-		out = append(out, Visitor{Key: "player|" + c.addr, User: "KubeCraft player", Agent: agent, IPs: []string{c.ip},
+		out = append(out, Visitor{Key: "player|" + c.addr, User: "Kubiverse player", Agent: agent, IPs: []string{c.ip},
 			Source: "player", First: c.since.Unix(), Last: time.Now().Unix()})
 	}
 	return out

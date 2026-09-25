@@ -1,4 +1,4 @@
-# Audit policy for KubeCraft's WATCHTOWER mode: who talks to the API server.
+# Audit policy for Kubiverse's WATCHTOWER mode: who talks to the API server.
 # Metadata only (user, verb, resource, source IP, user agent): request and
 # response bodies (e.g. Secret values) are never logged.
 apiVersion: audit.k8s.io/v1

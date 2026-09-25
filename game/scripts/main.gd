@@ -209,6 +209,10 @@ func _ready() -> void:
 		else:
 			hud.show_cp_guide())
 	hud.level_requested.connect(_go_level)
+	hud.intro_requested.connect(func():
+		if world.level != "plant":
+			_go_level("plant")
+		_start_intro.call_deferred())
 	hud.goto_requested.connect(_goto)
 
 	missions = Missions.new()
@@ -243,6 +247,8 @@ func _ready() -> void:
 			# The level only exists once the first snapshot arrives.
 			_need_spawn = false
 			player.teleport(world.spawn)
+			if Settings.intro and not "--shot" in " ".join(OS.get_cmdline_user_args()) or "--intro" in OS.get_cmdline_user_args():
+				_start_intro.call_deferred()
 		missions.notify("state")
 		_kubi_state(s))
 	K8s.watch_updated.connect(func(w):
@@ -1048,6 +1054,8 @@ func _process(delta: float) -> void:
 	if player.moving:
 		_pan = _pan.lerp(Vector3.ZERO, clampf(delta * 3.0, 0.0, 1.0))
 	var focus := player.global_position + _pan + Vector3(0, 0.8, 0)
+	if _intro_t >= 0.0:
+		focus = _intro_tick(delta)
 	var basis := _pivot.global_basis * _cam.basis
 	var local := basis.inverse() * focus
 	var px := _zoom / maxf(1.0, float(_vp.size.y))
@@ -1470,6 +1478,16 @@ var _door_armed := false      # doors only trigger after you have stepped off on
 var _prev_level := "plant"
 var _zone := ""               # area the player is in, for the zone banner
 var _need_spawn := true       # place the player once the level has been built
+# Opening fly-through (Internet -> Ingress gate -> the plant). -1 = not playing.
+var _intro_t := -1.0
+var _intro_keys: Array = []   # [{t, focus, zoom, yaw}]
+var _intro_ui: IntroOverlay
+var _intro_layer: CanvasLayer
+const INTRO_CAPTIONS := [
+	{"from": 3.8, "to": 6.6, "text": "The Internet: every request to your domains starts here"},
+	{"from": 6.8, "to": 9.4, "text": "The Ingress gate sends each domain to its Service"},
+	{"from": 9.6, "to": 12.6, "text": "Inside, your cluster: each building is a namespace, each robot a pod"},
+]
 
 
 ## Mario-style warp: hop onto the pipe, sink into it spinning, fade out,
@@ -2335,3 +2353,87 @@ func _zoom_max() -> float:
 ## World pixel scale: the base one, finer when zoomed far out.
 func _pixel_scale() -> int:
 	return maxi(1, roundi(_base_px * clampf(26.0 / maxf(_zoom, 1.0), 0.34, 1.0)))
+
+
+## Starts the opening fly-through: from the Internet globe, along the road
+## through the Ingress gate, down to the player. Any key or tap skips it.
+func _start_intro() -> void:
+	if world.level != "plant" or world.gate == null or _fpv:
+		return
+	var globe: Vector3 = world.internet._globe.global_position if world.internet and world.internet._globe else world.gate.global_position + Vector3(0, 10, -30)
+	var gate: Vector3 = world.gate.global_position
+	var home := player.global_position + Vector3(0, 0.8, 0)
+	var y0 := _yaw_target
+	_intro_keys = [
+		{"t": 0.0, "focus": globe + Vector3(0, -2, 0), "zoom": 30.0, "yaw": y0 - 70.0},
+		{"t": 3.6, "focus": Vector3(gate.x, 5.0, gate.z - 16.0), "zoom": 36.0, "yaw": y0 - 40.0},
+		{"t": 6.6, "focus": Vector3(gate.x, 2.0, gate.z - 7.0), "zoom": 30.0, "yaw": y0 - 20.0},
+		{"t": 9.4, "focus": gate + Vector3(0, 2, 0), "zoom": 22.0, "yaw": y0 - 5.0},
+		{"t": 12.6, "focus": home.lerp(gate, 0.25), "zoom": 30.0, "yaw": y0},
+		{"t": 14.0, "focus": home, "zoom": _zoom_target, "yaw": y0},
+	]
+	_intro_t = 0.0
+	for a in OS.get_cmdline_user_args():  # dev: --intro-at=SECONDS jumps into the fly-through
+		if a.begins_with("--intro-at="):
+			_intro_t = float(a.substr(11))
+	_pan = Vector3.ZERO
+	_cancel_path()
+	hud.visible = false
+	if _intro_layer == null:
+		_intro_layer = CanvasLayer.new()
+		_intro_layer.layer = 20
+		add_child(_intro_layer)
+		_intro_ui = IntroOverlay.new()
+		_intro_ui.title_font = hud._title_font
+		_intro_ui.font = hud._font
+		_intro_ui.captions = INTRO_CAPTIONS
+		_intro_layer.add_child(_intro_ui)
+	_intro_ui.total = _intro_keys[-1].t
+	_intro_layer.visible = true
+	Sfx.play("jingle")
+
+
+func _intro_tick(delta: float) -> Vector3:
+	if not "--intro-freeze" in OS.get_cmdline_user_args():  # dev: hold a frame for screenshots
+		_intro_t += delta
+	player.input_enabled = false
+	_intro_ui.t = _intro_t
+	var keys := _intro_keys
+	if _intro_t >= keys[-1].t:
+		_end_intro()
+		return player.global_position + Vector3(0, 0.8, 0)
+	var i := 0
+	while i < keys.size() - 2 and _intro_t >= keys[i + 1].t:
+		i += 1
+	var a: Dictionary = keys[i]
+	var b: Dictionary = keys[i + 1]
+	var k := smoothstep(0.0, 1.0, (_intro_t - a.t) / (b.t - a.t))
+	_zoom = lerpf(a.zoom, b.zoom, k)
+	_yaw = lerpf(a.yaw, b.yaw, k)
+	_cam.size = _zoom
+	_pivot.rotation_degrees.y = _yaw
+	return (a.focus as Vector3).lerp(b.focus, k)
+
+
+func _end_intro() -> void:
+	if _intro_t < 0.0:
+		return
+	_intro_t = -1.0
+	_yaw = _yaw_target
+	_zoom = _zoom_target
+	_intro_layer.visible = false
+	hud.visible = true
+	_kubi.mood = "talking"
+	_kubi.say(tr("Hi! I'm Kubi. Tap anything; tap me if you need me.") if hud.touch else tr("Hi! I'm Kubi. Click anything; press Y if you need me."), 7.0, Vox.GREEN)
+	get_tree().create_timer(7.0).timeout.connect(func(): _kubi.mood = "alert" if _kubi_count > 0 else "ok")
+
+
+func _input(event: InputEvent) -> void:
+	if _intro_t < 0.0:
+		return
+	var skip: bool = (event is InputEventKey and event.pressed and not event.echo) or (event is InputEventMouseButton and event.pressed) \
+		or (event is InputEventScreenTouch and event.pressed)
+	if skip and _intro_t > 0.3:
+		_end_intro()
+	if skip or event is InputEventMouseButton or event is InputEventScreenTouch or event is InputEventKey:
+		get_viewport().set_input_as_handled()

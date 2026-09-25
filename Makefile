@@ -26,13 +26,13 @@ web: game-import
 	mkdir -p build/web && $(GODOT) --headless --path game --export-release "Web" ../build/web/index.html
 
 macos: game-import
-	mkdir -p build/macos && $(GODOT) --headless --path game --export-release "macOS" ../build/macos/KubeCraft.zip
+	mkdir -p build/macos && $(GODOT) --headless --path game --export-release "macOS" ../build/macos/Kubiverse.zip
 
 linux: game-import
 	mkdir -p build/linux && $(GODOT) --headless --path game --export-release "Linux" ../build/linux/kubecraft.x86_64
 
 windows: game-import
-	mkdir -p build/windows && $(GODOT) --headless --path game --export-release "Windows" ../build/windows/KubeCraft.exe
+	mkdir -p build/windows && $(GODOT) --headless --path game --export-release "Windows" ../build/windows/Kubiverse.exe
 
 native: macos linux windows
 

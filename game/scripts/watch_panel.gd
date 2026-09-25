@@ -1,7 +1,7 @@
 class_name WatchPanel
 extends PanelContainer
 ## WATCHTOWER (O): who is using the cluster. Lists the identities seen by
-## the bridge (API audit log, managedFields, KubeCraft players) and a feed
+## the bridge (API audit log, managedFields, Kubiverse players) and a feed
 ## of what they did. Raises an alarm when a new identity shows up.
 
 signal intruder(v: Dictionary, why: String)
@@ -73,7 +73,7 @@ static func tool_name(agent: String) -> String:
 	var a := agent.to_lower()
 	for k in ["kubectl", "helm", "argocd", "flux", "k9s", "lens", "terraform", "curl", "python", "browser", "kubeadm", "kubecraft", "k8sgame"]:
 		if a.begins_with(k) or a.contains(k):
-			return {"k8sgame": "KubeCraft", "kubecraft": "KubeCraft"}.get(k, k)
+			return {"k8sgame": "Kubiverse", "kubecraft": "Kubiverse"}.get(k, k)
 	return agent.get_slice("/", 0) if agent != "" else "?"
 
 
@@ -136,7 +136,7 @@ func _render() -> void:
 	else:
 		var dir: String = data.get("audit_dir", "~/.kubecraft/audit/<context>")
 		_status.text = "[color=#ffa300]%s[/color] %s\n[color=#83769c]%s[/color]\n[color=#ffec27]$[/color] [url=make cluster-ha]make cluster-ha[/url]  [color=#83769c]%s[/color]\n[color=#83769c]%s[/color] %s" % [
-			tr("No audit log:"), tr("Kubernetes has no 'who is connected' API. Without audit I only see which TOOL changed things (managedFields) and KubeCraft players."),
+			tr("No audit log:"), tr("Kubernetes has no 'who is connected' API. Without audit I only see which TOOL changed things (managedFields) and Kubiverse players."),
 			tr("Turn on API server audit logging and let the bridge read it:"),
 			tr("(kind cluster with audit, see deploy/kind-ha.yaml)"),
 			tr("Bridge reads:"), dir + "/**/audit.log"]

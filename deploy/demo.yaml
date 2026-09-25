@@ -1,4 +1,4 @@
-# Sample workloads to make the KubeCraft world interesting.
+# Sample workloads to make the Kubiverse world interesting.
 #   kubectl apply -f deploy/demo.yaml
 #   kubectl delete -f deploy/demo.yaml
 apiVersion: v1

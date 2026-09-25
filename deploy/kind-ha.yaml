@@ -1,5 +1,5 @@
 # High-availability playground: 3 control-plane nodes (etcd quorum of 3,
-# survives 1 failure) + 2 workers, with API audit logging on so KubeCraft's
+# survives 1 failure) + 2 workers, with API audit logging on so Kubiverse's
 # WATCHTOWER mode can show who is using the cluster.
 #   make cluster-ha        make cluster-ha-delete
 # Don't use directly: the Makefile replaces @AUDIT@ (host dir for the audit

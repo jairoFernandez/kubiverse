@@ -58,13 +58,25 @@ func setup(routes: Array, lbs: Array, layout: Dictionary) -> void:
 	for r in routes:
 		if not r.host in hosts:
 			hosts.append(r.host)
-	var bx := {}
+	# Billboards on a grid (up to 4 rows into the city; odd rows shifted half
+	# a cell so the roads of the back rows pass between the front ones).
+	var city_w := gw + 34.0 - 8.0
+	var cols := maxi(1, int(city_w / 11.0))
+	var rows := ceili(float(hosts.size()) / cols)
+	if rows > 4:
+		cols = ceili(hosts.size() / 4.0)
+		rows = 4
+	var cell := city_w / cols
+	var bpos := {}
 	for i in hosts.size():
-		var x := -gw * 0.5 + 4.0 + (gw - 8.0) * (float(i) + 0.5) / maxf(1.0, hosts.size())
-		bx[hosts[i]] = x
+		var row := i / cols
+		var col_i := i % cols
+		var shift := cell * 0.5 if row % 2 == 1 else 0.0
+		var x := -city_w * 0.5 + cell * (col_i + 0.5) + shift - (cell * 0.25 if row % 2 == 1 else 0.0)
 		var h: String = hosts[i]
 		var col := host_color(h)
-		var base := Vector3(x, 0, z0 - 9.0)
+		var base := Vector3(x, 0, z0 - 7.5 - row * 5.5)
+		bpos[h] = base
 		if build or not _boards.has(base + Vector3(0, 4.4, 0)):
 			_boards.append(base + Vector3(0, 4.4, 0))
 		if build:
@@ -81,9 +93,14 @@ func setup(routes: Array, lbs: Array, layout: Dictionary) -> void:
 				Vox.box(_static, Vector3(0.5, 0.45, 0.2), base + Vector3(1.9, 4.3, 0.2), Vox.YELLOW, 2.0, false)
 			if build:
 				Vox.box(_static, Vector3(0.3, 0.3, 0.12), base + Vector3(1.9, 4.65, 0.2), Vox.YELLOW.darkened(0.3), 1.0, false)
-		var dests := routes.filter(func(r): return r.host == h).map(func(r): return "%s -> %s/%s%s" % [r.path, r.ns, r.service, "" if r.status == "ok" else " (!)"])
+		# Short plate: the domain and how many routes (details: click the gate).
+		var mine := routes.filter(func(r): return r.host == h)
+		var bad := mine.filter(func(r): return r.status != "ok").size()
+		var sub := tr("%d routes") % mine.size() if mine.size() != 1 else "%s -> %s" % [mine[0].path, mine[0].service]
+		if bad > 0:
+			sub += "  " + tr("(%d broken)") % bad
 		signs.append({"pos": base + Vector3(0, 5.0, 0), "text": (h if h != "" else "*") + ("  [HTTPS]" if tls else ""),
-			"sub": "\n".join(dests.slice(0, 3)) + ("\n..." if dests.size() > 3 else ""), "color": col, "big": false})
+			"sub": sub, "color": col if bad == 0 else Vox.RED, "big": false, "small": true})
 		# City road from the billboard to the gate road
 		if build:
 			_road([base + Vector3(0, 0, 0.8), Vector3(x, 0, z0 - 4.5), Vector3(0, 0, z0 - 4.5)], Color("2a2d3c"))
@@ -93,8 +110,8 @@ func setup(routes: Array, lbs: Array, layout: Dictionary) -> void:
 	# Routes: billboard -> gate -> street -> hall door
 	for r in routes:
 		var col := host_color(r.host)
-		var x: float = bx[r.host]
-		var pts := [Vector3(x, 0, z0 - 8.2), Vector3(x, 0, z0 - 4.5), Vector3(0, 0, z0 - 4.5), gate + Vector3(0, 0, -1.0)]
+		var bp: Vector3 = bpos[r.host]
+		var pts := [bp + Vector3(0, 0, 0.8), Vector3(bp.x, 0, z0 - 4.5), Vector3(0, 0, z0 - 4.5), gate + Vector3(0, 0, -1.0)]
 		var broken: bool = r.status != "ok" or not layout.doors.has(r.ns)
 		if not broken:
 			var door: Vector3 = layout.doors[r.ns]
@@ -136,14 +153,14 @@ func setup(routes: Array, lbs: Array, layout: Dictionary) -> void:
 
 func _build_city(z0: float, gw: float) -> void:
 	var w := gw + 34.0
-	Vox.box(_static, Vector3(w, 0.4, 26.0), Vector3(0, -0.25, z0 - 15.0), Color("1a1d2e"))
+	Vox.box(_static, Vector3(w, 0.4, 40.0), Vector3(0, -0.25, z0 - 21.0), Color("1a1d2e"))
 	Vox.box(_static, Vector3(w, 0.06, 1.0), Vector3(0, 0.0, z0 - 2.0), Vox.YELLOW.darkened(0.4), 0.0, false)  # city limit line
 	var rng := Vox.rng_for("city")
 	var x := -w * 0.5 + 2.0
 	while x < w * 0.5 - 2.0:
 		for row in 2:
 			var h := rng.randf_range(3.0, 12.0) * (1.0 if row == 1 else 0.6)
-			var z := z0 - 16.0 - row * 6.0 + rng.randf_range(-1.0, 1.0)
+			var z := z0 - 30.0 - row * 6.0 + rng.randf_range(-1.0, 1.0)
 			var bw := rng.randf_range(2.2, 3.6)
 			var col: Color = [Color("283050"), Color("3a2a50"), Color("2a3a48"), Color("3c3450")][rng.randi() % 4]
 			Vox.box(_static, Vector3(bw, h, bw), Vector3(x, h * 0.5, z), col)
@@ -162,7 +179,7 @@ func _build_city(z0: float, gw: float) -> void:
 		x += rng.randf_range(3.2, 4.6)
 	# The Internet: a glowing voxel globe floating over the city.
 	_globe = Node3D.new()
-	_globe.position = Vector3(0, 13.0, z0 - 22.0)
+	_globe.position = Vector3(0, 14.0, z0 - 36.0)
 	_static.add_child(_globe)
 	for lat in range(-60, 90, 30):
 		var r := 3.2 * cos(deg_to_rad(lat))

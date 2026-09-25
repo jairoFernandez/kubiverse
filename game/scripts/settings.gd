@@ -26,6 +26,7 @@ var master_volume := 1.0
 var muted := false
 var click_to_move := true
 var touch := "auto"
+var intro := true           # opening fly-through when a cluster connects
 var show_finished := false   # draw every Completed pod (they can be thousands)   # on-screen touch controls: auto | on | off
 
 
@@ -52,6 +53,7 @@ func _ready() -> void:
 		click_to_move = cf.get_value("controls", "click_to_move", click_to_move)
 		touch = cf.get_value("controls", "touch", touch)
 		show_finished = cf.get_value("ui", "show_finished", show_finished)
+		intro = cf.get_value("ui", "intro", intro)
 	apply_audio()
 
 
@@ -90,6 +92,7 @@ func save() -> void:
 	cf.set_value("controls", "click_to_move", click_to_move)
 	cf.set_value("controls", "touch", touch)
 	cf.set_value("ui", "show_finished", show_finished)
+	cf.set_value("ui", "intro", intro)
 	cf.save(PATH)
 	apply_audio()
 	changed.emit()
