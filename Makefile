@@ -30,7 +30,7 @@ macos: game-import
 	mkdir -p build/macos && $(GODOT) --headless --path game --export-release "macOS" ../build/macos/Kubiverse.zip
 
 linux: game-import
-	mkdir -p build/linux && $(GODOT) --headless --path game --export-release "Linux" ../build/linux/kubecraft.x86_64
+	mkdir -p build/linux && $(GODOT) --headless --path game --export-release "Linux" ../build/linux/kubiverse.x86_64
 
 windows: game-import
 	mkdir -p build/windows && $(GODOT) --headless --path game --export-release "Windows" ../build/windows/Kubiverse.exe

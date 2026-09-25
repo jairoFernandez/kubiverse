@@ -20,6 +20,7 @@ var _slices: Array[MeshInstance3D] = []
 var _fire_cd := 0.0
 var _glitch_next := 1.0
 var _glitch_left := 0.0
+var info := {}       # NsCatalog.info(): district, style, logo, tag
 
 
 func _init() -> void:
@@ -31,6 +32,7 @@ func setup(ns_name: String, st: Dictionary, power := false) -> void:
 	key = ns_name
 	data = {"name": ns_name}
 	stats = st
+	info = {} if power else NsCatalog.info(ns_name)
 	var n: int = st.get("pods", 0)
 	w = clampf(7.0 + sqrt(float(n + st.get("workloads", 0) * 2)) * 1.6, 7.0, 16.0)
 	d = clampf(w * 0.7, 6.0, 11.0)
@@ -82,9 +84,10 @@ func _corrupt(t: String) -> String:
 func label_sub() -> String:
 	if is_power:
 		return tr("%d nodes, %d ready") % [stats.get("nodes", 0), stats.get("ready", 0)] + ((tr(", %d cordoned") % stats.cordoned) if stats.get("cordoned", 0) else "")
+	var tag: String = tr(info.get("tag", "")) + " · " if info.get("tag", "") != "" else ""
 	if stats.get("pods", 0) == 0 and stats.get("workloads", 0) == 0:
-		return tr("empty")
-	var t := tr("%d pods: %d ok") % [stats.get("pods", 0), stats.get("ok", 0)]
+		return tag + tr("empty")
+	var t := tag + tr("%d pods: %d ok") % [stats.get("pods", 0), stats.get("ok", 0)]
 	if stats.get("wait", 0):
 		t += tr(", %d waiting") % stats.wait
 	if stats.get("bad", 0):
@@ -129,14 +132,21 @@ func _rebuild() -> void:
 	Vox.box(_geo, Vector3(w + 0.6, 0.2, d + 0.6), Vector3(0, 0.1, 0), Vox.SLATE)
 	Vox.box(_geo, Vector3(w, h, d), Vector3(0, h * 0.5 + 0.2, 0), wall)
 	Vox.box(_geo, Vector3(w + 0.04, 0.35, d + 0.04), Vector3(0, h - 0.3, 0), nsc.darkened(0.1))
-	# Saw-tooth factory roof
-	var teeth := maxi(2, int(w / 2.2))
-	var tw := w / teeth
-	for i in teeth:
-		var x := -w * 0.5 + tw * (i + 0.5)
-		var tooth := Vox.box(_geo, Vector3(tw * 0.95, 0.9, d), Vector3(x, h + 0.55, 0), wall_dark)
-		tooth.rotation.z = deg_to_rad(-18)
-		Vox.box(_geo, Vector3(0.1, 0.7, d - 0.2), Vector3(x + tw * 0.42, h + 0.55, 0), Vox.BLUE.darkened(0.3), 0.4, false)
+	var style: String = info.get("style", "factory")
+	var roof_top := h + 1.0
+	if style == "factory" or is_power:
+		# Saw-tooth factory roof
+		var teeth := maxi(2, int(w / 2.2))
+		var tw := w / teeth
+		for i in teeth:
+			var x := -w * 0.5 + tw * (i + 0.5)
+			var tooth := Vox.box(_geo, Vector3(tw * 0.95, 0.9, d), Vector3(x, h + 0.55, 0), wall_dark)
+			tooth.rotation.z = deg_to_rad(-18)
+			Vox.box(_geo, Vector3(0.1, 0.7, d - 0.2), Vector3(x + tw * 0.42, h + 0.55, 0), Vox.BLUE.darkened(0.3), 0.4, false)
+	else:
+		Vox.box(_geo, Vector3(w + 0.3, 0.3, d + 0.3), Vector3(0, h + 0.35, 0), wall_dark)
+		roof_top = h + 0.5
+		_style_extras(style, nsc, wall, wall_dark)
 	# Door (front, +z) with frame and light
 	Vox.box(_geo, Vector3(2.4, 2.6, 0.12), Vector3(0, 1.5, d * 0.5 + 0.02), Color("1b1b2a"), 0.0, false)
 	Vox.box(_geo, Vector3(2.8, 0.3, 0.3), Vector3(0, 2.95, d * 0.5 + 0.1), nsc)
@@ -171,6 +181,8 @@ func _rebuild() -> void:
 				c = Vox.BLUE.darkened(0.2)
 				glow = 0.8
 		Vox.box(_geo, Vector3(0.6, 0.55, 0.06), Vector3(x, 1.2 + row * 0.9, d * 0.5 + 0.03), c, glow, false)
+	if info.get("logo", "") != "":
+		_logo(info.logo, roof_top)
 	# Roof beacon = health
 	_beacon = Vox.box(_geo, Vector3(0.5, 0.5, 0.5), Vector3(w * 0.5 - 0.8, h + 1.4, -d * 0.5 + 0.8), health_color(), 3.0)
 	Vox.box(_geo, Vector3(0.2, 0.6, 0.2), Vector3(w * 0.5 - 0.8, h + 0.9, -d * 0.5 + 0.8), Vox.SLATE)
@@ -260,3 +272,116 @@ func _end_glitch() -> void:
 		_geo.scale = Vector3.ONE
 	for sl in _slices:
 		sl.visible = false
+
+
+## Extra geometry that makes each kind of namespace recognisable.
+func _style_extras(style: String, nsc: Color, wall: Color, dark: Color) -> void:
+	var top := h + 0.5
+	match style:
+		"castle":  # the cluster's own namespaces: a small fortress
+			var n := int(w / 1.2)
+			for i in n:
+				var x := -w * 0.5 + 0.3 + i * (w - 0.6) / maxf(1.0, n - 1)
+				if i % 2 == 0:
+					Vox.box(_geo, Vector3(0.5, 0.6, 0.5), Vector3(x, top + 0.3, d * 0.5 - 0.1), dark)
+					Vox.box(_geo, Vector3(0.5, 0.6, 0.5), Vector3(x, top + 0.3, -d * 0.5 + 0.1), dark)
+			for cx in [-1.0, 1.0]:
+				for cz in [-1.0, 1.0]:
+					var p := Vector3(cx * (w * 0.5 - 0.3), 0, cz * (d * 0.5 - 0.3))
+					Vox.box(_geo, Vector3(1.3, h + 1.8, 1.3), p + Vector3(0, (h + 1.8) * 0.5 + 0.2, 0), wall.lightened(0.05))
+					Vox.box(_geo, Vector3(1.5, 0.35, 1.5), p + Vector3(0, h + 2.15, 0), nsc)
+					Vox.box(_geo, Vector3(0.2, 0.9, 0.05), p + Vector3(0, h + 3.0, 0), Vox.SILVER)
+					Vox.box(_geo, Vector3(0.6, 0.35, 0.05), p + Vector3(0.4, h + 3.25, 0), nsc, 1.0, false)
+		"tower":  # GitOps: a lighthouse that keeps everything in sync
+			var p := Vector3(-w * 0.5 + 1.3, 0, -d * 0.5 + 1.3)
+			Vox.box(_geo, Vector3(2.0, h + 5.0, 2.0), p + Vector3(0, (h + 5.0) * 0.5 + 0.2, 0), wall.lightened(0.1))
+			for i in 3:
+				Vox.box(_geo, Vector3(2.08, 0.3, 2.08), p + Vector3(0, h * 0.5 + i * 2.0, 0), nsc.darkened(0.15))
+			Vox.box(_geo, Vector3(1.4, 1.0, 1.4), p + Vector3(0, h + 5.7, 0), Vox.YELLOW, 2.5, false)
+			Vox.box(_geo, Vector3(2.2, 0.3, 2.2), p + Vector3(0, h + 6.35, 0), nsc)
+		"crane":  # platform builders: construction crane on the roof
+			var p := Vector3(w * 0.5 - 1.2, top, -d * 0.5 + 1.2)
+			Vox.box(_geo, Vector3(0.5, 6.0, 0.5), p + Vector3(0, 3.0, 0), Vox.YELLOW)
+			Vox.box(_geo, Vector3(7.0, 0.35, 0.35), p + Vector3(-2.6, 6.0, 0), Vox.YELLOW)
+			Vox.box(_geo, Vector3(1.0, 0.8, 0.8), p + Vector3(0.9, 5.7, 0), Vox.SLATE)
+			Vox.box(_geo, Vector3(0.06, 2.4, 0.06), p + Vector3(-5.2, 4.8, 0), Vox.SILVER, 0.0, false)
+			Vox.box(_geo, Vector3(0.9, 0.6, 0.9), p + Vector3(-5.2, 3.4, 0), nsc)
+		"vault":  # secrets: a bank vault door
+			var c := Vector3(0, 1.6, d * 0.5 + 0.2)
+			for i in 12:
+				var a := TAU * i / 12.0
+				Vox.box(_geo, Vector3(0.45, 0.45, 0.3), c + Vector3(cos(a) * 1.35, sin(a) * 1.35, 0), Vox.SILVER)
+			Vox.box(_geo, Vector3(1.9, 1.9, 0.2), c + Vector3(0, 0, -0.05), Vox.SILVER.darkened(0.35))
+			for a in [0.0, PI / 3.0, 2.0 * PI / 3.0]:
+				var spoke := Vox.box(_geo, Vector3(1.3, 0.14, 0.1), c + Vector3(0, 0, 0.12), Vox.YELLOW, 0.8, false)
+				spoke.rotation.z = a
+			Vox.box(_geo, Vector3(w + 0.08, 0.3, d + 0.08), Vector3(0, h - 0.8, 0), Vox.YELLOW.darkened(0.2))
+		"gatehouse":  # ingress: a big arch over the door
+			for x in [-1.9, 1.9]:
+				Vox.box(_geo, Vector3(0.7, 4.2, 0.7), Vector3(x, 2.1, d * 0.5 + 1.0), nsc.darkened(0.2))
+			Vox.box(_geo, Vector3(4.6, 0.6, 0.9), Vector3(0, 4.3, d * 0.5 + 1.0), nsc)
+			for i in 5:
+				Vox.box(_geo, Vector3(0.35, 0.18, 0.06), Vector3(-1.4 + i * 0.7, 4.3, d * 0.5 + 1.47), Vox.YELLOW, 2.0, false)
+		"dome":  # metrics / tracing: an observatory
+			var c := Vector3(0, top, -d * 0.15)
+			var r := minf(w, d) * 0.36
+			for i in 5:
+				var k := cos(float(i) / 5.0 * PI * 0.5)
+				Vox.box(_geo, Vector3(r * 2.0 * k, 0.45, r * 2.0 * k), c + Vector3(0, 0.22 + i * 0.45, 0), Vox.SILVER.lightened(0.1 * i))
+			Vox.box(_geo, Vector3(0.5, 1.6, 0.35), c + Vector3(0, 1.4, r * 0.55), Color("1b1b2a"), 0.0, false)
+			var scope := Vox.box(_geo, Vector3(0.4, 0.4, 2.0), c + Vector3(0, 2.2, r * 0.7), Vox.SLATE)
+			scope.rotation.x = deg_to_rad(-35)
+		"screens":  # dashboards: big screens with charts
+			for j in 2:
+				var sx := -w * 0.25 + j * w * 0.5
+				Vox.box(_geo, Vector3(w * 0.42, 2.2, 0.2), Vector3(sx, top + 1.3, -d * 0.2), Color("10131f"))
+				for b in 5:
+					var bh := 0.3 + fmod(float(b * 7 + j * 3), 5.0) * 0.28
+					Vox.box(_geo, Vector3(w * 0.06, bh, 0.06), Vector3(sx - w * 0.15 + b * w * 0.075, top + 0.35 + bh * 0.5, -d * 0.2 + 0.13), [Vox.GREEN, Vox.YELLOW, Vox.ORANGE, Vox.BLUE][(b + j) % 4], 1.5, false)
+				Vox.box(_geo, Vector3(0.25, 0.4, 0.25), Vector3(sx, top + 0.1, -d * 0.2), Vox.SLATE)
+		"library":  # logs and search: shelves full of records
+			var n := int(w / 0.7)
+			for row in 2:
+				for i in n:
+					var x := -w * 0.5 + 0.45 + i * 0.7
+					var bh := 0.5 + fmod(float(i * 13 + row * 5), 4.0) * 0.12
+					Vox.box(_geo, Vector3(0.5, bh, 0.8), Vector3(x, top + bh * 0.5, -d * 0.25 + row * 1.2), [Vox.RED, Vox.BLUE, Vox.YELLOW, Vox.GREEN, Vox.LAVENDER][(i + row) % 5])
+		"shop":  # a store with a striped awning
+			var n := int((w - 1.0) / 0.8)
+			for i in n:
+				var awn := Vox.box(_geo, Vector3(0.8, 0.12, 1.6), Vector3(-w * 0.5 + 0.9 + i * 0.8, 3.45, d * 0.5 + 0.7), Vox.RED if i % 2 == 0 else Vox.WHITE)
+				awn.rotation.x = deg_to_rad(18)
+		"bank":  # payments: columns and a pediment
+			for x in [-w * 0.5 + 0.8, -2.2, 2.2, w * 0.5 - 0.8]:
+				Vox.box(_geo, Vector3(0.55, h, 0.55), Vector3(x, h * 0.5 + 0.2, d * 0.5 + 0.55), Vox.WHITE)
+			Vox.box(_geo, Vector3(w + 0.4, 0.4, 1.4), Vector3(0, h + 0.4, d * 0.5 + 0.2), Vox.WHITE)
+			for i in 3:
+				Vox.box(_geo, Vector3(w * (0.8 - i * 0.25), 0.4, 0.6), Vector3(0, h + 0.8 + i * 0.4, d * 0.5 + 0.3), Vox.WHITE.darkened(0.05 * i))
+		"silo":  # data: storage tanks
+			for j in 2:
+				var p := Vector3(-w * 0.5 + 1.4 + j * 2.2, top, -d * 0.5 + 1.5)
+				for a in [0.0, PI / 4.0]:
+					var t := Vox.box(_geo, Vector3(1.7, 3.0, 1.7), p + Vector3(0, 1.5, 0), Vox.SILVER.darkened(0.1))
+					t.rotation.y = a
+				Vox.box(_geo, Vector3(1.2, 0.3, 1.2), p + Vector3(0, 3.15, 0), nsc)
+				Vox.box(_geo, Vector3(1.75, 0.15, 1.75), p + Vector3(0, 1.0, 0), nsc.darkened(0.2))
+
+
+## Pixel logo on a roof sign, facing the street (+z).
+func _logo(id: String, roof_top: float) -> void:
+	var m: Array = NsCatalog.LOGOS.get(id, [])
+	if m.is_empty():
+		return
+	var px := 0.3
+	var size := px * 7 + 0.5
+	var c := Vector3(0, roof_top + size * 0.5 + 0.35, d * 0.5 - 0.5)
+	Vox.box(_geo, Vector3(0.2, 0.5, 0.2), c + Vector3(-size * 0.3, -size * 0.5 - 0.15, -0.1), Vox.SLATE)
+	Vox.box(_geo, Vector3(0.2, 0.5, 0.2), c + Vector3(size * 0.3, -size * 0.5 - 0.15, -0.1), Vox.SLATE)
+	Vox.box(_geo, Vector3(size, size, 0.15), c, Color("10131f"))
+	for y in 7:
+		var row: String = m[y]
+		for x in 7:
+			var ch := row[x]
+			if ch == ".":
+				continue
+			Vox.box(_geo, Vector3(px, px, 0.08), c + Vector3((x - 3) * px, (3 - y) * px, 0.11), NsCatalog.LOGO_PAL[ch], 1.2, false)

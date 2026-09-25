@@ -502,6 +502,23 @@ func _screenshot_and_quit(path: String) -> void:
 				print("APPLY: ", hud.editor._result.get_parsed_text(), " found=", line >= 0)
 				await get_tree().create_timer(4.0).timeout
 				print("PODS: ", K8s.state.pods.filter(func(q): return q.ns == "payments" and str(q.name).begins_with("fraud")).map(func(q): return q.status))
+	if "--mouse-move-test" in OS.get_cmdline_user_args():  # dev: real clicks through the input pipeline
+		var vs := get_viewport().get_visible_rect().size
+		var xf := get_tree().root.get_final_transform()
+		for fy in [0.35, 0.5, 0.65]:
+			for fx in [0.3, 0.5, 0.7]:
+				var p := vs * Vector2(fx, fy)
+				for pressed in [true, false]:
+					var ev := InputEventMouseButton.new()
+					ev.button_index = MOUSE_BUTTON_LEFT
+					ev.pressed = pressed
+					ev.position = xf * p
+					ev.global_position = ev.position
+					Input.parse_input_event(ev)
+					await get_tree().process_frame
+					await get_tree().process_frame
+				print("MOUSE %s hovered=%s path=%d intro=%.1f modal=%s" % [p.round(), _hovered.key if _hovered else "-", _path.size(), _intro_t, hud.is_modal_open()])
+				_cancel_path()
 	if "--click-test" in OS.get_cmdline_user_args():
 		var center := get_viewport().get_visible_rect().size * 0.5 * _ui
 		var gp := _ground_point(center)
@@ -787,6 +804,14 @@ func _screenshot_and_quit(path: String) -> void:
 		print("KUBI moved from ", p0, " to ", k.position)
 		get_tree().quit()
 		return
+	if "--overview" in OS.get_cmdline_user_args():  # dev: the whole plant, no panels
+		_zoom_target = 80.0
+		_zoom = 80.0
+		_pan = Vector3(0, 0, -14)
+		hud._mission_panel.visible = false
+		hud._terminal.visible = false
+		hud.map_mini.visible = false
+		await get_tree().create_timer(3.0).timeout
 	if "--city-shot" in OS.get_cmdline_user_args():
 		if world.gate:
 			player.teleport(world.gate.global_position + Vector3(0, 0, 6))

@@ -53,6 +53,7 @@ var workshop := {}
 const FINISHED_SHOWN := 8
 var _archive: Node3D                # finished pods drawn per hall (the rest are archived)
 var internet: InternetCity             # plant: the Internet city (Ingress, LoadBalancers)
+var districts: Array = []                 # plant: [{district, rect, title, sub, color, ground}]
 var gate: IngressGate                     # hall: row of pods without a line {pos, count, done, owners}
 
 var _static: Node3D
@@ -368,39 +369,76 @@ func _apply_plant(s: Dictionary) -> void:
 		if not seen.has(k):
 			buildings[k].queue_free()
 			buildings.erase(k)
-	# Grid layout with streets in between.
-	var cols := clampi(ceili(sqrt(float(names.size()))), 1, 5)
+	# Districts: the cluster's own namespaces, your apps, platform tools and
+	# observability, each one a block of halls on a grid with streets. Your
+	# apps sit in the middle (x = 0), in front of the Internet gate.
 	var cell_w := 18.0
 	var cell_d := 16.0
-	var rows := ceili(float(names.size()) / cols)
-	var grid_w := cols * cell_w
-	var grid_d := rows * cell_d
-	for i in names.size():
-		var b: FactoryBuilding = buildings[names[i]]
-		var c := i % cols
-		var r := i / cols
-		b.target = Vector3(-grid_w * 0.5 + (c + 0.5) * cell_w, 0, -grid_d - 4.0 + (r + 0.5) * cell_d)
-		if b.position == Vector3.ZERO:
-			b.position = b.target
+	var groups := {}
+	for n in names:
+		var dk := NsCatalog.district_of(n)
+		if not groups.has(dk):
+			groups[dk] = []
+		groups[dk].append(n)
+	var blocks := []
+	for dk in NsCatalog.DISTRICTS:
+		if not groups.has(dk):
+			continue
+		var list: Array = groups[dk]
+		list.sort()
+		var cols := clampi(ceili(sqrt(float(list.size()))), 1, 5 if dk == "apps" else 3)
+		blocks.append({"district": dk, "names": list, "cols": cols, "rows": ceili(float(list.size()) / cols),
+			"w": cols * cell_w, "x0": 0.0})
+	var gap := 8.0
+	var apps_i: int = blocks.map(func(bl): return bl.district).find("apps")
+	var center_i: int = apps_i if apps_i != -1 else 0
+	var x: float = -blocks[center_i].w * 0.5 if not blocks.is_empty() else 0.0
+	for i in range(center_i, blocks.size()):
+		blocks[i].x0 = x
+		x += blocks[i].w + gap
+	x = blocks[center_i].x0 if not blocks.is_empty() else 0.0
+	for i in range(center_i - 1, -1, -1):
+		x -= blocks[i].w + gap
+		blocks[i].x0 = x
+	var grid_d := 0.0
+	for bl in blocks:
+		grid_d = maxf(grid_d, bl.rows * cell_d)
+	var grid_l: float = blocks[0].x0 if not blocks.is_empty() else -cell_w * 0.5
+	var grid_r: float = blocks[-1].x0 + blocks[-1].w if not blocks.is_empty() else cell_w * 0.5
+	districts.clear()
+	for bl in blocks:
+		for i in bl.names.size():
+			var b: FactoryBuilding = buildings[bl.names[i]]
+			var c: int = i % bl.cols
+			var r: int = i / bl.cols
+			b.target = Vector3(bl.x0 + (c + 0.5) * cell_w, 0, -grid_d - 4.0 + (r + 0.5) * cell_d)
+			if b.position == Vector3.ZERO:
+				b.position = b.target
+		if blocks.size() > 1:
+			var inf: Dictionary = NsCatalog.DISTRICT_INFO[bl.district]
+			districts.append({"district": bl.district, "rect": Rect2(bl.x0 - 2.0, -grid_d - 6.0, bl.w + 4.0, bl.rows * cell_d + 4.0),
+				"title": inf.title, "sub": inf.sub, "color": inf.color, "ground": inf.ground})
 	pw.target = Vector3(0, 0, 12.0)
 	if pw.position == Vector3.ZERO:
 		pw.position = pw.target
-	var ground := Rect2(-grid_w * 0.5 - 6.0, -grid_d - 10.0, grid_w + 12.0, grid_d + 36.0)
-	if _begin_static("plant|%s|%s" % [str(names), str(ground)]):
-		_build_plant_ground(ground, names.size(), cols, cell_w, cell_d, grid_w, grid_d)
+	var ground := Rect2(minf(grid_l, -12.0) - 6.0, -grid_d - 10.0, maxf(grid_r, 12.0) - minf(grid_l, -12.0) + 12.0, grid_d + 36.0)
+	if _begin_static("plant|%s|%s" % [str(blocks), str(ground)]):
+		_build_plant_ground(ground, blocks, cell_w, cell_d, grid_d)
 		for n in names:
 			var b: FactoryBuilding = buildings[n]
 			_add_door(b.door_position(), "ns:" + n, "enter hall %s|" + n, Vox.ns_color(n))
 		_add_door(pw.door_position(), "power", "enter the energy room", Vox.YELLOW)
-		# Start in the street in the middle of the halls, not by the energy plant.
-		var sx := -grid_w * 0.5 + roundi(cols * 0.5) * cell_w
-		spawn = Vector3(sx, 0, -grid_d * 0.5 - 4.0)
+		# Start in the street in the middle of your apps, not by the energy plant.
+		var home: Dictionary = blocks[center_i] if not blocks.is_empty() else {"x0": 0.0, "cols": 0, "rows": 1}
+		var sx: float = home.x0 + roundi(home.cols * 0.5) * cell_w
+		spawn = Vector3(sx, 0, -grid_d - 4.0 + home.rows * cell_d * 0.5)
 	blockers.clear()
 	for b in buildings.values():
 		blockers.append(b.footprint())
 		blocker_heights[b.footprint()] = b.h + 0.2  # flat roof
 	fly_ceiling = 16.0
-	_apply_internet(s, cell_w, grid_w, grid_d)
+	# The city is centred on the gate (x = 0): make it as wide as the plant.
+	_apply_internet(s, cell_w, 2.0 * maxf(absf(grid_l), absf(grid_r)), grid_d)
 
 
 ## The world outside: domains (Ingress) and LoadBalancers, as a city north
@@ -457,18 +495,34 @@ func _apply_internet(s: Dictionary, cell_w: float, grid_w: float, grid_d: float)
 	internet.setup(routes, lbs, {"z0": -grid_d - 10.0, "gw": grid_w, "gate": gate_pos, "doors": doors, "street": street})
 
 
-func _build_plant_ground(g: Rect2, n: int, cols: int, cw: float, cd: float, gw: float, gd: float) -> void:
+func _build_plant_ground(g: Rect2, blocks: Array, cw: float, cd: float, gd: float) -> void:
 	_add_walk(g)
 	Vox.box(_static, Vector3(g.size.x, 0.4, g.size.y), Vector3(g.get_center().x, -0.2, g.get_center().y), Color("4a5a3a"))
 	Vox.box(_static, Vector3(g.size.x - 0.6, 1.2, g.size.y - 0.6), Vector3(g.get_center().x, -1.0, g.get_center().y), Vox.BROWN.darkened(0.2))
 	var asphalt := Color("3b3f4f")
-	for c in cols + 1:
-		var x := -gw * 0.5 + c * cw
-		Vox.box(_static, Vector3(2.4, 0.04, gd + 8.0), Vector3(x, 0.01, -gd * 0.5 - 2.0), asphalt, 0.0, false)
-	var rows := ceili(float(n) / cols)
-	for r in rows + 1:
-		var z := -gd - 4.0 + r * cd
-		Vox.box(_static, Vector3(gw + 2.4, 0.04, 2.4), Vector3(0, 0.012, z), asphalt, 0.0, false)
+	# District plates, each with its own paving and a gateway sign.
+	for dd in districts:
+		var r: Rect2 = dd.rect
+		Vox.box(_static, Vector3(r.size.x, 0.02, r.size.y), Vector3(r.get_center().x, 0.0, r.get_center().y), dd.ground, 0.0, false)
+		var gx := r.position.x + 2.0  # over the street at the district's corner
+		var gz := r.end.y + 0.6
+		for sx in [-3.2, 3.2]:
+			Vox.box(_static, Vector3(0.5, 4.2, 0.5), Vector3(gx + sx, 2.1, gz), dd.color.darkened(0.3))
+			Vox.box(_static, Vector3(0.8, 0.3, 0.8), Vector3(gx + sx, 4.35, gz), dd.color)
+		Vox.box(_static, Vector3(7.0, 0.8, 0.3), Vector3(gx, 3.8, gz), dd.color.darkened(0.1), 0.6, false)
+	# Streets: every block has its own grid; two avenues join them all.
+	for bl in blocks:
+		for c in bl.cols + 1:
+			var x: float = bl.x0 + c * cw
+			Vox.box(_static, Vector3(2.4, 0.04, gd + 8.0), Vector3(x, 0.01, -gd * 0.5 - 2.0), asphalt, 0.0, false)
+		for r in bl.rows + 1:
+			var z: float = -gd - 4.0 + r * cd
+			Vox.box(_static, Vector3(bl.w + 2.4, 0.04, 2.4), Vector3(bl.x0 + bl.w * 0.5, 0.012, z), asphalt, 0.0, false)
+	if not blocks.is_empty():
+		var l: float = blocks[0].x0
+		var rr: float = blocks[-1].x0 + blocks[-1].w
+		for z in [-gd - 4.0, -4.0]:
+			Vox.box(_static, Vector3(rr - l + 2.4, 0.04, 2.4), Vector3((l + rr) * 0.5, 0.011, z), asphalt, 0.0, false)
 	Vox.box(_static, Vector3(4.0, 0.04, 16.0), Vector3(0, 0.013, 4.0), asphalt, 0.0, false)
 	for i in 8:
 		Vox.box(_static, Vector3(0.2, 0.05, 0.8), Vector3(0, 0.02, -2.0 + i * 2.0), Vox.YELLOW, 0.0, false)
@@ -1421,6 +1475,10 @@ func labels(player_pos: Vector3) -> Array:
 			for sv in services.values():
 				if e.data.name in sv.backends():
 					out.append({"pos": sv.beam_origin().lerp(_pod_top(e), 0.5), "text": tr("traffic from service %s") % sv.data.name, "sub": "", "color": ServicePortal.type_color(sv.data), "big": false, "small": true})
+	if level == "plant":
+		for dd in districts:
+			var r: Rect2 = dd.rect
+			out.append({"pos": Vector3(r.position.x + 2.0, 5.2, r.end.y + 0.6), "text": tr(dd.title), "sub": tr(dd.sub), "color": dd.color, "big": true})
 	if level == "plant" and internet:
 		out.append_array(internet.labels())
 		if gate and is_instance_valid(gate):

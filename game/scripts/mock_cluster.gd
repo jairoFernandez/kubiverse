@@ -50,6 +50,16 @@ func start() -> void:
 	_wl("Deployment", "ml", "trainer", 2, "pytorch/trainer:latest", "gpu")
 	_wl("Deployment", "ml", "giant-experiment", 1, "busybox", "unschedulable")
 	_wl("StatefulSet", "data", "broker", 3, "busybox", "ok")
+	# Platform tools and observability (their halls go to their own districts).
+	_wl("Deployment", "argocd", "argocd-server", 1, "quay.io/argoproj/argocd:v2.13", "ok")
+	_wl("StatefulSet", "argocd", "argocd-application-controller", 1, "quay.io/argoproj/argocd:v2.13", "ok")
+	_wl("StatefulSet", "vault", "vault", 1, "hashicorp/vault:1.18", "ok")
+	_wl("Deployment", "cert-manager", "cert-manager", 1, "quay.io/jetstack/cert-manager-controller:v1.16", "ok")
+	_wl("Deployment", "ingress-nginx", "ingress-nginx-controller", 1, "registry.k8s.io/ingress-nginx/controller:v1.12", "ok")
+	_wl("Deployment", "grafana", "grafana", 1, "grafana/grafana:11.3", "ok")
+	_wl("StatefulSet", "elastic", "elasticsearch", 1, "elasticsearch:8.16", "ok")
+	for ns in ["argocd", "vault", "cert-manager", "ingress-nginx", "grafana", "elastic"]:
+		namespaces.append(ns)
 	_svc("data", "broker", "ClusterIP", "broker", ["9092/TCP"], true)
 	# CI namespace full of finished Argo Workflow steps (they pile up in real clusters).
 	namespaces.append("ci")

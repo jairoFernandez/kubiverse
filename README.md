@@ -77,6 +77,17 @@ Tu contexto actual de kubectl no cambia.
 
 Por defecto, **puentes de tablones** con escalones suaves llevan a cada isla sin saltar. El reto de plataformas estilo Mario se activa en **VISTA → Reto de saltos**. El **control-plane** es la isla central y es donde apareces; los workers orbitan a su alrededor a distintas alturas. Si el cluster no expone su control-plane (EKS, GKE...), el centro es una plataforma neutra. Cada isla tiene una **tubería warp** (E junto a ella; te hundes en ella, fundido y sales por la de la siguiente isla) y un **quiosco-terminal** (E) que abre la terminal ya ejecutando los comandos de ese nodo: sus pods y `describe node`, o `get nodes` y `cluster-info` en el control-plane. Para ir a pie hay que **saltar** por bloques "?", ladrillos y plataformas (algunas suben y bajan), recogiendo monedas. Si caes al vacío vuelves a la última plataforma donde estuviste. Hay *coyote time* (puedes saltar un instante después de salir del borde) y el salto pulsado justo antes de aterrizar también cuenta. La física es vertical de verdad: los bordes de una plataforma más alta hacen de pared y la sombra marca dónde vas a caer. Un test comprueba que cada isla es alcanzable con el salto del personaje.
 
+## Barrios de la planta
+
+La planta agrupa los namespaces en barrios, cada uno con su suelo, un arco de entrada y su cartel:
+
+- **Barrio Kubernetes** (oeste): `kube-system`, `kube-public`, `kube-node-lease`, `default` y la red/almacenamiento del clúster (calico, cilium, metallb, local-path…). Edificios en forma de fortaleza.
+- **Tus aplicaciones** (centro, frente a la puerta Ingress): todo lo demás.
+- **Parque de plataforma** (este): GitOps (argocd, flux), kubefirst/konstruct, secretos (vault, external-secrets), cert-manager, ingress/mesh (ingress-nginx, traefik, istio…), CI/CD, políticas y backups.
+- **Colina del observatorio** (este): métricas (monitoring, prometheus), grafana, logs y búsqueda (elastic, loki…), trazas.
+
+Los tipos conocidos tienen forma y logo pixel propios: faro para GitOps, grúa para kubefirst/konstruct y CI, bóveda para secretos, arco para ingress, cúpula de observatorio para métricas, pantallas con gráficas para grafana, estanterías para logs, toldo de tienda para `shop`, columnas de banco para `payments`, silos para datos… El catálogo está en [`game/scripts/ns_catalog.gd`](game/scripts/ns_catalog.gd); los logos son pictogramas genéricos, no las marcas de cada proyecto.
+
 ## La ciudad Internet: cómo se conecta el cluster con el mundo
 
 Al norte de la planta está **EL INTERNET**: una ciudad de rascacielos bajo un globo luminoso del que llueven paquetes de datos.

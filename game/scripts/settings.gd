@@ -31,6 +31,7 @@ var show_finished := false   # draw every Completed pod (they can be thousands) 
 
 
 func _ready() -> void:
+	_migrate_old_name()
 	var cf := ConfigFile.new()
 	if cf.load(PATH) == OK:
 		ui_scale = cf.get_value("ui", "scale", ui_scale)
@@ -120,3 +121,13 @@ func ui_factor(win: Vector2, touch_mode := false) -> float:
 		return clampf(minf(win.x, win.y) / 460.0, 0.8, 5.0) * ui_scale
 	var fit := maxf(0.8, minf(win.x / 1280.0, win.y / 800.0))
 	return minf(dpi(), fit) * ui_scale
+
+
+## The project used to be called KubeCraft: native builds kept their settings
+## (saved clusters, missions...) in that user folder. Bring them over once.
+func _migrate_old_name() -> void:
+	if OS.has_feature("web") or FileAccess.file_exists(PATH):
+		return
+	var old := OS.get_user_data_dir().get_base_dir().path_join("KubeCraft").path_join("settings.cfg")
+	if FileAccess.file_exists(old):
+		DirAccess.copy_absolute(old, ProjectSettings.globalize_path(PATH))
