@@ -53,10 +53,17 @@ func _ready() -> void:
 	apply_audio()
 
 
-## Master volume / mute on the audio bus (music and effects scale under it).
+## Master volume / mute are applied by Sfx to every sound and the music
+## (the web build plays audio as browser samples, where the bus volume is
+## not reliable). The bus stays at 0 dB.
 func apply_audio() -> void:
-	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(master_volume, 0.0001)))
-	AudioServer.set_bus_mute(0, muted)
+	AudioServer.set_bus_volume_db(0, 0.0)
+	AudioServer.set_bus_mute(0, false)
+
+
+## Overall gain: master volume, or 0 when muted.
+func master_gain() -> float:
+	return 0.0 if muted else clampf(master_volume, 0.0, 1.0)
 
 
 func save() -> void:

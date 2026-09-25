@@ -657,6 +657,20 @@ func _screenshot_and_quit(path: String) -> void:
 		print("CLIP ", DisplayServer.clipboard_get())
 		get_tree().quit()
 		return
+	if "--vol-test" in OS.get_cmdline_user_args():
+		var old := [Settings.master_volume, Settings.muted]
+		for mv in [1.0, 0.3, 0.0]:
+			Settings.master_volume = mv
+			await get_tree().process_frame
+			print("VOL master=%.1f music_db=%.1f gain=%.2f" % [mv, Sfx._music_day.volume_db, Settings.master_gain()])
+		Settings.master_volume = 1.0
+		Settings.muted = true
+		await get_tree().process_frame
+		print("VOL muted music_db=%.1f gain=%.2f" % [Sfx._music_day.volume_db, Settings.master_gain()])
+		Settings.master_volume = old[0]
+		Settings.muted = old[1]
+		get_tree().quit()
+		return
 	if "--menu-open" in OS.get_cmdline_user_args():
 		hud.toggle_menu()
 		await get_tree().create_timer(0.4).timeout

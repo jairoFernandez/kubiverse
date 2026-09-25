@@ -159,7 +159,7 @@ func _build_sfx() -> void:
 
 ## Plays an effect. With `at`, it is quieter the further it is from the player.
 func play(name: String, at = null, pitch_jitter := 0.06) -> void:
-	if not _sounds.has(name) or Settings.sfx_volume <= 0.0:
+	if not _sounds.has(name) or Settings.sfx_volume * Settings.master_gain() <= 0.0:
 		return
 	var now := Time.get_ticks_msec()
 	if now - int(_last_play.get(name, 0)) < 30:
@@ -174,7 +174,7 @@ func play(name: String, at = null, pitch_jitter := 0.06) -> void:
 	_next = (_next + 1) % _players.size()
 	p.stream = _sounds[name]
 	p.pitch_scale = 1.0 + randf_range(-pitch_jitter, pitch_jitter)
-	p.volume_db = linear_to_db(vol * Settings.sfx_volume)
+	p.volume_db = linear_to_db(vol * Settings.sfx_volume * Settings.master_gain())
 	p.play()
 
 
@@ -183,14 +183,14 @@ func set_jet(level: float) -> void:
 	if _jet == null:
 		return
 	_jet_level = move_toward(_jet_level, level, 0.15)
-	if _jet_level <= 0.01 or Settings.sfx_volume <= 0.0:
+	if _jet_level <= 0.01 or Settings.sfx_volume * Settings.master_gain() <= 0.0:
 		if _jet.playing:
 			_jet.stop()
 		return
 	if not _jet.playing:
 		_jet.play()
 	_jet.pitch_scale = 0.8 + _jet_level * 0.25
-	_jet.volume_db = linear_to_db(clampf(0.18 + _jet_level * 0.2, 0.0, 1.0) * Settings.sfx_volume)
+	_jet.volume_db = linear_to_db(maxf(0.0001, clampf(0.18 + _jet_level * 0.2, 0.0, 1.0) * Settings.sfx_volume * Settings.master_gain()))
 
 
 func set_listener(pos: Vector3) -> void:
@@ -269,6 +269,6 @@ func set_night(amount: float) -> void:
 
 
 func _process(_delta: float) -> void:
-	var mv: float = Settings.music_volume * 0.6
+	var mv: float = Settings.music_volume * 0.6 * Settings.master_gain()
 	_music_day.volume_db = linear_to_db(maxf(0.0001, mv * (1.0 - _night)))
 	_music_night.volume_db = linear_to_db(maxf(0.0001, mv * _night))
