@@ -1,3 +1,5 @@
 build/
 bridge/bin/
+bridge/webdist/*
+!bridge/webdist/README.md
 .DS_Store

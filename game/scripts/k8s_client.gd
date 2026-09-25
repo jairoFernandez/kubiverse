@@ -28,10 +28,31 @@ func default_bridge_url() -> String:
 	if q != "":
 		return q
 	if OS.has_feature("web"):
+		# Served by the bridge itself (localhost or `--lan`): same origin.
+		# From a public static host (the GitHub Pages demo) the bridge runs
+		# on the player's machine instead.
 		var origin = JavaScriptBridge.eval("window.location.origin", true)
-		if origin != null and str(origin).begins_with("http"):
+		if origin != null and str(origin).begins_with("http") and _is_local_host(str(origin)):
 			return str(origin)
 	return "http://127.0.0.1:8088"
+
+
+## True for localhost and private-network addresses: the hosts a k8s-bridge
+## serves the web build from.
+static func _is_local_host(origin: String) -> bool:
+	var host := origin.get_slice("://", 1).get_slice("/", 0)
+	if host.begins_with("["):
+		host = host.get_slice("]", 0).trim_prefix("[")
+	else:
+		host = host.get_slice(":", 0)
+	if host == "localhost" or host == "::1" or host.ends_with(".local"):
+		return true
+	var p := host.split(".")
+	if p.size() != 4 or not host.replace(".", "").is_valid_int():
+		return false
+	var a := int(p[0])
+	var b := int(p[1])
+	return a == 127 or a == 10 or (a == 192 and b == 168) or (a == 172 and b >= 16 and b <= 31)
 
 
 func web_query_param(name: String) -> String:

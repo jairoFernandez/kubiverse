@@ -2,7 +2,7 @@ GODOT  ?= godot
 BRIDGE := bridge/bin/k8s-bridge
 ADDR   ?= 127.0.0.1:8088
 
-.PHONY: serve-lan test metrics-server cluster cluster-delete cluster-ha cluster-ha-delete scenario scenario-delete play-kind serve-web-kind all bridge bridge-all game-import web macos linux windows native run-bridge play play-demo serve-web demo-apply demo-delete clean
+.PHONY: serve-lan test metrics-server cluster cluster-delete cluster-ha cluster-ha-delete scenario scenario-delete play-kind serve-web-kind all bridge bridge-all bridge-bundle webdist game-import web macos linux windows native run-bridge play play-demo serve-web demo-apply demo-delete clean
 
 all: bridge web
 
@@ -14,6 +14,14 @@ bridge-all:
 	cd bridge && for t in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64; do \
 	  os=$${t%/*}; arch=$${t#*/}; ext=$$( [ $$os = windows ] && echo .exe ); \
 	  GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/k8s-bridge-$$os-$$arch$$ext . ; done
+
+## Single-file bridges that serve the game themselves (go:embed of build/web).
+bridge-bundle: webdist
+	$(MAKE) bridge-all
+
+webdist: web
+	find bridge/webdist -mindepth 1 ! -name README.md -delete
+	cp -R build/web/. bridge/webdist/
 
 run-bridge: bridge
 	$(BRIDGE) --addr $(ADDR)
@@ -111,3 +119,4 @@ demo-delete:
 
 clean:
 	rm -rf build bridge/bin game/.godot
+	find bridge/webdist -mindepth 1 ! -name README.md -delete

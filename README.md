@@ -1,378 +1,389 @@
 # Kubiverse
 
-Tu cluster de Kubernetes **real** convertido en un mundo 3D pixel‑art (voxel) que puedes recorrer y operar.
+Your **real** Kubernetes cluster turned into a pixel‑art (voxel) 3D world you can walk around and operate.
 
-![Kubiverse conectado a un cluster real](docs/real-cluster.png)
+![Kubiverse connected to a real cluster](docs/real-cluster.png)
 
-- **Motor:** Godot 4.7 (GDScript, renderer *Compatibility*) → exporta a **Web (WASM)**, **macOS**, **Linux** y **Windows** desde el mismo proyecto.
-- **Look pixel‑art 3D:** el mundo 3D se renderiza en un `SubViewport` a 1/3 de resolución y se escala con filtro *nearest*; materiales toon con paleta PICO‑8, contornos por *inverted hull*, cámara isométrica ortográfica con *pixel snapping*.
-- **Conexión al cluster:** `k8s-bridge`, un binario Go (client-go) que lee tu kubeconfig, mantiene *informers* y habla con el juego por HTTP + WebSocket.
+- **Engine:** Godot 4.7 (GDScript, *Compatibility* renderer) → exports to **Web (WASM)**, **macOS**, **Linux** and **Windows** from the same project.
+- **3D pixel‑art look:** the 3D world renders into a `SubViewport` at 1/3 resolution and is upscaled with *nearest* filtering; toon materials with the PICO‑8 palette, *inverted hull* outlines, orthographic isometric camera with *pixel snapping*.
+- **Cluster connection:** `k8s-bridge`, a Go binary (client-go) that reads your kubeconfig, keeps *informers* running and talks to the game over HTTP + WebSocket.
 
 ```
-┌──────────────┐  WebSocket (snapshots + eventos)  ┌─────────────┐  client-go / informers  ┌──────────────┐
+┌──────────────┐  WebSocket (snapshots + events)   ┌─────────────┐  client-go / informers  ┌──────────────┐
 │  Kubiverse   │ ◄──────────────────────────────── │ k8s-bridge  │ ◄─────────────────────► │ kube-apiserver│
-│ (web/nativo) │ ──── HTTP /api/action, /api/logs ─►│  (Go)       │     (tu kubeconfig)     │   (real)      │
+│(web/native)  │ ──── HTTP /api/action, /api/logs ─►│  (Go)       │     (your kubeconfig)   │   (real)      │
 └──────────────┘                                    └─────────────┘                         └──────────────┘
 ```
 
-¿Por qué un bridge? Un navegador no puede hablar directamente con el API server (CORS, certificados cliente, plugins `exec` de EKS/GKE/AKS). Con el bridge, la versión web y la nativa usan exactamente el mismo protocolo y la autenticación queda en tu máquina.
+Why a bridge? A browser can't talk to the API server directly (CORS, client certificates, EKS/GKE/AKS `exec` plugins). With the bridge, the web and native builds use exactly the same protocol and authentication stays on your machine.
 
 ## Intro
 
-Mientras carga, la versión web muestra una pantalla propia ([`game/web/shell.html`](game/web/shell.html)): el logo, Kubi, una ciudad pixel-art con peticiones volando, la barra con los MB descargados y consejos que van cambiando, en español o inglés según el navegador. La versión nativa arranca con [`game/assets/splash.png`](game/assets/splash.png).
+While loading, the web build shows its own screen ([`game/web/shell.html`](game/web/shell.html)): the logo, Kubi, a pixel-art city with requests flying around, a bar with the MB downloaded and rotating tips, in English or Spanish depending on the browser. The native build boots with [`game/assets/splash.png`](game/assets/splash.png).
 
-Al conectar un cluster, un vuelo de ~14 s presenta el mundo: el logo sobre el globo de Internet, la ciudad con tus dominios, la puerta Ingress y la planta; al final Kubi saluda. Cualquier tecla o toque la salta. En **VISTA** puedes desactivarla (**Intro al conectar**) o verla otra vez (**VER INTRO**). Los datos locales siguen en `~/.kubecraft` (nombre anterior del proyecto) para no perder configuraciones.
+When you connect a cluster, a ~14 s fly-through introduces the world: the logo over the Internet globe, the city with your domains, the Ingress gate and the plant; at the end Kubi says hi. Any key or tap skips it. In **VIEW** you can turn it off (**Intro when connecting**) or watch it again (**PLAY INTRO**). Local data still lives in `~/.kubecraft` (the project's former name) so no settings are lost.
 
-## La fábrica: niveles
+## The factory: levels
 
-| Nivel | Qué ves |
+| Level | What you see |
 |---|---|
-| **PLANTA** (vista general) | Una **nave industrial por Namespace** (también los vacíos) + la **planta de energía** (nodos). Monitor de un vistazo: ventanas encendidas = pods (verde ok, rojo fallando), luz del tejado = peor estado dentro, humo rojo = crashes. |
-| **NAVE `<ns>`** (subnivel) | Cada **Deployment / StatefulSet / DaemonSet** es una **línea de montaje**: consola con lámparas por réplica (verde = ready) y cinta que solo corre si hay réplicas listas. Cada **Pod** es un **robot** en su estación (un bloque por contenedor, gema = estado). Cada **Service** es un **muelle de carga**; al pasar el ratón o seleccionar se dibujan las líneas de tráfico hacia sus pods. |
-| **SALA DE ENERGÍA** | Cada **Node** es una isla-generador con los pods que corren físicamente en ella. Castillo = control-plane, valla = cordoned, luz roja = NotReady, nube = pods esperando al scheduler. |
+| **PLANT** (overview) | One **factory hall per Namespace** (empty ones too) + the **energy plant** (nodes). An at-a-glance monitor: lit windows = pods (green ok, red failing), roof light = worst state inside, red smoke = crashes. |
+| **HALL `<ns>`** (sublevel) | Each **Deployment / StatefulSet / DaemonSet** is an **assembly line**: a console with one lamp per replica (green = ready) and a belt that only runs when replicas are ready. Each **Pod** is a **robot** at its station (one block per container, gem = status). Each **Service** is a **loading dock**; hovering or selecting it draws the traffic lines to its pods. |
+| **ENERGY ROOM** | Each **Node** is a generator island with the pods physically running on it. Castle = control-plane, fence = cordoned, red light = NotReady, cloud = pods waiting for the scheduler. |
 
-Para entrar o salir basta con **pisar la alfombra de la puerta** (o pulsar E, hacer doble clic en una nave o usar la barra de niveles). Empiezas en la calle central, entre las naves, y al salir de una nave apareces delante de su puerta. Al pisar una isla o entrar en una nave aparece un **cartel de zona** que explica qué es (control-plane, worker o namespace), y la barra de niveles muestra dónde estás. Las tuberías warp y los quioscos se usan con E. El personaje respeta los límites físicos: camina solo por suelo real (terreno, suelo de la nave, islas y puentes) y no atraviesa naves, consolas, cintas ni muelles.
+To go in or out, just **step on the door mat** (or press E, double-click a hall, or use the level bar). You start on the main street between the halls, and when you leave a hall you appear in front of its door. Stepping onto an island or entering a hall shows a **zone sign** explaining what it is (control-plane, worker or namespace), and the level bar shows where you are. Warp pipes and kiosks are used with E. The character respects physical limits: it only walks on real ground (terrain, hall floors, islands and bridges) and doesn't walk through halls, consoles, belts or docks.
 
-![Dentro de una nave](docs/hall.png)
-![Sala de energía](docs/energy.png)
+![Inside a hall](docs/hall.png)
+![Energy room](docs/energy.png)
 
-## Varios clusters y kubeconfigs
+## Multiple clusters and kubeconfigs
 
-Un solo bridge sirve **todos los contextos** de tu kubeconfig y los kubeconfigs que añadas desde el juego. Cada cluster se conecta bajo demanda y el juego elige cuál con `?context=`.
+A single bridge serves **every context** in your kubeconfig plus the kubeconfigs you add from the game. Each cluster connects on demand and the game picks one with `?context=`.
 
-En la pantalla de inicio:
-- **Clusters guardados**: nombre, URL del bridge, contexto y token (se guardan en las preferencias del juego). Clic para conectar y X para borrar.
-- **Nueva conexión**: URL del bridge y **CARGAR CONTEXTOS**. Elige uno y usa **GUARDAR Y CONECTAR**.
-- **+ Añadir un kubeconfig**: pégalo, o **CARGAR ARCHIVO...** (selector nativo, o el del navegador en la versión web), ponle un nombre y **AÑADIR CLUSTER**. El kubeconfig se envía solo al bridge, que lo guarda en `~/.kubecraft/kubeconfigs/` con permisos 0600. El juego comprueba que el cluster responde, lo **guarda en la lista** y **se conecta**; si falla, muestra el error del servidor. Si alguno de sus contextos se llama igual que uno que ya tienes (típico: `default`, `kubernetes-admin@kubernetes`), aparece como `nombre-del-archivo/contexto` en lugar de ocultarse. Ojo: igual que con kubectl, un kubeconfig con plugins `exec` (aws, gke-gcloud-auth-plugin...) ejecuta ese comando en el host del bridge.
+On the start screen:
+- **Saved clusters**: name, bridge URL, context and token (stored in the game preferences). Click to connect, X to delete.
+- **New connection**: bridge URL and **LOAD CONTEXTS**. Pick one and use **SAVE & CONNECT**.
+- **+ Add a kubeconfig**: paste it, or **LOAD FILE...** (native picker, or the browser's in the web build), give it a name and press **ADD CLUSTER**. The kubeconfig is only sent to the bridge, which stores it in `~/.kubecraft/kubeconfigs/` with 0600 permissions. The game checks that the cluster responds, **saves it to the list** and **connects**; if it fails, it shows the server error. If one of its contexts has the same name as one you already have (typically `default`, `kubernetes-admin@kubernetes`), it shows up as `file-name/context` instead of being hidden. Careful: just like with kubectl, a kubeconfig with `exec` plugins (aws, gke-gcloud-auth-plugin...) runs that command on the bridge host.
 
-API: `GET /api/contexts`, `POST /api/kubeconfig {name, content}` y `DELETE /api/kubeconfig?name=`. Todas las rutas de cluster aceptan `?context=`.
+API: `GET /api/contexts`, `POST /api/kubeconfig {name, content}` and `DELETE /api/kubeconfig?name=`. Every cluster route accepts `?context=`.
 
-## Escenario multinodo (kind)
+## Multi-node scenario (kind)
 
 ```bash
-make cluster         # kind: 1 control-plane + 3 workers (uno "GPU" con taint) + metrics-server + escenario
-make serve-web-kind  # bridge en :8089 contra kind-kubecraft -> http://127.0.0.1:8089
+make cluster         # kind: 1 control-plane + 3 workers (one tainted "GPU") + metrics-server + scenario
+make serve-web-kind  # bridge on :8089 against kind-kubecraft -> http://127.0.0.1:8089
 make cluster-delete
-make cluster-ha      # kind HA: 3 control-planes + 2 workers (plaza de etcd) + auditoría para el vigía
+make cluster-ha      # kind HA: 3 control-planes + 2 workers (etcd plaza) + auditing for the watchtower
 make cluster-ha-delete
 ```
 
-### Varios control-planes (HA)
+### Multiple control-planes (HA)
 
-Con 2 o más control-planes la sala de energía muestra la **plaza de etcd**: un cristal por miembro (verde = Ready, rojo = caído) y un letrero con el quórum (`3 de 3 miembros activos, necesita 2, tolera 1 caída`). Lo típico son 3 o 5 (número impar para el quórum de etcd).
+With 2 or more control-planes the energy room shows the **etcd plaza**: one crystal per member (green = Ready, red = down) and a sign with the quorum (`3 of 3 members up, needs 2 to work, tolerates 1 failure`). The usual numbers are 3 or 5 (odd, for etcd quorum).
 
-En el inspector de un control-plane hay un botón **+ CONTROL-PLANE**. En modo demo añade uno al momento; en un cluster real abre una guía con los pasos para kind, clusters gestionados (EKS/GKE/AKS: el proveedor los gestiona) y kubeadm (`kubeadm token create --print-join-command` + `kubeadm init phase upload-certs --upload-certs` + `kubeadm join ... --control-plane`). Añadir un control-plane es una operación de infraestructura: la API de Kubernetes no puede hacerlo, por eso el juego no finge hacerlo.
+A control-plane's inspector has a **+ CONTROL-PLANE** button. In demo mode it adds one instantly; on a real cluster it opens a guide with the steps for kind, managed clusters (EKS/GKE/AKS: the provider manages them) and kubeadm (`kubeadm token create --print-join-command` + `kubeadm init phase upload-certs --upload-certs` + `kubeadm join ... --control-plane`). Adding a control-plane is an infrastructure operation: the Kubernetes API can't do it, so the game doesn't pretend to.
 
-[`deploy/complex.yaml`](deploy/complex.yaml) crea cinco namespaces:
+[`deploy/complex.yaml`](deploy/complex.yaml) creates five namespaces:
 
-- **ecommerce**: tienda con réplicas repartidas entre nodos, API con sidecar, workers, Postgres con volumen y Redis.
-- **data**: StatefulSet de 3 brokers, CronJob cada 2 min (pods Completed) y un Job.
-- **ml**: entrenamiento forzado al nodo GPU (taint + toleration), un modelo con imagen rota y un pod que pide 64 CPUs y **nunca** se programa.
-- **observability**: DaemonSet en todos los nodos y Prometheus.
-- **chaos**: crashes aleatorios y un pod OOMKilled.
+- **ecommerce**: a shop with replicas spread across nodes, an API with a sidecar, workers, Postgres with a volume, and Redis.
+- **data**: a 3-broker StatefulSet, a CronJob every 2 min (Completed pods) and a Job.
+- **ml**: training pinned to the GPU node (taint + toleration), a model with a broken image and a pod that asks for 64 CPUs and **never** gets scheduled.
+- **observability**: a DaemonSet on every node and Prometheus.
+- **chaos**: random crashes and an OOMKilled pod.
 
-Tu contexto actual de kubectl no cambia.
+Your current kubectl context doesn't change.
 
-## Sala de energía estilo Mario
+## Mario-style energy room
 
-Por defecto, **puentes de tablones** con escalones suaves llevan a cada isla sin saltar. El reto de plataformas estilo Mario se activa en **VISTA → Reto de saltos**. El **control-plane** es la isla central y es donde apareces; los workers orbitan a su alrededor a distintas alturas. Si el cluster no expone su control-plane (EKS, GKE...), el centro es una plataforma neutra. Cada isla tiene una **tubería warp** (E junto a ella; te hundes en ella, fundido y sales por la de la siguiente isla) y un **quiosco-terminal** (E) que abre la terminal ya ejecutando los comandos de ese nodo: sus pods y `describe node`, o `get nodes` y `cluster-info` en el control-plane. Para ir a pie hay que **saltar** por bloques "?", ladrillos y plataformas (algunas suben y bajan), recogiendo monedas. Si caes al vacío vuelves a la última plataforma donde estuviste. Hay *coyote time* (puedes saltar un instante después de salir del borde) y el salto pulsado justo antes de aterrizar también cuenta. La física es vertical de verdad: los bordes de una plataforma más alta hacen de pared y la sombra marca dónde vas a caer. Un test comprueba que cada isla es alcanzable con el salto del personaje.
+By default, **plank bridges** with gentle steps lead to each island without jumping. The Mario-style platforming challenge is enabled in **VIEW → Jump challenge**. The **control-plane** is the central island and where you spawn; workers orbit around it at different heights. If the cluster doesn't expose its control-plane (EKS, GKE...), the center is a neutral platform. Each island has a **warp pipe** (E next to it; you sink into it, fade out and come out of the next island's pipe) and a **terminal kiosk** (E) that opens the terminal already running that node's commands: its pods and `describe node`, or `get nodes` and `cluster-info` on the control-plane. To go on foot you have to **jump** across "?" blocks, bricks and platforms (some move up and down), collecting coins. If you fall into the void you return to the last platform you stood on. There's *coyote time* (you can jump a moment after leaving an edge) and a jump pressed just before landing also counts. Physics are truly vertical: the edges of a higher platform act as walls, and the shadow marks where you'll land. A test checks that every island is reachable with the character's jump.
 
-## Barrios de la planta
+## Plant districts
 
-La planta agrupa los namespaces en barrios, cada uno con su suelo, un arco de entrada y su cartel:
+The plant groups namespaces into districts, each with its own ground, entrance arch and sign:
 
-- **Barrio Kubernetes** (oeste): `kube-system`, `kube-public`, `kube-node-lease`, `default` y la red/almacenamiento del clúster (calico, cilium, metallb, local-path…). Edificios en forma de fortaleza.
-- **Tus aplicaciones** (centro, frente a la puerta Ingress): todo lo demás.
-- **Parque de plataforma** (este): GitOps (argocd, flux), kubefirst/konstruct, secretos (vault, external-secrets), cert-manager, ingress/mesh (ingress-nginx, traefik, istio…), CI/CD, políticas y backups.
-- **Colina del observatorio** (este): métricas (monitoring, prometheus), grafana, logs y búsqueda (elastic, loki…), trazas.
+- **Kubernetes Quarter** (west): `kube-system`, `kube-public`, `kube-node-lease`, `default` and cluster networking/storage (calico, cilium, metallb, local-path…). Fortress-shaped buildings.
+- **Your Apps** (center, facing the Ingress gate): everything else.
+- **Platform Park** (east): GitOps (argocd, flux), kubefirst/konstruct, secrets (vault, external-secrets), cert-manager, ingress/mesh (ingress-nginx, traefik, istio…), CI/CD, policies and backups.
+- **Observatory Hill** (east): metrics (monitoring, prometheus), grafana, logs and search (elastic, loki…), tracing.
 
-Los tipos conocidos tienen forma y logo pixel propios: faro para GitOps, grúa para kubefirst/konstruct y CI, bóveda para secretos, arco para ingress, cúpula de observatorio para métricas, pantallas con gráficas para grafana, estanterías para logs, toldo de tienda para `shop`, columnas de banco para `payments`, silos para datos… El catálogo está en [`game/scripts/ns_catalog.gd`](game/scripts/ns_catalog.gd); los logos son pictogramas genéricos, no las marcas de cada proyecto.
+Known types have their own shape and pixel logo: a lighthouse for GitOps, a crane for kubefirst/konstruct and CI, a vault for secrets, an arch for ingress, an observatory dome for metrics, screens with charts for grafana, shelves for logs, a shop awning for `shop`, bank columns for `payments`, silos for data… The catalog lives in [`game/scripts/ns_catalog.gd`](game/scripts/ns_catalog.gd); the logos are generic pictograms, not each project's trademark.
 
-## La ciudad Internet: cómo se conecta el cluster con el mundo
+## The Internet city: how the cluster connects to the world
 
-Al norte de la planta está **EL INTERNET**: una ciudad de rascacielos bajo un globo luminoso del que llueven paquetes de datos.
+North of the plant lies **THE INTERNET**: a city of skyscrapers under a glowing globe raining data packets.
 
-- Cada **dominio** de un Ingress es un **cartel de neón** (con candado dorado si usa HTTPS).
-- Los **coches son peticiones**: salen del cartel, pasan por la **Puerta INGRESS** a la entrada de la planta y recorren las calles hasta la nave del namespace cuyo Service responde.
-- Si el Service **no existe o no tiene pods listos**, el coche se para en la puerta con humo rojo y un **503**; la luz de la puerta se pone roja.
-- Los Services **LoadBalancer** tienen su propia **carretera rosa con peaje**, que muestra la IP externa.
-- Sin Ingress ni LoadBalancer, la barrera está bajada: nada del cluster es accesible desde fuera.
-- Clic en la Puerta: controlador, dirección y cada ruta `dominio/ruta -> namespace/service:puerto` con su estado.
+- Each Ingress **domain** is a **neon sign** (with a golden padlock if it uses HTTPS).
+- **Cars are requests**: they leave the sign, pass through the **INGRESS gate** at the plant entrance and drive the streets to the hall of the namespace whose Service answers.
+- If the Service **doesn't exist or has no ready pods**, the car stops at the gate with red smoke and a **503**; the gate light turns red.
+- **LoadBalancer** Services get their own **pink toll road**, showing the external IP.
+- With no Ingress or LoadBalancer, the barrier is down: nothing in the cluster is reachable from outside.
+- Click the gate: controller, address and every `domain/path -> namespace/service:port` route with its status.
 
-`make scenario` crea tres Ingress de ejemplo en el cluster kind, uno roto a propósito.
+`make scenario` creates three sample Ingresses in the kind cluster, one broken on purpose.
 
-## Pods terminados (Completed)
+## Finished pods (Completed)
 
-Argo Workflows, los Jobs y los CronJobs dejan pods **Completed**. Kubernetes solo los recoge cuando el cluster supera los 12.500 pods terminados (`--terminated-pod-gc-threshold`), así que se acumulan.
+Argo Workflows, Jobs and CronJobs leave **Completed** pods behind. Kubernetes only collects them once the cluster exceeds 12,500 terminated pods (`--terminated-pod-gc-threshold`), so they pile up.
 
-- En el juego solo se dibujan los **8 más recientes por nave** (2 por nodo en la sala de energía); el resto va a una **pila de ARCHIVO** con contador. Para verlos todos: VISTA > Mostrar todos los pods terminados.
-- Con 30 o más en un namespace, **Kubi** avisa ("Muchos pods terminados"): explica por qué pasa, da la configuración para que se limpien solos (Argo `podGC` / `ttlStrategy`, Jobs `ttlSecondsAfterFinished`, CronJobs `*HistoryLimit`) y ofrece **Limpiar pods terminados** (`kubectl delete pods --field-selector=status.phase==Succeeded`, con confirmación; los pods en marcha no se tocan).
+- The game only draws the **8 most recent per hall** (2 per node in the energy room); the rest go to an **ARCHIVE pile** with a counter. To see them all: VIEW > Show every finished pod.
+- With 30 or more in a namespace, **Kubi** warns you ("Many finished pods"): explains why it happens, gives the config to clean them up automatically (Argo `podGC` / `ttlStrategy`, Jobs `ttlSecondsAfterFinished`, CronJobs `*HistoryLimit`) and offers **Clean finished pods** (`kubectl delete pods --field-selector=status.phase==Succeeded`, with confirmation; running pods are left alone).
 
-## Misiones (J)
+## Missions (J)
 
-11 misiones guiadas para entender Kubernetes haciendo: namespaces, pods, nodos, crear un Deployment, autorreparación, escalar, Services/endpoints, depurar un CrashLoop con logs, rollout, cordon/uncordon y limpieza. Cada una explica el concepto (**WHY?**) y el comando `kubectl` equivalente. Se validan contra el estado real del cluster. Las que modifican cosas usan el namespace **`academia`**, para no tocar tus aplicaciones.
+11 guided missions to learn Kubernetes by doing: namespaces, pods, nodes, creating a Deployment, self-healing, scaling, Services/endpoints, debugging a CrashLoop with logs, rollouts, cordon/uncordon and cleanup. Each one explains the concept (**WHY?**) and the equivalent `kubectl` command. They're validated against the real cluster state. The ones that change things use the **`academia`** namespace, so your apps are never touched.
 
-## Monitorización
+## Monitoring
 
-- **ALARMAS**: problemas en vivo (nodos NotReady/cordoned, pods en crash/imagepull/atascados, workloads por debajo de réplicas). Un clic te lleva al sitio.
-- **TAB**: salta al siguiente pod con problemas en todo el cluster.
-- **TERMINAL**: cada acción que haces aparece como su comando `kubectl` (clic para copiar), junto con los eventos del cluster.
-- El inspector muestra los comandos `kubectl` para ver ese objeto y, al pasar el ratón sobre un botón, el comando que ejecutará.
+- **ALARMS**: live problems (NotReady/cordoned nodes, crashing/imagepull/stuck pods, workloads below their replica count). One click takes you there.
+- **TAB**: jumps to the next pod with problems anywhere in the cluster.
+- **TERMINAL**: every action you take shows up as its `kubectl` command (click to copy), alongside cluster events.
+- The inspector shows the `kubectl` commands to view that object and, when hovering a button, the command it will run.
 
-## Controles
+## Controls
 
-| Tecla | Acción |
+| Key | Action |
 |---|---|
-| WASD / flechas | andar |
-| clic en el suelo | ir allí andando (esquiva obstáculos, corre si está lejos; clic en un objeto = inspeccionar e ir). Se desactiva en VISTA |
-| SHIFT (mantener) / X (alternar) | correr con "zapatillas" estilo Pokémon: más rápido, inclinado y levantando polvo |
-| ESPACIO | saltar |
-| Z · ESPACIO dos veces | jetpack: mantén ESPACIO para subir, CTRL para bajar, sin tocar nada flota |
-| Y · O | Kubi, el asistente · modo vigía |
-| E | entrar por una puerta / usar / inspeccionar lo más cercano |
-| clic · arrastrar · arrastrar con botón derecho · rueda | inspeccionar · mover cámara · rotar · zoom |
-| M / N | mapa completo (clic = viaje rápido) / minimapa |
-| P · F3 · / | primera persona · estadísticas · escribir en la terminal |
-| J | misiones |
-| TAB | siguiente pod con problemas |
-| L · B · G · V | logs · construir · leyenda · menú de vista |
-| H · K · T | namespaces de sistema · todas las líneas · terminal |
-| C + F | modo caos + blaster |
-| Q/R · BACKSPACE · HOME | rotar 90° · volver a la planta · recentrar |
+| WASD / arrows | walk |
+| click on the ground | walk there (avoids obstacles, runs if far; click an object = inspect and walk to it). Can be turned off in VIEW |
+| SHIFT (hold) / X (toggle) | Pokémon-style "running shoes": faster, leaning forward and kicking up dust |
+| SPACE | jump |
+| Z · SPACE twice | jetpack: hold SPACE to go up, CTRL to go down, release everything to hover |
+| Y · O | Kubi, the assistant · watchtower mode |
+| E | enter a door / use / inspect the nearest thing |
+| click · drag · right-drag · wheel | inspect · pan camera · rotate · zoom |
+| M / N | full map (click = fast travel) / minimap |
+| P · F3 · / | first person · stats · type in the terminal |
+| J | missions |
+| TAB | next pod with problems |
+| L · B · G · V | logs · build · legend · view menu |
+| H · K · T | system namespaces · all lines · terminal |
+| C + F | chaos mode + blaster |
+| Q/R · BACKSPACE · HOME | rotate 90° · back to the plant · recenter |
 
-## Terminal funcional
+## Working terminal
 
-El panel TERMINAL (tecla `/` para escribir) ejecuta **kubectl real** en el host del bridge, contra el mismo contexto, con historial (↑/↓) y `clear`. Un clic en cualquier comando del juego lo pega en la terminal. Los comandos que modifican (scale, delete pod, rollout restart, cordon, create deployment...) también cuentan para las misiones. En modo demo hay un emulador de kubectl.
+The TERMINAL panel (`/` to type) runs **real kubectl** on the bridge host, against the same context, with history (↑/↓) and `clear`. Clicking any command in the game pastes it into the terminal. Commands that change things (scale, delete pod, rollout restart, cordon, create deployment...) also count toward missions. Demo mode has a kubectl emulator.
 
-Límites de seguridad: no se usa ninguna shell (se rechazan `;`, `|`, `&`, `$`, las comillas invertidas y las redirecciones). Tampoco se permiten comandos interactivos o que no terminan (`exec`, `edit`, `port-forward`, `-w`, `logs -f`), cambiar de cluster o credenciales (`--context`, `--kubeconfig`, `--token`...), leer ficheros locales (`-f`, `-k`, `cp`) ni `config`. Con `--readonly` solo se aceptan verbos de lectura.
+Safety limits: no shell is used (`;`, `|`, `&`, `$`, backticks and redirections are rejected). Also not allowed: interactive or never-ending commands (`exec`, `edit`, `port-forward`, `-w`, `logs -f`), switching cluster or credentials (`--context`, `--kubeconfig`, `--token`...), reading local files (`-f`, `-k`, `cp`) and `config`. With `--readonly` only read verbs are accepted.
 
-## Modo caos y armas (C, 1-6, F)
+## Chaos mode and weapons (C, 1-6, F)
 
-Con el modo caos activado (C), **F** dispara el arma equipada contra lo que tengas delante. Cada arma es una operación real de Kubernetes y se desbloquea al completar la misión que enseña ese concepto:
+With chaos mode on (C), **F** fires the equipped weapon at whatever is in front of you. Each weapon is a real Kubernetes operation and unlocks when you complete the mission that teaches that concept:
 
-| Tecla | Arma | Operación | Se desbloquea con |
+| Key | Weapon | Operation | Unlocked by |
 |---|---|---|---|
-| 1 | Pistola de pods | `delete pod` | desde el inicio |
-| 2 | Martillo de rollout | `rollout restart` del workload | misión "Actualización continua" |
-| 3 | Rayo reductor | `scale` −1 réplica | misión "Más producción" |
-| 4 | Pistola de hielo | `cordon` / `uncordon` del nodo | misión "Mantenimiento" |
-| 5 | Cortador de servicios | `delete service` | misión "Sigue el tráfico" |
-| 6 | Bomba nuclear | `delete` del workload entero | misión "Recoge la fábrica" |
+| 1 | Pod blaster | `delete pod` | from the start |
+| 2 | Rollout hammer | `rollout restart` of the workload | "Rolling update" mission |
+| 3 | Shrink ray | `scale` −1 replica | "More production" mission |
+| 4 | Freeze gun | `cordon` / `uncordon` the node | "Maintenance" mission |
+| 5 | Service cutter | `delete service` | "Follow the traffic" mission |
+| 6 | Nuke | `delete` the whole workload | "Clean up the factory" mission |
 
-El cortador y la bomba piden confirmación siempre. Todo disparo aparece en la TERMINAL como su comando kubectl.
+The cutter and the nuke always ask for confirmation. Every shot shows up in the TERMINAL as its kubectl command.
 
-Cada arma tiene su animación, aunque no haya nada al alcance: el disparo sale igual y se pierde en el aire, sin ejecutar nada.
-- **Pistola**: rayo con estela.
-- **Martillo**: golpe y onda expansiva en el suelo.
-- **Rayo reductor**: haz vibrante con anillos.
-- **Hielo**: chorro de cristales que dejan hielo donde impactan.
-- **Cortador**: cuchilla que va y vuelve como un bumerán.
-- **Bomba**: cohete en parábola, explosión, hongo y temblor de cámara.
+Each weapon has its own animation, even with nothing in range: the shot fires anyway and fades into the air without running anything.
+- **Blaster**: beam with a trail.
+- **Hammer**: slam and a shockwave on the ground.
+- **Shrink ray**: vibrating beam with rings.
+- **Freeze**: a stream of crystals that leave ice where they hit.
+- **Cutter**: a blade that flies out and back like a boomerang.
+- **Nuke**: rocket on an arc, explosion, mushroom cloud and camera shake.
 
-Cada arma tiene su tiempo de recarga, y la operación real se ejecuta cuando el disparo impacta.
+Each weapon has its own cooldown, and the real operation runs when the shot hits.
 
 ## Audio
 
-Todo el sonido se **genera por código** con un pequeño sintetizador chiptune ([`sfx.gd`](game/scripts/sfx.gd): ondas cuadrada, triangular, sierra y ruido, con barridos y envolventes), así que el juego no incluye ningún archivo de audio:
-- **Efectos**: cada arma, pasos, salto, aterrizaje, monedas, tuberías, puertas, caídas, muerte de pods, clics de la interfaz, teclas de la terminal, misión completada y una alarma cuando un pod empieza a fallar.
-- **Música**: dos bucles en la misma tonalidad, uno de día (animado) y otro de noche (tranquilo), que se funden según la hora del cluster.
-- **Volumen**: música y efectos en **VISTA**.
+All sound is **generated in code** by a small chiptune synth ([`sfx.gd`](game/scripts/sfx.gd): square, triangle, saw and noise waves, with sweeps and envelopes), so the game ships no audio files:
+- **Effects**: each weapon, footsteps, jump, landing, coins, pipes, doors, falls, pod deaths, UI clicks, terminal keys, mission complete and an alarm when a pod starts failing.
+- **Music**: two loops in the same key, an upbeat one for day and a calm one for night, crossfading with the cluster's time of day.
+- **Volume**: music and effects in **VIEW**.
 
-## Capacidad de los nodos
+## Node capacity
 
-Cada isla tiene dos medidores (CPU azul y memoria rosa) que muestran lo **reservado por los requests** de sus pods frente a lo asignable del nodo: verde, amarillo o rojo según la presión. Su letrero dice, por ejemplo, "cpu 700m/4.0, mem 896 MiB/8 GiB". El panel del nodo separa lo reservado (lo único que mira el scheduler), lo libre y el uso real (metrics-server). Un pod Pending muestra el mensaje del scheduler con el motivo exacto, por ejemplo "0/4 nodes are available: 2 Insufficient cpu, 2 node(s) had untolerated taint(s)", y lo que pide.
+Each island has two gauges (blue CPU and pink memory) showing what's **reserved by its pods' requests** against the node's allocatable: green, yellow or red depending on pressure. Its sign reads, for example, "cpu 700m/4.0, mem 896 MiB/8 GiB". The node panel separates reserved (the only thing the scheduler looks at), free and actual usage (metrics-server). A Pending pod shows the scheduler's message with the exact reason, e.g. "0/4 nodes are available: 2 Insufficient cpu, 2 node(s) had untolerated taint(s)", and what it asks for.
 
-## Móvil y tablet (táctil)
+## Phone and tablet (touch)
 
-En pantallas táctiles (o si la ventana es estrecha) el juego cambia a un **modo compacto**:
+On touch screens (or if the window is narrow) the game switches to a **compact mode**:
 
-- Arriba solo el título, el estado y **MENÚ**, que abre todo en botones grandes: Kubi, vigía, mapa, misiones, alarmas, construir, caos, terminal, leyenda, stats, 1ª persona, jetpack, sonido, vista y salir.
-- Los paneles (inspector, Kubi, vigía, editor, pantalla de inicio) usan todo el ancho. La terminal y las misiones se abren desde el menú. El minimapa es pequeño y va arriba a la izquierda.
-- **Controles táctiles**:
-  - joystick flotante: pon el pulgar abajo a la izquierda; empujar hasta el borde = correr
-  - botones **SALTAR** (mantén pulsado para subir con el jetpack), **USAR**, **JET**, **BAJAR** (volando) y **FUEGO** (en modo caos)
-  - **tocar** = inspeccionar e ir andando; **arrastrar** = mover la cámara; **pellizcar** = zoom; **girar con dos dedos** = rotar; en primera persona, arrastrar = mirar
-  - **toca a Kubi** o su bocadillo para abrir su panel
-- La escala de la UI se ajusta al teléfono (unas 460 unidades en el lado corto). En VISTA > "Controles táctiles" se elige automático / sí / no.
+- The top shows only the title, the status and **MENU**, which opens everything as big buttons: Kubi, watchtower, map, missions, alarms, build, chaos, terminal, legend, stats, first person, jetpack, sound, view and quit.
+- Panels (inspector, Kubi, watchtower, editor, start screen) use the full width. The terminal and missions open from the menu. The minimap is small and sits at the top left.
+- **Touch controls**:
+  - floating joystick: put your thumb at the bottom left; pushing to the edge = run
+  - **JUMP** (hold to climb with the jetpack), **USE**, **JET**, **DOWN** (while flying) and **FIRE** (in chaos mode) buttons
+  - **tap** = inspect and walk there; **drag** = pan the camera; **pinch** = zoom; **two-finger twist** = rotate; in first person, drag = look
+  - **tap Kubi** or its speech bubble to open its panel
+- The UI scale adapts to the phone (about 460 units on the short side). In VIEW > "Touch controls" choose automatic / on / off.
 
-### Jugar desde el móvil (red local)
+### Playing from your phone (local network)
 
-Por seguridad el bridge solo escucha en `127.0.0.1`: controla tu cluster con tus credenciales. Para abrirlo desde el móvil o la tablet en la misma Wi-Fi:
+For safety the bridge only listens on `127.0.0.1`: it controls your cluster with your credentials. To open it from a phone or tablet on the same Wi-Fi:
 
 ```bash
 make serve-lan      # = k8s-bridge --lan --web build/web
 ```
 
-`--lan` escucha en todas las interfaces, genera un **token aleatorio** (o usa `--token`), permite los orígenes de tu red local e imprime las URLs a abrir, del tipo `https://192.168.1.20:8088/?token=...` (solo las IPs de interfaces reales, no las de Docker/OrbStack). El juego conecta solo con ese token.
+`--lan` listens on all interfaces, generates a **random token** (or uses `--token`), allows origins from your local network and prints the URLs to open, like `https://192.168.1.20:8088/?token=...` (only IPs of real interfaces, not Docker/OrbStack ones). The game connects only with that token.
 
-- Va por **HTTPS con un certificado autofirmado**, porque los navegadores solo ejecutan builds web de Godot en un contexto seguro. El móvil avisa una vez del certificado: acéptalo. Se guarda en `~/.kubecraft/tls` y se reutiliza mientras cubra tus IPs.
-- El token viaja en la URL: compártela solo con quien quieras. Para solo mirar, añade `--readonly`.
-- El bridge se niega a escuchar fuera de localhost sin token.
-- En macOS puede aparecer el aviso del firewall para aceptar conexiones entrantes.
+- It runs over **HTTPS with a self-signed certificate**, because browsers only run Godot web builds in a secure context. The phone warns about the certificate once: accept it. It's stored in `~/.kubecraft/tls` and reused as long as it covers your IPs.
+- The token travels in the URL: only share it with people you trust. For view-only access, add `--readonly`.
+- The bridge refuses to listen beyond localhost without a token.
+- On macOS the firewall prompt to accept incoming connections may appear.
 
-## Sonido (VOL)
+## Sound (VOL)
 
-El botón **VOL** de la barra superior abre volumen general, música y efectos, y **silenciar todo**. Se guarda en los ajustes.
+The **VOL** button in the top bar opens master volume, music and effects, plus **Mute everything**. It's saved in the settings.
 
-## Editor de manifiestos estilo Matrix
+## Matrix-style manifest editor
 
-**EDITAR YAML** en el inspector (pods, workloads, services, nodos), `kubectl edit <tipo>/<nombre> -n <ns>` en la terminal, o **Arreglar en el YAML** desde Kubi abren un editor retro: lluvia de código verde, el manifiesto se "descifra" línea a línea y aparece con resaltado. La columna **DECODER** explica cada línea (qué hace `replicas`, `requests.cpu`, `tolerations`...) y avisa de valores peligrosos: imagen `latest`, 1 réplica, contenedor `privileged`, límite de memoria muy bajo, secretos en texto plano. `~` marca las líneas cambiadas.
+**EDIT YAML** in the inspector (pods, workloads, services, nodes), `kubectl edit <kind>/<name> -n <ns>` in the terminal, or **Fix in the YAML** from Kubi open a retro editor: green code rain, the manifest "decrypts" line by line and appears highlighted. The **DECODER** column explains each line (what `replicas`, `requests.cpu`, `tolerations`... do) and warns about dangerous values: `latest` image, 1 replica, `privileged` container, very low memory limit, plaintext secrets. `~` marks changed lines.
 
-- **VALIDAR** = `kubectl replace --dry-run=server`: el API server comprueba el cambio sin aplicarlo.
-- **APLICAR** reemplaza el objeto, con confirmación. No se puede cambiar el tipo, el nombre ni el namespace, y los Secrets no se pueden editar aquí (sus valores saldrían en pantalla). Se ocultan `status`, `managedFields` y la anotación last-applied, que se conserva al guardar.
-- **PREGUNTAR A KUBI POR ESTA LÍNEA** y **pregúntale a Kubi por este error** le pasan el YAML o el error a Kubi.
-- En modo demo, cambiar la imagen rota de `fraud-ai` o la CPU de `giant-experiment` arregla los pods de verdad.
+- **VALIDATE** = `kubectl replace --dry-run=server`: the API server checks the change without applying it.
+- **APPLY** replaces the object, with confirmation. You can't change the kind, name or namespace, and Secrets can't be edited here (their values would show on screen). `status`, `managedFields` and the last-applied annotation are hidden; the latter is preserved on save.
+- **ASK KUBI ABOUT THIS LINE** and **ask Kubi about this error** hand the YAML or the error to Kubi.
+- In demo mode, changing `fraud-ai`'s broken image or `giant-experiment`'s CPU actually fixes the pods.
 
 ## Jetpack (Z)
 
-Z (o ESPACIO dos veces) enciende el jetpack: dos tanques con llamas en la mochila y sonido de motor. Mantén ESPACIO para subir, CTRL para bajar; soltando todo flota. Vuela por encima de naves, consolas y tuberías y se puede **aterrizar en los tejados**. Tiene un techo por nivel (más bajo dentro de las naves). Apagarlo en el aire = caer.
+Z (or SPACE twice) turns on the jetpack: two tanks with flames on the backpack and an engine sound. Hold SPACE to go up, CTRL to go down; release everything to hover. It flies over halls, consoles and pipes, and you can **land on rooftops**. There's a ceiling per level (lower inside halls). Turning it off mid-air = falling.
 
-## Kubi, el asistente (Y)
+## Kubi, the assistant (Y)
 
-Un dron tipo "Pokédex" que te sigue, mira hacia el problema más cercano (con una flecha) y avisa en un bocadillo cuando algo se rompe. Y abre su panel:
+A "Pokédex"-style drone that follows you, looks toward the nearest problem (with an arrow) and pops up a speech bubble when something breaks. Y opens its panel:
 
-- **Problemas** del cluster, peor primero, con un **diagnóstico integrado** (funciona siempre, también en web/demo): por qué pasa (ImagePullBackOff, CrashLoopBackOff, OOMKilled, sin sitio en ningún nodo con los números de CPU/memoria, taints, selectores, PVC, readiness, nodos NotReady o acordonados...), pasos para arreglarlo y comandos. Los comandos de lectura se ejecutan en la terminal al hacer clic; los que cambian algo solo se escriben para que los revises y pulses Enter. Botones: ir allí, logs del contenedor que falló, reiniciar el workload, borrar el pod, uncordon (siempre con confirmación).
-- **Chat libre** con memoria de la conversación: pregunta lo que quieras del cluster o de Kubernetes. El *tema* es el problema seleccionado o "todo el cluster" (el bridge le pasa estado, eventos, últimas líneas de log y el diagnóstico integrado). NUEVO CHAT borra la memoria. Lo que dice el modelo nunca se ejecuta solo.
-- **Salidas de comandos en el chat**: los comandos de lectura que sugiere Kubi se ejecutan y su salida se **adjunta** sola a la siguiente pregunta (etiqueta `[x]` para quitarla, botón "¿Qué significa esta salida?"). Cualquier salida de la terminal, también de comandos que escribas tú, trae el enlace **-> enviar esta salida a Kubi**.
-- **Comandos clicables**: en el diagnóstico y en las respuestas (código en línea o bloques ```), cada comando kubectl tiene **EJECUTAR** y **COPIAR**; los que tienen huecos `<...>`, **A LA TERMINAL**; otros comandos (docker, journalctl...) solo COPIAR. La terminal quita el `kubectl` inicial de lo que pegues.
-- La **terminal** también se mueve (arrastrando su barra) y se redimensiona desde cualquier borde; doble clic en su barra la devuelve a su sitio.
-- El panel se **arrastra** por la barra de título, se **redimensiona** desde cualquier borde o esquina y se **pliega** con `_` (o doble clic en el título).
-- **AJUSTES**: motor (automático / Ollama / llama.cpp integrado / apagado), modelo, largo de las respuestas y estilo (preciso/creativo). Se guardan en `~/.kubecraft/assistant.json`.
+- Cluster **problems**, worst first, with a **built-in diagnosis** (always works, also on web/demo): why it happens (ImagePullBackOff, CrashLoopBackOff, OOMKilled, no room on any node with the CPU/memory numbers, taints, selectors, PVCs, readiness, NotReady or cordoned nodes...), steps to fix it and commands. Read commands run in the terminal when clicked; ones that change something are only typed in for you to review and press Enter. Buttons: go there, logs of the failed container, restart the workload, delete the pod, uncordon (always with confirmation).
+- **Free chat** with conversation memory: ask anything about the cluster or Kubernetes. The *topic* is the selected problem or "the whole cluster" (the bridge passes it state, events, the last log lines and the built-in diagnosis). NEW CHAT clears the memory. Whatever the model says never runs on its own.
+- **Command output in the chat**: read commands Kubi suggests run and their output is **attached** automatically to the next question (`[x]` tag to remove it, "What does this output mean?" button). Any terminal output, including from commands you type yourself, gets a **-> send this output to Kubi** link.
+- **Clickable commands**: in the diagnosis and in answers (inline code or ``` blocks), every kubectl command gets **RUN** and **COPY**; those with `<...>` placeholders get **TO TERMINAL**; other commands (docker, journalctl...) only COPY. The terminal strips a leading `kubectl` from whatever you paste.
+- The **terminal** can also be moved (drag its bar) and resized from any edge; double-click its bar to put it back.
+- The panel **drags** by its title bar, **resizes** from any edge or corner and **collapses** with `_` (or double-click the title).
+- **SETTINGS**: engine (automatic / Ollama / built-in llama.cpp / off), model, answer length and style (precise/creative). Saved to `~/.kubecraft/assistant.json`.
 
-### Motores de IA (todo local)
+### AI engines (all local)
 
-- **Ollama**, si lo tienes (`ollama serve`): usa el mejor modelo instalado (gemma4, qwen3.5, llama3.2...) y desde AJUSTES puedes descargar modelos sugeridos en tu Ollama con barra de progreso.
-- **llama.cpp integrado**, sin instalar nada: desde AJUSTES Kubiverse descarga el build **oficial** de `github.com/ggml-org/llama.cpp` para tu sistema (~15 MB, verificado con el SHA256 que publica GitHub) y un modelo GGUF de una lista (Gemma 3 1B/4B/12B, Qwen 2.5 1.5B/3B/7B, Llama 3.2 3B) desde Hugging Face con **SHA256 fijado en el código**. Todo va a `~/.kubecraft/` y `llama-server` escucha solo en `127.0.0.1`; el bridge lo arranca al preguntar y lo para al salir.
-- Nunca se usan modelos `:cloud` ni servidores remotos: el juego no puede cambiar la URL del motor (solo el flag `--llm-url`).
+- **Ollama**, if you have it (`ollama serve`): uses the best installed model (gemma4, qwen3.5, llama3.2...), and from SETTINGS you can pull suggested models into your Ollama with a progress bar.
+- **Built-in llama.cpp**, nothing to install: from SETTINGS Kubiverse downloads the **official** build from `github.com/ggml-org/llama.cpp` for your system (~15 MB, verified against the SHA256 GitHub publishes) and a GGUF model from a list (Gemma 3 1B/4B/12B, Qwen 2.5 1.5B/3B/7B, Llama 3.2 3B) from Hugging Face with the **SHA256 pinned in the code**. Everything goes to `~/.kubecraft/` and `llama-server` only listens on `127.0.0.1`; the bridge starts it when you ask and stops it on exit.
+- `:cloud` models and remote servers are never used: the game can't change the engine URL (only the `--llm-url` flag can).
 
-## Modo vigía (O)
+## Watchtower mode (O)
 
-Kubernetes no tiene una API de "quién está conectado". El vigía combina tres fuentes:
+Kubernetes has no "who's connected" API. The watchtower combines three sources:
 
-1. **Auditoría del API server** (identidad real: usuario, grupos, IP de origen, herramienta, verbo y recurso, y si fue denegado). Hay que activarla en el cluster; el bridge lee `~/.kubecraft/audit/<contexto>/**/audit.log` (`--audit-dir`). `make cluster-ha` crea un cluster kind con la auditoría ya activada ([`deploy/audit-policy.yaml`](deploy/audit-policy.yaml): solo metadatos, nunca el contenido de Secrets ni de las peticiones). En clusters gestionados la auditoría va al proveedor (EKS → CloudWatch, GKE → Cloud Audit Logs, AKS → Diagnostic settings).
-2. **managedFields**: qué *herramienta* cambió algo (kubectl-edit, helm, argocd...), en cualquier cluster, sin identidad.
-3. **Jugadores de Kubiverse** conectados a este bridge.
+1. **API server auditing** (real identity: user, groups, source IP, tool, verb and resource, and whether it was denied). It has to be enabled on the cluster; the bridge reads `~/.kubecraft/audit/<context>/**/audit.log` (`--audit-dir`). `make cluster-ha` creates a kind cluster with auditing already on ([`deploy/audit-policy.yaml`](deploy/audit-policy.yaml): metadata only, never Secret or request contents). On managed clusters auditing goes to the provider (EKS → CloudWatch, GKE → Cloud Audit Logs, AKS → Diagnostic settings).
+2. **managedFields**: which *tool* changed something (kubectl-edit, helm, argocd...), on any cluster, without identity.
+3. **Kubiverse players** connected to this bridge.
 
-Con el vigía abierto cada identidad aparece como un **fantasma** que camina hacia lo que toca (a la puerta del namespace, al pod, a la isla del nodo) y lanza un rayo cuando escribe. Una identidad nueva, un acceso denegado (401/403) o tocar Secrets dispara una **alarma**. El panel se puede minimizar (`_`) sin apagar el modo. Filtra el ruido interno (nodos, controladores de kube-system); el propio bridge se marca como "este bridge" y se oculta.
+With the watchtower open, each identity appears as a **ghost** that walks to what it touches (the namespace's door, the pod, the node's island) and fires a beam when it writes. A new identity, a denied access (401/403) or touching Secrets triggers an **alarm**. The panel can be minimized (`_`) without turning the mode off. It filters internal noise (nodes, kube-system controllers); the bridge itself is marked "this bridge" and hidden.
 
-## Primera persona (P)
+## First person (P)
 
-Cámara en perspectiva a la altura del casco: el ratón mira (se captura; ESC lo libera), clic inspecciona lo que hay bajo la retícula, y se conservan el andar, correr, saltar y los límites físicos.
+Perspective camera at helmet height: the mouse looks around (it's captured; ESC releases it), clicking inspects what's under the crosshair, and walking, running, jumping and physical limits all still apply.
 
-## Estadísticas (F3)
+## Stats (F3)
 
-- **Juego**: FPS, tiempo de frame, RAM, VRAM, draw calls, objetos y GPU.
-- **Cluster**: CPU y memoria totales y por nodo, pods por nodo frente a su capacidad y los pods que más CPU usan. Con **metrics-server** se muestra el uso real (`make metrics-server` lo instala; en clusters locales añade `--kubelet-insecure-tls`). Sin él, se muestra lo reservado por los *requests* de los pods.
+- **Game**: FPS, frame time, RAM, VRAM, draw calls, objects and GPU.
+- **Cluster**: total and per-node CPU and memory, pods per node against capacity, and the top CPU-consuming pods. With **metrics-server** actual usage is shown (`make metrics-server` installs it; on local clusters add `--kubelet-insecure-tls`). Without it, what's reserved by pod *requests* is shown.
 
-## Día y noche
+## Day and night
 
-La iluminación sigue la **hora del cluster** (reloj del bridge, en tu zona horaria). El sol cruza el cielo, hay amanecer y atardecer anaranjados, y por la noche luna y estrellas. La hora se muestra en la barra de niveles. En modo demo (o con **VISTA → Ciclo día/noche acelerado**) un día dura 4 minutos.
+Lighting follows the **cluster's time** (the bridge's clock, in your time zone). The sun crosses the sky, there are orange sunrises and sunsets, and at night a moon and stars. The time is shown in the level bar. In demo mode (or with **VIEW → Accelerated day/night cycle**) a day lasts 4 minutes.
 
-## Naves en llamas
+## Halls on fire
 
-Una nave cuyo namespace tiene pods fallando arde: llamas voxel en el tejado y las ventanas, luz naranja parpadeante y ráfagas de *glitch* (el edificio tiembla, aparecen franjas de color y el letrero se corrompe). La intensidad crece con el número de pods fallando.
+A hall whose namespace has failing pods catches fire: voxel flames on the roof and windows, a flickering orange light and bursts of *glitch* (the building shakes, color stripes appear and the sign gets corrupted). The intensity grows with the number of failing pods.
 
-## Idiomas
+## Languages
 
-Inglés y español (se detecta el idioma del sistema y se cambia en la pantalla de inicio o en **V > Idioma**). El inglés es el idioma fuente; las traducciones están en [`game/scripts/i18n.gd`](game/scripts/i18n.gd). Para añadir otro idioma: crea otro diccionario como `ES` y añádelo a `LANGS`.
+English and Spanish (the system language is detected; change it on the start screen or in **V > Language**). English is the source language; translations live in [`game/scripts/i18n.gd`](game/scripts/i18n.gd). To add another language: create another dictionary like `ES` and add it to `LANGS`.
 
-## Mapa
+## Map
 
-- **Minimapa** abajo a la izquierda: te sigue y muestra el nivel actual (naves, líneas, muelles, islas, pods por estado, puertas y tu flecha). Si haces clic en él, abre el mapa completo.
-- **Mapa completo (M)**: todo el nivel con nombres. Con un clic en una nave, línea, muelle, pod o punto del suelo viajas hasta allí respetando los límites físicos.
+- **Minimap** at the bottom left: follows you and shows the current level (halls, lines, docks, islands, pods by status, doors and your arrow). Clicking it opens the full map.
+- **Full map (M)**: the whole level with names. Click a hall, line, dock, pod or spot on the ground to travel there, respecting physical limits.
 
-## Uso rápido
+## Quick start
 
-Requisitos: Go (versión en `bridge/go.mod`), Godot 4.7 (`brew install --cask godot`), un kubeconfig que funcione.
+Requirements: Go (version in `bridge/go.mod`), Godot 4.7 (`brew install --cask godot`), a working kubeconfig.
 
 ```bash
-# 1. (opcional) cargas de ejemplo: crashloop, imagepull, statefulset, daemonset, servicios...
+# 1. (optional) sample workloads: crashloop, imagepull, statefulset, daemonset, services...
 make demo-apply
 
-# 2a. Nativo desde el código fuente
-make run-bridge          # terminal 1: bridge en http://127.0.0.1:8088 (usa tu current-context)
-make play                # terminal 2: abre el juego y conecta
+# 2a. Native from source
+make run-bridge          # terminal 1: bridge on http://127.0.0.1:8088 (uses your current-context)
+make play                # terminal 2: opens the game and connects
 
-# 2b. Web: el bridge sirve el build web en el mismo origen
-make serve-web           # exporta a build/web y abre http://127.0.0.1:8088
+# 2b. Web: the bridge serves the web build on the same origin
+make serve-web           # exports to build/web and opens http://127.0.0.1:8088
 
-# Sin cluster: modo demo con un cluster simulado
-make play-demo           # o en web: http://…/?demo=1
+# No cluster: demo mode with a simulated cluster
+make play-demo           # or on web: http://…/?demo=1
 ```
 
 Builds:
 
 ```bash
-make web                 # build/web/          (HTML5/WASM, sin threads → no necesita COOP/COEP)
-make macos linux windows # build/<os>/          (necesita export templates de Godot 4.7.2)
+make web                 # build/web/          (HTML5/WASM, no threads → no COOP/COEP needed)
+make macos linux windows # build/<os>/          (needs Godot 4.7.2 export templates)
 make bridge-all          # bridge/bin/k8s-bridge-<os>-<arch>
-make test                # tests del bridge (Go) + mundo/colisiones (Godot headless)
+make bridge-bundle       # same, with the web build embedded (single file that serves the game)
+make test                # bridge tests (Go) + world/collisions (headless Godot)
 ```
 
-Las *export templates* se instalan desde el editor (Editor → Manage Export Templates) o descomprimiendo `Godot_v4.7.2-stable_export_templates.tpz` en `~/Library/Application Support/Godot/export_templates/4.7.2.stable/` (macOS).
+*Export templates* are installed from the editor (Editor → Manage Export Templates) or by unzipping `Godot_v4.7.2-stable_export_templates.tpz` into `~/Library/Application Support/Godot/export_templates/4.7.2.stable/` (macOS).
 
-### Flags del bridge
+### CI, releases and web deployment
+
+[`.github/workflows/build.yml`](.github/workflows/build.yml) runs the tests, exports Web, macOS, Linux and Windows with Godot 4.7.2 and builds the bridges with the web build embedded; each one is uploaded as a workflow artifact. Pushing a `v*` tag publishes a GitHub Release with every archive and `SHA256SUMS.txt`. The macOS app is ad-hoc signed, not notarized: the first time, open it with right-click → Open.
+
+There are two ways to play in the browser:
+
+- **Bundled bridge (recommended for real clusters):** download `k8s-bridge-<os>-<arch>` from a release, run it and open `http://127.0.0.1:8088`. The game comes inside the binary (`go:embed`), so there's no CORS or HTTPS to deal with. `--web DIR` still overrides the bundled build.
+- **Static site (public demo):** on every push to `main` the web build is deployed to GitHub Pages (Settings → Pages → Source: "GitHub Actions"). It's plain static files (no threads, so no COOP/COEP headers needed) and works on any static host. Link `?demo=1` to jump straight into the simulated cluster. To manage a real cluster from there, the player runs a bridge locally that trusts the site: `k8s-bridge --allow-origin https://<user>.github.io`. On a public host the start screen suggests `http://127.0.0.1:8088` as the bridge URL. Chrome and Firefox allow it (Chrome asks for local network access). Safari blocks `http://127.0.0.1` from an HTTPS page, so use the bundled bridge there.
+
+### Bridge flags
 
 ```
---context NAME       contexto del kubeconfig (por defecto current-context)
---kubeconfig PATH    kubeconfig alternativo
---addr HOST:PORT     por defecto 127.0.0.1:8088
---readonly           rechaza cualquier acción mutante (modo "solo mirar")
---token SECRET       exige X-Bridge-Token / ?token= (también K8SGAME_TOKEN)
---web DIR            sirve el build web en /
---allow-origin URLS  orígenes web extra permitidos (p.ej. si publicas el juego en otro host)
---llm-url URL        Ollama para Kubi (por defecto http://127.0.0.1:11434; "" lo desactiva; si no es local, avisa)
---llm-model NAME     modelo de Ollama (auto = el mejor local instalado, nunca ":cloud")
---audit-dir DIR      logs de auditoría para el vigía (por defecto ~/.kubecraft/audit)
---lan                red local (móviles): HTTPS autofirmado + todas las interfaces + token aleatorio + imprime las URLs
+--context NAME       kubeconfig context (defaults to current-context)
+--kubeconfig PATH    alternate kubeconfig
+--addr HOST:PORT     defaults to 127.0.0.1:8088
+--readonly           rejects any mutating action ("look only" mode)
+--token SECRET       requires X-Bridge-Token / ?token= (also K8SGAME_TOKEN)
+--web DIR            serves the web build at / (overrides the one bundled into the binary)
+--allow-origin URLS  extra allowed web origins (e.g. if you host the game elsewhere)
+--llm-url URL        Ollama for Kubi (defaults to http://127.0.0.1:11434; "" disables it; warns if not local)
+--llm-model NAME     Ollama model (auto = best locally installed, never ":cloud")
+--audit-dir DIR      audit logs for the watchtower (defaults to ~/.kubecraft/audit)
+--lan                local network (phones): self-signed HTTPS + all interfaces + random token + prints the URLs
 ```
 
-Parámetros URL del build web: `?bridge=http://host:8088`, `?token=...`, `?demo=1`.
+Web build URL parameters: `?bridge=http://host:8088`, `?token=...`, `?demo=1`.
 
-## Seguridad
+## Security
 
-El juego ejecuta acciones **reales** con las credenciales de tu kubeconfig.
+The game performs **real** actions with your kubeconfig's credentials.
 
-- El bridge escucha solo en `127.0.0.1` y **rechaza peticiones de navegador de otros orígenes** y hosts que no sean localhost (evita que una web cualquiera que visites borre tus pods vía `localhost:8088`, y el DNS rebinding).
-- Para clusters importantes usa `--readonly`, o un kubeconfig/ServiceAccount con RBAC limitado (`get/list/watch` + solo los verbos que quieras permitir: `pods/delete`, `deployments/scale`, `nodes/patch`...).
-- Si expones el bridge fuera de localhost (`--addr 0.0.0.0:8088`), usa **siempre** `--token` y `--allow-origin`.
+- The bridge only listens on `127.0.0.1` and **rejects browser requests from other origins** and non-localhost hosts (so a random website you visit can't delete your pods via `localhost:8088`, and DNS rebinding is blocked).
+- For important clusters use `--readonly`, or a kubeconfig/ServiceAccount with limited RBAC (`get/list/watch` + only the verbs you want to allow: `pods/delete`, `deployments/scale`, `nodes/patch`...).
+- If you expose the bridge beyond localhost (`--addr 0.0.0.0:8088`), **always** use `--token` and `--allow-origin`.
 
-## API del bridge
+## Bridge API
 
-| Método | Ruta | Descripción |
+| Method | Route | Description |
 |---|---|---|
-| GET | `/api/ws` | WebSocket: `{"type":"state","data":Snapshot}` (≤3/s, coalescido), `{"type":"event","data":{...}}` y `{"type":"watch","data":{audit, visitors, actions}}` (vigía) |
-| GET · POST | `/api/assistant` | estado de los motores, modelos, catálogo y descargas · `{"question","kind","ns","name","lang","diagnosis","history"}` → `{"ok","answer","model"}` |
-| POST | `/api/assistant/config` · `/api/assistant/download` | ajustes de Kubi · descargar `{"kind":"llamacpp"\|"gguf"\|"ollama","id"}` |
-| DELETE | `/api/assistant/model?id=` | borrar un modelo GGUF descargado |
-| GET · POST | `/api/manifest` | YAML de un objeto (`?kind=&ns=&name=`) · reemplazarlo `{"kind","ns","name","yaml","dry_run"}` |
-| GET | `/api/state` | Snapshot actual en JSON |
-| GET | `/api/logs?ns=&pod=&container=&tail=&previous=1` | Logs de un contenedor |
-| POST | `/api/kubectl` | `{"line": "get pods -A"}` → `{"ok", "exit_code", "output"}` (kubectl real con las restricciones de arriba) |
+| GET | `/api/ws` | WebSocket: `{"type":"state","data":Snapshot}` (≤3/s, coalesced), `{"type":"event","data":{...}}` and `{"type":"watch","data":{audit, visitors, actions}}` (watchtower) |
+| GET · POST | `/api/assistant` | engine status, models, catalog and downloads · `{"question","kind","ns","name","lang","diagnosis","history"}` → `{"ok","answer","model"}` |
+| POST | `/api/assistant/config` · `/api/assistant/download` | Kubi settings · download `{"kind":"llamacpp"\|"gguf"\|"ollama","id"}` |
+| DELETE | `/api/assistant/model?id=` | delete a downloaded GGUF model |
+| GET · POST | `/api/manifest` | an object's YAML (`?kind=&ns=&name=`) · replace it `{"kind","ns","name","yaml","dry_run"}` |
+| GET | `/api/state` | current Snapshot as JSON |
+| GET | `/api/logs?ns=&pod=&container=&tail=&previous=1` | container logs |
+| POST | `/api/kubectl` | `{"line": "get pods -A"}` → `{"ok", "exit_code", "output"}` (real kubectl with the restrictions above) |
 | POST | `/api/action` | `{"action": "delete_pod" \| "scale" \| "restart" \| "cordon" \| "uncordon" \| "create_deployment" \| "delete_workload", "kind", "ns", "name", "replicas", "image", "service"}` |
 
-## Estructura
+## Layout
 
 ```
-bridge/                 Go: kubeconfig → informers → snapshot JSON, acciones, logs, eventos
-  main.go               servidor HTTP/WS, guard de origen, publish loop
-  snapshot.go           modelo plano para el juego (nodes, pods, workloads, services)
-  actions.go            acciones mutantes, logs, stream de Events
-game/                   Proyecto Godot 4.7
-  scripts/k8s_client.gd autoload K8s: WebSocket/HTTP al bridge o cluster simulado
-  scripts/mock_cluster.gd  mini‑Kubernetes simulado para el modo demo
-  scripts/world.gd      niveles (planta / nave / energía), layout, colisiones, líneas, FX
+bridge/                 Go: kubeconfig → informers → JSON snapshot, actions, logs, events
+  main.go               HTTP/WS server, origin guard, publish loop
+  snapshot.go           flat model for the game (nodes, pods, workloads, services)
+  actions.go            mutating actions, logs, Events stream
+  static.go · embed.go  serves the web build (gzipped), from --web or bundled in webdist/
+game/                   Godot 4.7 project
+  scripts/k8s_client.gd K8s autoload: WebSocket/HTTP to the bridge or simulated cluster
+  scripts/mock_cluster.gd  simulated mini-Kubernetes for demo mode
+  scripts/world.gd      levels (plant / hall / energy), layout, collisions, lines, FX
   scripts/entities/     FactoryBuilding, ProductionLine, PodBot, ServicePortal, NodeIsland
-  scripts/missions.gd   misiones guiadas
-  scripts/kubectl.gd    comando kubectl equivalente a cada acción / vista
-  scripts/settings.gd   preferencias (tamaño de texto, idioma, correr, progreso)
-  scripts/i18n.gd       idiomas (EN fuente, traducción ES)
-  scripts/map_view.gd   minimapa y mapa completo con viaje rápido
-  scripts/player.gd     personaje: andar, correr, saltar
-  scripts/hud.gd        UI: barras, alarmas, misiones, inspector, terminal, logs, build, leyenda
-  tests/test_world.gd   tests headless de niveles y colisiones
-  scripts/vox.gd        paleta PICO-8, materiales toon + contorno, helpers voxel
-deploy/demo.yaml        cargas de ejemplo
+  scripts/missions.gd   guided missions
+  scripts/kubectl.gd    equivalent kubectl command for each action / view
+  scripts/settings.gd   preferences (text size, language, running, progress)
+  scripts/i18n.gd       languages (EN source, ES translation)
+  scripts/map_view.gd   minimap and full map with fast travel
+  scripts/player.gd     character: walk, run, jump
+  scripts/hud.gd        UI: bars, alarms, missions, inspector, terminal, logs, build, legend
+  tests/test_world.gd   headless level and collision tests
+  scripts/vox.gd        PICO-8 palette, toon + outline materials, voxel helpers
+deploy/demo.yaml        sample workloads
 ```
 
-Fuentes: VT323 y Press Start 2P (SIL Open Font License, en `game/assets/fonts`).
+Fonts: VT323 and Press Start 2P (SIL Open Font License, in `game/assets/fonts`).

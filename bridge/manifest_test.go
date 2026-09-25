@@ -107,7 +107,7 @@ func TestWebHandlerGzip(t *testing.T) {
 	dir := t.TempDir()
 	body := strings.Repeat("wasm wasm wasm ", 5000)
 	os.WriteFile(dir+"/index.wasm", []byte(body), 0o600)
-	h := webHandler(dir)
+	h := webHandler(os.DirFS(dir))
 	req := httptest.NewRequest("GET", "/index.wasm", nil)
 	req.Header.Set("Accept-Encoding", "gzip, br")
 	rec := httptest.NewRecorder()

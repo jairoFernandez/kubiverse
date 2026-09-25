@@ -130,10 +130,14 @@ func main() {
 	mux.HandleFunc("POST /api/assistant/config", hub.auth(hub.handleAIConfig))
 	mux.HandleFunc("POST /api/assistant/download", hub.auth(hub.handleAIDownload))
 	mux.HandleFunc("DELETE /api/assistant/model", hub.auth(hub.handleAIDeleteModel))
+	// Always revalidated (a rebuilt game never runs from a stale cache), gzipped.
+	// --web wins over the build bundled into the binary.
 	if *webDir != "" {
-		// Always revalidated (a rebuilt game never runs from a stale cache), gzipped.
-		mux.Handle("/", webHandler(*webDir))
+		mux.Handle("/", webHandler(os.DirFS(*webDir)))
 		log.Printf("serving web build from %s", *webDir)
+	} else if web := embeddedWeb(); web != nil {
+		mux.Handle("/", webHandler(web))
+		log.Printf("serving the bundled web build")
 	}
 
 	srv := &http.Server{Addr: *addr, Handler: guard(mux, *origins)}

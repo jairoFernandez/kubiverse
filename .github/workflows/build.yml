@@ -1,0 +1,155 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GODOT_VERSION: 4.7.2
+  # From https://github.com/godotengine/godot/releases/download/4.7.2-stable/SHA512-SUMS.txt
+  GODOT_SHA512: 9aa00f7a605200940bce3027a567b782f49bd8e940dd06ae9e987bd65aee1b1467edd56ed84fcdcbdd44354bf613bdbb4e5d2913e925850368e150c59ed54c65
+  TEMPLATES_SHA512: ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: bridge/go.mod
+          cache-dependency-path: bridge/go.sum
+      - name: Install Godot
+        run: |
+          base=https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable
+          curl -fsSL -o godot.zip "$base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          echo "$GODOT_SHA512  godot.zip" | sha512sum -c -
+          unzip -q godot.zip && sudo mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 /usr/local/bin/godot
+      - run: make game-import
+      - run: make test
+
+  # Single-file bridges with the web build embedded: run one, open http://127.0.0.1:8088.
+  bridge:
+    needs: game
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: bridge/go.mod
+          cache-dependency-path: bridge/go.sum
+      - uses: actions/download-artifact@v4
+        with:
+          name: kubiverse-web
+          path: bridge/webdist
+      - run: make bridge-all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: k8s-bridge
+          path: bridge/bin/k8s-bridge-*
+          if-no-files-found: error
+
+  game:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache export templates
+        id: templates
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/godot/export_templates/${{ env.GODOT_VERSION }}.stable
+          key: godot-templates-${{ env.GODOT_VERSION }}
+      - name: Install Godot
+        run: |
+          base=https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable
+          curl -fsSL -o godot.zip "$base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          echo "$GODOT_SHA512  godot.zip" | sha512sum -c -
+          unzip -q godot.zip && sudo mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 /usr/local/bin/godot
+      - name: Install export templates
+        if: steps.templates.outputs.cache-hit != 'true'
+        run: |
+          base=https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable
+          curl -fsSL -o templates.tpz "$base/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          echo "$TEMPLATES_SHA512  templates.tpz" | sha512sum -c -
+          dest=~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          mkdir -p "$dest" && unzip -q templates.tpz && mv templates/* "$dest/"
+      - run: make web macos linux windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kubiverse-web
+          path: build/web
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kubiverse-macos
+          path: build/macos/Kubiverse.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kubiverse-linux
+          path: build/linux
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kubiverse-windows
+          path: build/windows
+          if-no-files-found: error
+
+  # Public demo on GitHub Pages (enable Pages with source "GitHub Actions").
+  # It runs the simulated cluster; players with a local bridge connect to it
+  # from the start screen (bridge started with --allow-origin <pages origin>).
+  pages:
+    if: github.ref == 'refs/heads/main'
+    needs: [test, game]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: true
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: kubiverse-web
+          path: site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+  # Tag vX.Y.Z -> GitHub Release with one archive per platform plus the bridge binaries.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, bridge, game]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Package
+        run: |
+          cd dist
+          mkdir -p out
+          cp kubiverse-macos/Kubiverse.zip out/kubiverse-macos.zip
+          (cd kubiverse-web && zip -qr ../out/kubiverse-web.zip .)
+          (cd kubiverse-linux && chmod +x kubiverse.x86_64 && tar czf ../out/kubiverse-linux-x86_64.tar.gz .)
+          (cd kubiverse-windows && zip -qr ../out/kubiverse-windows-x86_64.zip .)
+          chmod +x k8s-bridge/* && cp k8s-bridge/* out/
+          (cd out && sha256sum * > SHA256SUMS.txt)
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/out/* --repo "$GITHUB_REPOSITORY" --generate-notes

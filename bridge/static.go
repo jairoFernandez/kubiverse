@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
+	"io/fs"
 	"net/http"
 	"path"
 	"strings"
@@ -14,9 +15,9 @@ import (
 // webHandler serves the Godot web build. The big files (the .wasm is ~40 MB)
 // are gzip-compressed once in memory, which makes phones load ~4x faster.
 // Clients always revalidate (no-cache) but get 304 when nothing changed.
-func webHandler(dir string) http.Handler {
-	fs := http.FileServer(http.Dir(dir))
-	root := http.Dir(dir)
+func webHandler(files fs.FS) http.Handler {
+	root := http.FS(files)
+	fs := http.FileServer(root)
 	var mu sync.Mutex
 	cache := map[string]gzEntry{}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
