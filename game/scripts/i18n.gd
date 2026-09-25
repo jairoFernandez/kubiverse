@@ -9,6 +9,14 @@ signal lang_changed
 const LANGS := {"en": "English", "es": "Español"}
 
 const ES := {
+	"A Service records nothing (it is a network rule): this is what its pods log, one line per request.": "Un Service no registra nada (es una regla de red): esto es lo que escriben en sus logs los pods de detrás, una línea por petición.",
+	"TRAFFIC  service %s": "TRÁFICO  service %s",
+	"%d pods behind it · %.1f req/s (last 30 s)": "%d pods detrás · %.1f pet/s (últimos 30 s)",
+	"No ready pods: requests to this Service fail (connection refused / 503).": "Sin pods listos: las peticiones a este Service fallan (conexión rechazada / 503).",
+	"Its pods don't log requests (no access log): showing their last lines. Enable access logs in the app to see traffic here.": "Sus pods no registran las peticiones (sin access log): se muestran sus últimas líneas. Activa los access logs en la app para ver el tráfico aquí.",
+	"Waiting for requests... (send some: port-forward it and open it in the browser)": "Esperando peticiones... (manda alguna: hazle port-forward y ábrelo en el navegador)",
+	"STOP TRAFFIC": "PARAR TRÁFICO",
+	"TRAFFIC (live)": "TRÁFICO (en vivo)",
 	"INIT CONTAINER": "INIT CONTAINER",
 	"SIDECAR": "SIDECAR",
 	"CONTAINER": "CONTENEDOR",

@@ -343,6 +343,17 @@ func _screenshot_and_quit(path: String) -> void:
 				if "--inspect-container" in OS.get_cmdline_user_args() and not caps.is_empty():
 					hud.inspect(caps[0])
 				await get_tree().create_timer(1.0).timeout
+	if "--traffic-demo" in OS.get_cmdline_user_args():
+		for sv in K8s.state.services:
+			if sv.ns == world.current_ns() and sv.get("pods") != null and not (sv.pods as Array).is_empty():
+				hud.traffic.start(sv)
+				var dock: ServicePortal = world.services.get("%s/%s" % [sv.ns, sv.name])
+				if dock:
+					player.teleport(_standable_near(dock.target + Vector3(-2.5, 0, 3.0)))
+				break
+		hud._terminal.visible = false
+		hud._mission_panel.visible = false
+		await get_tree().create_timer(9.0).timeout
 	if "--kubi-test" in OS.get_cmdline_user_args():
 		missions.set_level("kubi")
 		await get_tree().create_timer(3.0).timeout

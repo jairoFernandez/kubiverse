@@ -148,6 +148,7 @@ var _view_scale: Label
 
 var _legend: PanelContainer
 var _pod_legend: PanelContainer   # the legend inside a pod (the tank)
+var traffic: TrafficView          # live requests of a Service (from its pods' logs)
 
 var _inspector: PanelContainer
 var _insp_scroll: ScrollContainer
@@ -973,6 +974,12 @@ func _build_game_ui() -> void:
 	_build_level_strip()
 	_build_legend()
 	_build_pod_legend()
+	traffic = TrafficView.new(self)
+	traffic.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	traffic.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	traffic.offset_left = 10
+	traffic.offset_bottom = -44
+	_game_root.add_child(traffic)
 	_build_missions_panel()
 	stats = StatsPanel.new()
 	stats.offset_left = 10
@@ -2457,6 +2464,12 @@ func _refresh_inspector() -> void:
 			for pn in backs.slice(0, 8):
 				lines.append("             - " + pn)
 			buttons.append(["EDIT YAML", func(): open_editor("Service", d.ns, d.name), "", false, "kubectl -n %s edit service %s" % [d.ns, d.name]])
+			var watching := traffic.active_key() == "%s/%s" % [d.ns, d.name]
+			buttons.append(["STOP TRAFFIC" if watching else "TRAFFIC (live)", func():
+				if watching:
+					traffic.stop()
+				else:
+					traffic.start(d), "" if watching else "GoButton", false, "kubectl -n %s logs -l <its selector> --prefix -f" % d.ns])
 			buttons.append(["PORT-FORWARD", func(): open_port_forward("service", d), "", false, Kubectl.port_forward("service", d.ns, d.name, 0, 0)])
 		"namespace":
 			var st: Dictionary = _insp_target.stats

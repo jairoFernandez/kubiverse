@@ -64,6 +64,8 @@ var capsules := {}                        # container name -> PodCapsule
 var _pod_labels: Array = []               # static labels inside the tank (ports, volumes, IP)
 var _bubbles: Array = []                  # [{node, vy, life, text?}] rising bubbles (log lines too)
 var _bubble_t := 0.0
+var _floaters: Array = []                 # [{pos, text, color, t}] short-lived labels (requests)
+var _in_flight := 0
 var districts: Array = []                 # plant: [{district, rect, title, sub, color, ground}]
 var gate: IngressGate                     # hall: row of pods without a line {pos, count, done, owners}
 
@@ -178,6 +180,8 @@ func set_level(l: String) -> void:
 		internet = null
 	gate = null
 	home = null
+	_floaters.clear()
+	_in_flight = 0
 	tunnels.clear()
 	capsules.clear()
 	for b in _bubbles:
@@ -645,6 +649,21 @@ func _pipe_on_sand(a: Vector3, b: Vector3, col: Color) -> void:
 			continue
 		var size := Vector3(len, 0.22, 0.22) if absf(q.x - p.x) > absf(q.z - p.z) else Vector3(0.22, 0.22, len)
 		Vox.box(_static, size, (p + q) * 0.5 + Vector3(0, 0.12, 0), col.darkened(0.2), 0.3)
+
+
+## A request seen in the logs of a Service's pod: a packet from the loading
+## dock to the robot that served it, and the request floating by the dock.
+func traffic_packet(svc_key: String, pod_key: String, status: int, text: String) -> void:
+	var sv: ServicePortal = services.get(svc_key)
+	var bot: PodBot = pods.get(pod_key)
+	if sv == null or bot == null or _in_flight > 24:
+		return
+	var col := TrafficView.status_color(status)
+	_in_flight += 1
+	bolt(sv.beam_origin(), _pod_top(bot), col, func(): _in_flight -= 1, 5.0)
+	_floaters.append({"pos": sv.beam_origin() + Vector3(randf_range(-0.8, 0.8), 2.2 + randf_range(0.0, 0.6), 0), "text": text, "color": col, "t": 0.0})
+	if _floaters.size() > 8:
+		_floaters.pop_front()
 
 
 ## A bubble rising from a container; with text it is a log line.
@@ -1589,6 +1608,11 @@ func _process(delta: float) -> void:
 	_t += delta
 	if swim_level:
 		_swim_fx(delta)
+	for i in range(_floaters.size() - 1, -1, -1):
+		_floaters[i].t += delta
+		_floaters[i].pos.y += delta * 0.5
+		if _floaters[i].t > 4.0:
+			_floaters.remove_at(i)
 	for m in movers:
 		var y: float = m.base + sin(_t * m.speed) * m.amp
 		walk_heights[m.idx] = y
@@ -1746,6 +1770,8 @@ func labels(player_pos: Vector3) -> Array:
 		out.append({"pos": dk.anchor(), "text": dk.label_text(), "sub": _hint(dk, dk.label_sub()), "color": dk.label_color(), "big": false, "entity": dk})
 	for t in tunnels.values():
 		out.append({"pos": t.anchor(), "text": t.label_text(), "sub": _hint(t, t.label_sub()), "color": t.label_color(), "big": false, "entity": t})
+	for f in _floaters:
+		out.append({"pos": f.pos, "text": f.text, "sub": "", "color": f.color, "big": false, "small": true})
 	if swim_level:
 		for cap in capsules.values():
 			out.append({"pos": cap.anchor(), "text": cap.label_text(), "sub": _hint(cap, cap.label_sub()), "color": cap.label_color(), "big": true, "entity": cap})
