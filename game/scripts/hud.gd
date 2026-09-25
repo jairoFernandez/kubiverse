@@ -2160,12 +2160,10 @@ func _layout() -> void:
 	mm.offset_right = 10 + msz.x
 	# Kubi on the left, the watchtower on the right (over the inspector).
 	var pw := clampf(sz.x * 0.4, 360.0, 640.0)
-	for p in [kubi, watch]:
-		var ph: float = sz.y - top - bottom
-		if p == watch and watch.collapsed:
-			ph = watch.get_combined_minimum_size().y
-		p.size = Vector2(pw, ph)
-		p.position = Vector2(10.0 if p == kubi else sz.x - pw - 10.0, top)
+	kubi.place(Rect2(10.0, top, pw, sz.y - top - bottom), sz)
+	var wh: float = watch.get_combined_minimum_size().y if watch.collapsed else sz.y - top - bottom
+	watch.size = Vector2(pw, wh)
+	watch.position = Vector2(sz.x - pw - 10.0, top)
 	# Centered dialogs: size to content, center, keep on screen.
 	var full := _modal_layer.size
 	for p in [_confirm_panel, _build_panel]:

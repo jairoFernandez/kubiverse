@@ -204,13 +204,30 @@ func run_kubectl(line: String, cb: Callable) -> void:
 			cb.call(bool(data.get("ok", false)), str(data.get("output", ""))))
 
 
-## Assistant (Kubi) status: cb({llm: bool, model, error?}).
+## Assistant (Kubi) status: engines, models, catalog, downloads. cb(dict)
 func assistant_status(cb: Callable) -> void:
 	if mode != Mode.BRIDGE:
 		cb.call({"llm": false, "demo": mode == Mode.DEMO})
 		return
 	_http(HTTPClient.METHOD_GET, "/api/assistant" + _q(), "", func(ok: bool, data):
-		cb.call(data if ok else {"llm": false, "error": str(data)}))
+		cb.call(data if ok else {"llm": false, "why": str(data)}))
+
+
+## Saves Kubi's settings on the bridge. cb(ok, error)
+func assistant_config(cfg: Dictionary, cb: Callable) -> void:
+	_http(HTTPClient.METHOD_POST, "/api/assistant/config" + _q(), JSON.stringify(cfg), func(ok: bool, data):
+		cb.call(ok and data.get("ok", false), str(data.get("error", "")) if ok else str(data)))
+
+
+## Starts a download on the bridge: kind = llamacpp | gguf | ollama. cb(ok, error)
+func assistant_download(kind: String, id: String, cb: Callable) -> void:
+	_http(HTTPClient.METHOD_POST, "/api/assistant/download" + _q(), JSON.stringify({"kind": kind, "id": id}), func(ok: bool, data):
+		cb.call(ok and data.get("ok", false), str(data.get("error", "")) if ok else str(data)))
+
+
+func assistant_delete_model(id: String, cb: Callable) -> void:
+	_http(HTTPClient.METHOD_DELETE, "/api/assistant/model?id=%s" % id.uri_encode() + _q(false), "", func(ok: bool, data):
+		cb.call(ok and data.get("ok", false), str(data.get("error", "")) if ok else str(data)))
 
 
 ## Asks the bridge's language model. req = {question, kind, ns, name, lang,

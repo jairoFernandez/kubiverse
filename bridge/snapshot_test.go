@@ -98,18 +98,17 @@ func TestTerminalValidation(t *testing.T) {
 }
 
 func TestPickModel(t *testing.T) {
-	old := llm.Model
-	defer func() { llm.Model = old }()
-	llm.Model = "auto"
 	installed := []string{"minimax-m2.1:cloud", "nomic-embed-text:latest", "llama3.2:3b", "gemma4:latest"}
-	if got := pickModel(installed); got != "gemma4:latest" {
+	if got := pickModel(installed, "auto"); got != "gemma4:latest" {
 		t.Fatalf("auto: got %q", got)
 	}
-	if got := pickModel([]string{"minimax-m2.1:cloud"}); got != "" {
+	if got := pickModel([]string{"minimax-m2.1:cloud"}, "auto"); got != "" {
 		t.Fatalf("cloud models must never be picked automatically, got %q", got)
 	}
-	llm.Model = "llama3.2:3b"
-	if got := pickModel(installed); got != "llama3.2:3b" {
+	if got := pickModel(installed, "minimax-m2.1:cloud"); got != "" {
+		t.Fatalf("cloud models must never be used, got %q", got)
+	}
+	if got := pickModel(installed, "llama3.2:3b"); got != "llama3.2:3b" {
 		t.Fatalf("explicit: got %q", got)
 	}
 }

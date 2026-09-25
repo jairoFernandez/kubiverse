@@ -153,7 +153,15 @@ Z (o ESPACIO dos veces) enciende el jetpack: dos tanques con llamas en la mochil
 Un dron tipo "Pokédex" que te sigue, mira hacia el problema más cercano (con una flecha) y avisa en un bocadillo cuando algo se rompe. Y abre su panel:
 
 - **Problemas** del cluster, peor primero, con un **diagnóstico integrado** (funciona siempre, también en web/demo): por qué pasa (ImagePullBackOff, CrashLoopBackOff, OOMKilled, sin sitio en ningún nodo con los números de CPU/memoria, taints, selectores, PVC, readiness, nodos NotReady o acordonados...), pasos para arreglarlo y comandos. Los comandos de lectura se ejecutan en la terminal al hacer clic; los que cambian algo solo se escriben para que los revises y pulses Enter. Botones: ir allí, logs del contenedor que falló, reiniciar el workload, borrar el pod, uncordon (siempre con confirmación).
-- **Pregúntale**: chat con un **modelo de lenguaje local** vía [Ollama](https://ollama.com) (`ollama serve`). El bridge le pasa el estado, eventos y últimas líneas de log del objeto seleccionado junto con el diagnóstico integrado. Con `--llm-model auto` (por defecto) usa el mejor modelo local instalado (gemma4, qwen3.5, llama3.2...) y **nunca** elige modelos `:cloud`, para que los datos del cluster no salgan de tu máquina. Lo que dice el modelo nunca se ejecuta solo.
+- **Chat libre** con memoria de la conversación: pregunta lo que quieras del cluster o de Kubernetes. El *tema* es el problema seleccionado o "todo el cluster" (el bridge le pasa estado, eventos, últimas líneas de log y el diagnóstico integrado). NUEVO CHAT borra la memoria. Lo que dice el modelo nunca se ejecuta solo.
+- El panel se **arrastra** por la barra de título, se **redimensiona** con la esquina ◢ y se **pliega** con `_` (o doble clic en el título).
+- **AJUSTES**: motor (automático / Ollama / llama.cpp integrado / apagado), modelo, largo de las respuestas y estilo (preciso/creativo). Se guardan en `~/.kubecraft/assistant.json`.
+
+### Motores de IA (todo local)
+
+- **Ollama**, si lo tienes (`ollama serve`): usa el mejor modelo instalado (gemma4, qwen3.5, llama3.2...) y desde AJUSTES puedes descargar modelos sugeridos en tu Ollama con barra de progreso.
+- **llama.cpp integrado**, sin instalar nada: desde AJUSTES KubeCraft descarga el build **oficial** de `github.com/ggml-org/llama.cpp` para tu sistema (~15 MB, verificado con el SHA256 que publica GitHub) y un modelo GGUF de una lista (Gemma 3 1B/4B/12B, Qwen 2.5 1.5B/3B/7B, Llama 3.2 3B) desde Hugging Face con **SHA256 fijado en el código**. Todo va a `~/.kubecraft/` y `llama-server` escucha solo en `127.0.0.1`; el bridge lo arranca al preguntar y lo para al salir.
+- Nunca se usan modelos `:cloud` ni servidores remotos: el juego no puede cambiar la URL del motor (solo el flag `--llm-url`).
 
 ## Modo vigía (O)
 
@@ -251,7 +259,9 @@ El juego ejecuta acciones **reales** con las credenciales de tu kubeconfig.
 | Método | Ruta | Descripción |
 |---|---|---|
 | GET | `/api/ws` | WebSocket: `{"type":"state","data":Snapshot}` (≤3/s, coalescido), `{"type":"event","data":{...}}` y `{"type":"watch","data":{audit, visitors, actions}}` (vigía) |
-| GET · POST | `/api/assistant` | estado del LLM · `{"question","kind","ns","name","lang","diagnosis"}` → `{"ok","answer","model"}` |
+| GET · POST | `/api/assistant` | estado de los motores, modelos, catálogo y descargas · `{"question","kind","ns","name","lang","diagnosis","history"}` → `{"ok","answer","model"}` |
+| POST | `/api/assistant/config` · `/api/assistant/download` | ajustes de Kubi · descargar `{"kind":"llamacpp"\|"gguf"\|"ollama","id"}` |
+| DELETE | `/api/assistant/model?id=` | borrar un modelo GGUF descargado |
 | GET | `/api/state` | Snapshot actual en JSON |
 | GET | `/api/logs?ns=&pod=&container=&tail=&previous=1` | Logs de un contenedor |
 | POST | `/api/kubectl` | `{"line": "get pods -A"}` → `{"ok", "exit_code", "output"}` (kubectl real con las restricciones de arriba) |

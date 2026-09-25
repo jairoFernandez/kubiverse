@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -89,6 +90,7 @@ func main() {
 	defer stop()
 
 	hub := newHub(ctx, *kubeconfig, *kubectx, *dataDir, *readOnly, *token)
+	ai.init(ctx, filepath.Dir(*dataDir))
 	log.Printf("default context %q, extra kubeconfigs in %s", hub.defaultCtx, hub.dir)
 	// Warm up the default cluster so the first client connects instantly.
 	go func() {
@@ -107,8 +109,11 @@ func main() {
 	mux.HandleFunc("GET /api/logs", hub.cluster((*Bridge).handleLogs))
 	mux.HandleFunc("POST /api/action", hub.cluster((*Bridge).handleAction))
 	mux.HandleFunc("POST /api/kubectl", hub.cluster((*Bridge).handleKubectl))
-	mux.HandleFunc("GET /api/assistant", hub.cluster((*Bridge).handleAssistantStatus))
+	mux.HandleFunc("GET /api/assistant", hub.auth(hub.handleAIStatus))
 	mux.HandleFunc("POST /api/assistant", hub.cluster((*Bridge).handleAssistant))
+	mux.HandleFunc("POST /api/assistant/config", hub.auth(hub.handleAIConfig))
+	mux.HandleFunc("POST /api/assistant/download", hub.auth(hub.handleAIDownload))
+	mux.HandleFunc("DELETE /api/assistant/model", hub.auth(hub.handleAIDeleteModel))
 	if *webDir != "" {
 		fs := http.FileServer(http.Dir(*webDir))
 		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -230,7 +235,7 @@ func guard(h http.Handler, extra string) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Bridge-Token")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

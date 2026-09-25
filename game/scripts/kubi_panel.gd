@@ -1,15 +1,22 @@
 class_name KubiPanel
 extends PanelContainer
-## Kubi's panel (Y): the list of problems, a diagnosis with steps and
-## commands for the selected one, and a chat with the bridge's local
-## language model. Commands that only read run straight away in the
-## terminal; commands that change things are only typed in (you press Enter).
+## Kubi's panel (Y). Two pages:
+##  - chat: problems with a built-in diagnosis, and a free conversation with
+##    the AI (with memory of the last turns). The "topic" is the selected
+##    problem or the whole cluster.
+##  - settings: AI engine (Ollama / built-in llama.cpp), model, answer
+##    length, and downloads of llama.cpp and models with progress.
+## Drag the title bar to move it, the corner grip to resize it, "_" to fold it.
+## Commands that only read run straight away in the terminal; commands that
+## change things are only typed in (you press Enter).
 
 signal act(id: String, diag: Dictionary)
 signal thinking(on: bool)
 signal answered(text: String)
 
-var hud  # Hud: styles, terminal
+var hud  # Hud: styles, terminal, confirm dialog
+var custom_rect := Rect2()   # set once the player moves/resizes it (UI units)
+var collapsed := false
 var _list: VBoxContainer
 var _diag: RichTextLabel
 var _acts: HFlowContainer
@@ -17,12 +24,33 @@ var _chat: RichTextLabel
 var _input: LineEdit
 var _ask_btn: Button
 var _status: Label
+var _topic: Label
 var _scroll: ScrollContainer
+var _chat_page: VBoxContainer
+var _settings_page: VBoxContainer
+var _bottom: Array[Control] = []   # hidden when folded
+var _fold_btn: Button
+var _drag := ""                    # "" | move | resize
 var _problems: Array = []
 var _sel: Dictionary = {}
 var _llm := false
 var _busy := false
-var _history := []   # [{q, a}] for this session
+var _history := []   # [{role, content}] of this conversation
+var _st: Dictionary = {}   # last status from the bridge
+var _poll := 0.0
+# settings widgets
+var _engine: OptionButton
+var _length: OptionButton
+var _style: OptionButton
+var _ollama_model: OptionButton
+var _engine_state: RichTextLabel
+var _ollama_box: VBoxContainer
+var _llama_box: VBoxContainer
+var _dl_box: VBoxContainer
+var _sig := ""
+const ENGINES := ["auto", "ollama", "llamacpp", "off"]
+const LENGTHS := ["short", "normal", "long"]
+const MIN_SIZE := Vector2(360, 220)
 
 
 func build(h) -> void:
@@ -33,24 +61,123 @@ func build(h) -> void:
 	add_child(v)
 	var head := HBoxContainer.new()
 	head.add_theme_constant_override("separation", 10)
+	head.mouse_filter = Control.MOUSE_FILTER_STOP
+	head.mouse_default_cursor_shape = Control.CURSOR_MOVE
+	head.gui_input.connect(func(e): _drag_input(e, "move"))
 	v.add_child(head)
 	var title: Label = hud._label("KUBI", 30, Vox.RED)
 	title.add_theme_font_override("font", hud._title_font)
 	title.add_theme_font_size_override("font_size", 18)
+	title.mouse_filter = Control.MOUSE_FILTER_PASS
 	head.add_child(title)
 	_status = hud._label("", 20, Vox.LAVENDER)
 	_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_status.mouse_filter = Control.MOUSE_FILTER_PASS
 	head.add_child(_status)
-	head.add_child(hud._button("CLOSE [Y]", func(): visible = false))
+	head.add_child(hud._button("SETTINGS", toggle_settings))
+	_fold_btn = hud._button("_", func(): set_collapsed(not collapsed))
+	head.add_child(_fold_btn)
+	head.add_child(hud._button("X", func(): visible = false))
 	_scroll = ScrollContainer.new()
 	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	v.add_child(_scroll)
+	_bottom.append(_scroll)
+	var pages := VBoxContainer.new()
+	pages.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_scroll.add_child(pages)
+	_chat_page = _build_chat_page()
+	pages.add_child(_chat_page)
+	_settings_page = _build_settings_page()
+	_settings_page.visible = false
+	pages.add_child(_settings_page)
+	# Topic + input stay at the bottom.
+	var trow := HBoxContainer.new()
+	trow.add_theme_constant_override("separation", 8)
+	v.add_child(trow)
+	_bottom.append(trow)
+	_topic = hud._label("", 20, Vox.PEACH)
+	_topic.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_topic.clip_text = true
+	trow.add_child(_topic)
+	trow.add_child(hud._button("WHOLE CLUSTER", func(): _set_topic({})))
+	trow.add_child(hud._button("NEW CHAT", new_chat))
+	var quick := HFlowContainer.new()
+	quick.add_theme_constant_override("h_separation", 8)
+	quick.add_theme_constant_override("v_separation", 6)
+	for q in ["What is wrong?", "How do I fix it?", "Explain it simply"]:
+		quick.add_child(hud._button(q, func(): ask(tr(q))))
+	v.add_child(quick)
+	_bottom.append(quick)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	v.add_child(row)
+	_bottom.append(row)
+	_input = LineEdit.new()
+	_input.placeholder_text = tr("Talk to Kubi about anything...")
+	_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_input.add_theme_font_size_override("font_size", 24)
+	_input.text_submitted.connect(func(t): ask(t))
+	row.add_child(_input)
+	_ask_btn = hud._button("ASK", func(): ask(_input.text))
+	row.add_child(_ask_btn)
+	# Resize grip in the bottom-right corner.
+	var grip: Label = hud._label("◢", 26, Vox.RED)
+	grip.mouse_filter = Control.MOUSE_FILTER_STOP
+	grip.mouse_default_cursor_shape = Control.CURSOR_FDIAGSIZE
+	grip.tooltip_text = tr("Drag to resize")
+	grip.gui_input.connect(func(e): _drag_input(e, "resize"))
+	row.add_child(grip)
+	_set_topic({})
+
+
+## Title bar drag = move; corner grip drag = resize. Positions are in the
+## HUD's UI units (the same space as the panel's position and size).
+func _drag_input(e: InputEvent, what: String) -> void:
+	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+		_drag = what if e.pressed else ""
+		if e.pressed and custom_rect.size == Vector2.ZERO:
+			custom_rect = Rect2(position, size)
+		if e.double_click and what == "move":
+			set_collapsed(not collapsed)
+		accept_event()
+	elif e is InputEventMouseMotion and _drag == what:
+		var rel: Vector2 = e.relative * get_global_transform().get_scale()
+		if what == "move":
+			custom_rect.position += rel
+		else:
+			custom_rect.size = (custom_rect.size + rel).max(MIN_SIZE)
+		accept_event()
+
+
+func set_collapsed(on: bool) -> void:
+	collapsed = on
+	for c in _bottom:
+		c.visible = not on
+	_fold_btn.text = "+" if on else "_"
+
+
+## Where the panel goes: the player's rect if moved (kept on screen), or the
+## default column on the left.
+func place(default_rect: Rect2, screen: Vector2) -> void:
+	var r := default_rect if custom_rect.size == Vector2.ZERO else custom_rect
+	r.size = r.size.min(screen - Vector2(20, 20)).max(MIN_SIZE)
+	if collapsed:
+		r.size.y = get_combined_minimum_size().y
+	# Sideways it may hang partly off screen; vertically it always fits.
+	r.position.x = clampf(r.position.x, -r.size.x + 120.0, screen.x - 120.0)
+	r.position.y = clampf(r.position.y, 0.0, maxf(0.0, screen.y - r.size.y - 6.0))
+	if custom_rect.size != Vector2.ZERO:
+		custom_rect.position = r.position
+	position = r.position
+	size = r.size
+
+
+func _build_chat_page() -> VBoxContainer:
 	var body := VBoxContainer.new()
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	body.add_theme_constant_override("separation", 8)
-	_scroll.add_child(body)
 	body.add_child(hud._section("PROBLEMS"))
 	_list = VBoxContainer.new()
 	_list.add_theme_constant_override("separation", 4)
@@ -62,27 +189,64 @@ func build(h) -> void:
 	_acts.add_theme_constant_override("h_separation", 8)
 	_acts.add_theme_constant_override("v_separation", 6)
 	body.add_child(_acts)
-	body.add_child(hud._section("ASK KUBI"))
+	body.add_child(hud._section("CHAT"))
 	_chat = hud._rich(22)
 	_chat.meta_clicked.connect(_on_cmd)
 	body.add_child(_chat)
-	var quick := HFlowContainer.new()
-	quick.add_theme_constant_override("h_separation", 8)
-	quick.add_theme_constant_override("v_separation", 6)
-	for q in ["What is wrong?", "How do I fix it?", "Explain it simply"]:
-		quick.add_child(hud._button(q, func(): ask(tr(q))))
-	v.add_child(quick)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	v.add_child(row)
-	_input = LineEdit.new()
-	_input.placeholder_text = tr("Ask anything about the cluster...")
-	_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_input.add_theme_font_size_override("font_size", 24)
-	_input.text_submitted.connect(func(t): ask(t))
-	row.add_child(_input)
-	_ask_btn = hud._button("ASK", func(): ask(_input.text))
-	row.add_child(_ask_btn)
+	return body
+
+
+func _opt(items: Array, cb: Callable) -> OptionButton:
+	var o := OptionButton.new()
+	o.focus_mode = Control.FOCUS_NONE
+	for it in items:
+		o.add_item(tr(it))
+	o.item_selected.connect(func(_i): cb.call())
+	return o
+
+
+func _row(label: String, ctl: Control) -> HBoxContainer:
+	var r := HBoxContainer.new()
+	r.add_theme_constant_override("separation", 10)
+	var l: Label = hud._label(label, 22, Vox.SILVER)
+	l.custom_minimum_size.x = 150
+	r.add_child(l)
+	ctl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	r.add_child(ctl)
+	return r
+
+
+func _build_settings_page() -> VBoxContainer:
+	var s := VBoxContainer.new()
+	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	s.add_theme_constant_override("separation", 8)
+	s.add_child(hud._section("AI ENGINE"))
+	_engine = _opt(["Automatic", "Ollama", "Built-in llama.cpp", "Off (built-in guide only)"], _save_config)
+	s.add_child(_row(tr("Engine"), _engine))
+	_length = _opt(["Short", "Normal", "Long"], _save_config)
+	s.add_child(_row(tr("Answers"), _length))
+	_style = _opt(["Precise", "Creative"], _save_config)
+	s.add_child(_row(tr("Style"), _style))
+	_engine_state = hud._rich(20)
+	s.add_child(_engine_state)
+	var note: Label = hud._label(tr("Everything runs on this machine: cluster data never leaves it. Cloud models are not allowed."), 18, Vox.LAVENDER)
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	s.add_child(note)
+	s.add_child(hud._section("OLLAMA"))
+	_ollama_model = _opt([], _save_config)
+	s.add_child(_row(tr("Model"), _ollama_model))
+	_ollama_box = VBoxContainer.new()
+	_ollama_box.add_theme_constant_override("separation", 4)
+	s.add_child(_ollama_box)
+	s.add_child(hud._section("BUILT-IN LLAMA.CPP"))
+	_llama_box = VBoxContainer.new()
+	_llama_box.add_theme_constant_override("separation", 4)
+	s.add_child(_llama_box)
+	s.add_child(hud._section("DOWNLOADS"))
+	_dl_box = VBoxContainer.new()
+	_dl_box.add_theme_constant_override("separation", 4)
+	s.add_child(_dl_box)
+	return s
 
 
 func open() -> void:
@@ -91,16 +255,220 @@ func open() -> void:
 	refresh(K8s.state)
 
 
+func toggle_settings() -> void:
+	if collapsed:
+		set_collapsed(false)
+	_settings_page.visible = not _settings_page.visible
+	_chat_page.visible = not _settings_page.visible
+	_sig = ""
+	refresh_status()
+
+
+func new_chat() -> void:
+	_history.clear()
+	_chat.clear()
+
+
+func _set_topic(d: Dictionary) -> void:
+	_sel = d
+	if d.is_empty():
+		_topic.text = tr("Topic: the whole cluster")
+		_diag.text = ""
+		_clear_acts()
+	else:
+		_topic.text = tr("Topic: %s %s%s") % [d.kind, (d.ns + "/") if d.ns != "" else "", d.name]
+
+
+func _process(delta: float) -> void:
+	if not visible:
+		return
+	_poll -= delta
+	var busy_dl := false
+	for d in _st.get("downloads", []):
+		busy_dl = busy_dl or d.status == "running"
+	if _poll <= 0.0:
+		_poll = 1.0 if busy_dl or _settings_page.visible else 6.0
+		refresh_status()
+
+
 func refresh_status() -> void:
-	_status.text = tr("checking the language model...")
 	K8s.assistant_status(func(st: Dictionary):
+		_st = st
 		_llm = bool(st.get("llm", false))
 		if _llm:
-			_status.text = tr("local AI: %s (Ollama)") % st.get("model", "?")
+			_status.text = tr("AI: %s (%s)") % [st.get("model", "?"), {"ollama": "Ollama", "llamacpp": "llama.cpp"}.get(st.get("engine", ""), "")]
 		elif st.get("demo", false):
-			_status.text = tr("demo: built-in guide only (connect a bridge with Ollama to chat)")
+			_status.text = tr("demo: built-in guide only (connect a bridge to use AI)")
 		else:
-			_status.text = tr("built-in guide only") + ("  ·  " + str(st.error) if st.has("error") else ""))
+			_status.text = tr("built-in guide only") + " · " + tr("SETTINGS = set up AI")
+		if _settings_page.visible:
+			_fill_settings(st))
+
+
+## Updates the settings page (lists are only rebuilt when something changed,
+## so the option buttons keep working while downloads progress).
+func _fill_settings(st: Dictionary) -> void:
+	if st.get("demo", false) or not st.has("config"):
+		_engine_state.text = "[color=#ffa300]%s[/color]" % tr("Needs a bridge: in demo mode Kubi only has its built-in guide.")
+		return
+	var cfg: Dictionary = st.config
+	_engine.select(maxi(0, ENGINES.find(cfg.get("provider", "auto"))))
+	_length.select(maxi(0, LENGTHS.find(cfg.get("length", "normal"))))
+	_style.select(1 if float(cfg.get("temperature", 0.2)) > 0.45 else 0)
+	var eng: String = {"ollama": "Ollama", "llamacpp": "llama.cpp"}.get(st.get("engine", ""), "")
+	if st.get("llm", false):
+		_engine_state.text = "[color=#00e436]%s[/color] %s (%s)" % [tr("Using"), st.model, eng]
+	else:
+		_engine_state.text = "[color=#ffa300]%s[/color] %s" % [tr("No AI:"), tr(str(st.get("why", "")))]
+	var ol: Dictionary = st.get("ollama", {})
+	var lc: Dictionary = st.get("llamacpp", {})
+	var models: Array = ol.get("models", []).filter(func(m): return not str(m).contains("cloud"))
+	var sig := JSON.stringify([models, ol.get("up"), lc, st.get("gguf"), cfg])
+	if sig != _sig:
+		_sig = sig
+		_ollama_model.clear()
+		_ollama_model.add_item(tr("Automatic (best installed)"))
+		_ollama_model.set_item_metadata(0, "auto")
+		for m in models:
+			_ollama_model.add_item(m)
+			_ollama_model.set_item_metadata(_ollama_model.item_count - 1, m)
+			if m == cfg.get("ollama_model", "auto"):
+				_ollama_model.select(_ollama_model.item_count - 1)
+		_ollama_model.disabled = not ol.get("up", false)
+		_fill_ollama(ol, models)
+		_fill_llama(lc, st.get("gguf", []), cfg)
+	_fill_downloads(st.get("downloads", []))
+
+
+func _fill_ollama(ol: Dictionary, models: Array) -> void:
+	for c in _ollama_box.get_children():
+		c.queue_free()
+	if not ol.get("up", false):
+		var t: RichTextLabel = hud._rich(20)
+		t.text = "[color=#83769c]%s[/color] %s\n%s [url=https://ollama.com/download]ollama.com/download[/url]" % [
+			tr("Not running at"), ol.get("url", ""), tr("Optional. Install it and run `ollama serve`, or use the built-in llama.cpp below:")]
+		t.meta_clicked.connect(func(m): OS.shell_open(str(m)))
+		_ollama_box.add_child(t)
+		return
+	_ollama_box.add_child(hud._label(tr("Download into Ollama:"), 20, Vox.LAVENDER))
+	for c in ol.get("catalog", []):
+		var have: bool = models.any(func(m): return str(m) == c.name or str(m).trim_suffix(":latest") == c.name)
+		var r := HBoxContainer.new()
+		r.add_theme_constant_override("separation", 8)
+		var l: RichTextLabel = hud._rich(20)
+		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		l.text = "[color=#fff1e8]%s[/color] [color=#83769c]%s · %s[/color]" % [c.name, c.size, tr(c.desc)]
+		r.add_child(l)
+		if have:
+			r.add_child(hud._label(tr("installed"), 20, Vox.GREEN))
+		else:
+			r.add_child(hud._button("DOWNLOAD", func(): _confirm_download("ollama", c.name,
+				tr("Download %s (%s) into your Ollama?") % [c.name, c.size], "ollama pull " + c.name)))
+		_ollama_box.add_child(r)
+
+
+func _fill_llama(lc: Dictionary, gguf: Array, cfg: Dictionary) -> void:
+	for c in _llama_box.get_children():
+		c.queue_free()
+	var t: RichTextLabel = hud._rich(20)
+	if lc.get("installed", false):
+		t.text = "[color=#00e436]%s[/color] %s%s" % [tr("Installed"), lc.get("version", ""),
+			("  [color=#83769c]· %s[/color]" % tr("running")) if lc.get("running", false) else ""]
+		if str(lc.get("error", "")) != "":
+			t.text += "\n[color=#ff004d]%s[/color]" % hud._esc(str(lc.error))
+		_llama_box.add_child(t)
+	else:
+		t.text = "[color=#ffa300]%s[/color] %s" % [tr("Not installed."), tr("KubeCraft can download the official build from github.com/ggml-org/llama.cpp (about 15 MB, SHA256 verified) into ~/.kubecraft.")]
+		_llama_box.add_child(t)
+		if str(lc.get("platform", "")) != "":
+			_llama_box.add_child(hud._button("DOWNLOAD LLAMA.CPP", func(): _confirm_download("llamacpp", "",
+				tr("Download the official llama.cpp build (%s) from GitHub ggml-org? It is checked with SHA256 and only listens on 127.0.0.1.") % lc.platform, "")))
+	_llama_box.add_child(hud._label(tr("Models (GGUF, Hugging Face, SHA256 pinned):"), 20, Vox.LAVENDER))
+	for m in gguf:
+		var r := HBoxContainer.new()
+		r.add_theme_constant_override("separation", 8)
+		var l: RichTextLabel = hud._rich(20)
+		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var using: bool = m.installed and cfg.get("llama_model", "") == m.id
+		l.text = "[color=%s]%s[/color] [color=#83769c]%s · %s[/color]" % ["#00e436" if using else "#fff1e8", m.name, Vox.fmt_mib(float(m.size)), tr(m.desc)]
+		r.add_child(l)
+		if m.installed:
+			if using:
+				r.add_child(hud._label(tr("in use"), 20, Vox.GREEN))
+			else:
+				r.add_child(hud._button("USE", func(): _use_gguf(m.id)))
+			r.add_child(hud._button("DELETE", func():
+				hud.confirm(tr("Delete the model %s (%s) from this machine?") % [m.name, Vox.fmt_mib(float(m.size))], func():
+					K8s.assistant_delete_model(m.id, func(_ok, _e): refresh_status()), ""), "DangerButton"))
+		else:
+			r.add_child(hud._button("DOWNLOAD", func(): _confirm_download("gguf", m.id,
+				tr("Download %s (%s) from %s? It is checked with SHA256 and saved in ~/.kubecraft/models.") % [m.name, Vox.fmt_mib(float(m.size)), m.source], "")))
+		_llama_box.add_child(r)
+
+
+func _fill_downloads(dls: Array) -> void:
+	for c in _dl_box.get_children():
+		c.queue_free()
+	if dls.is_empty():
+		_dl_box.add_child(hud._label(tr("None."), 20, Vox.LAVENDER))
+	for d in dls:
+		var r := VBoxContainer.new()
+		var total := float(d.get("total", 0))
+		var pct := (float(d.get("done", 0)) / total * 100.0) if total > 0 else 0.0
+		var col: Color = {"running": Vox.YELLOW, "done": Vox.GREEN, "error": Vox.RED}.get(d.status, Vox.WHITE)
+		var txt: String = "%s  %s" % [d.label, {"running": "%d%%" % pct, "done": tr("done"), "error": tr("failed")}.get(d.status, "")]
+		if total > 0 and d.status == "running":
+			txt += "  (%s / %s)" % [Vox.fmt_mib(float(d.done)), Vox.fmt_mib(total)]
+		r.add_child(hud._label(txt, 20, col))
+		if d.status == "running":
+			var bar := ProgressBar.new()
+			bar.max_value = 100
+			bar.value = pct
+			bar.show_percentage = false
+			bar.custom_minimum_size.y = 10
+			r.add_child(bar)
+		if str(d.get("error", "")) != "":
+			var e: Label = hud._label(str(d.error), 18, Vox.RED)
+			e.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			r.add_child(e)
+		_dl_box.add_child(r)
+
+
+func _confirm_download(kind: String, id: String, text: String, cmd: String) -> void:
+	hud.confirm(text, func():
+		K8s.assistant_download(kind, id, func(ok: bool, err: String):
+			if not ok:
+				hud.toast(err, false)
+			_poll = 0.3
+			refresh_status()), cmd)
+
+
+func _use_gguf(id: String) -> void:
+	var cfg: Dictionary = _st.get("config", {}).duplicate()
+	cfg.llama_model = id
+	if cfg.get("provider", "auto") == "ollama":
+		cfg.provider = "llamacpp"
+	_send_config(cfg)
+
+
+func _save_config() -> void:
+	if not _st.has("config"):
+		return
+	var cfg: Dictionary = _st.config.duplicate()
+	cfg.provider = ENGINES[_engine.selected]
+	cfg.length = LENGTHS[_length.selected]
+	cfg.temperature = 0.7 if _style.selected == 1 else 0.2
+	if _ollama_model.selected >= 0 and _ollama_model.item_count > 0:
+		cfg.ollama_model = str(_ollama_model.get_item_metadata(_ollama_model.selected))
+	_send_config(cfg)
+
+
+func _send_config(cfg: Dictionary) -> void:
+	K8s.assistant_config(cfg, func(ok: bool, err: String):
+		if not ok:
+			hud.toast(err, false)
+		_sig = ""
+		refresh_status())
 
 
 ## Rebuilds the problem list (keeps the selection if it still exists).
@@ -126,11 +494,6 @@ func refresh(state: Dictionary) -> void:
 			if d.kind == _sel.kind and d.ns == _sel.ns and d.name == _sel.name:
 				_show(d)
 				return
-		_sel = {}
-		_diag.text = ""
-		_clear_acts()
-	elif not _problems.is_empty():
-		_show(_problems[0])
 
 
 func select(d: Dictionary) -> void:
@@ -152,7 +515,7 @@ func selected() -> Dictionary:
 
 
 func _show(d: Dictionary) -> void:
-	_sel = d
+	_set_topic(d)
 	var t := "[color=#ffec27][font_size=26]%s[/font_size][/color]\n[color=#c2c3c7]%s %s%s[/color]\n\n%s\n" % [
 		d.title, d.kind, (d.ns + "/") if d.ns != "" else "", d.name, hud._esc(d.why)]
 	if not d.steps.is_empty():
@@ -185,12 +548,16 @@ func _on_cmd(meta) -> void:
 		hud._term_fill(cmd)
 
 
-## Asks a question: to the local LLM when the bridge has one, otherwise the
-## built-in guide answers with the selected diagnosis.
+## Asks a question: to the AI when the bridge has one (with the conversation
+## so far), otherwise the built-in guide answers about the selected problem.
 func ask(q: String) -> void:
 	q = q.strip_edges()
 	if q == "" or _busy:
 		return
+	if _settings_page.visible:
+		toggle_settings()
+	if collapsed:
+		set_collapsed(false)
 	_input.text = ""
 	_chat.append_text("\n[color=#29adff]%s:[/color] %s\n" % [tr("You"), hud._esc(q)])
 	if not _llm:
@@ -205,13 +572,15 @@ func ask(q: String) -> void:
 	_chat.append_text("[color=#83769c]%s[/color]\n" % tr("Kubi is thinking... (a local model can take a few seconds)"))
 	var req := {"question": q, "lang": TranslationServer.get_locale(), "kind": _sel.get("kind", ""),
 		"ns": _sel.get("ns", ""), "name": _sel.get("name", ""),
-		"diagnosis": Diagnose.as_text(_sel) if not _sel.is_empty() else ""}
+		"diagnosis": Diagnose.as_text(_sel) if not _sel.is_empty() else "",
+		"history": _history.slice(maxi(0, _history.size() - 10))}
 	K8s.ask_assistant(req, func(ok: bool, text: String):
 		_busy = false
 		_ask_btn.disabled = false
 		thinking.emit(false)
 		if ok:
-			_history.append({"q": q, "a": text})
+			_history.append({"role": "user", "content": q})
+			_history.append({"role": "assistant", "content": text})
 			_chat.append_text("[color=#ff004d]Kubi:[/color] %s\n" % _format(text))
 			answered.emit(text)
 		else:
@@ -221,7 +590,7 @@ func ask(q: String) -> void:
 	_scroll_down()
 
 
-## Markdown-ish answer -> BBCode; `commands` become clickable.
+## Markdown-ish answer -> BBCode; `kubectl ...` commands become clickable.
 func _format(text: String) -> String:
 	var out: String = hud._esc(text)
 	var re := RegEx.new()
@@ -241,9 +610,9 @@ func _format(text: String) -> String:
 	return out
 
 
-func _offline_answer(q: String) -> String:
+func _offline_answer(_q: String) -> String:
 	if _sel.is_empty():
-		return tr("I only have my built-in guide here. Everything looks healthy; select something broken (TAB jumps to the next problem) and I'll explain it.")
+		return tr("Without AI I only have my built-in guide: pick a problem above and I'll explain it. To chat about anything, set up an AI engine in SETTINGS.")
 	var t: String = "%s — %s" % [_sel.title, hud._esc(_sel.why)]
 	if not _sel.steps.is_empty():
 		t += "\n" + tr("Start with: %s") % hud._esc(_sel.steps[0])

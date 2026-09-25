@@ -445,6 +445,11 @@ func _screenshot_and_quit(path: String) -> void:
 	if "--kubi" in OS.get_cmdline_user_args():
 		hud.toggle_kubi()
 		await get_tree().create_timer(1.0).timeout
+		if "--kubi-settings" in OS.get_cmdline_user_args():
+			hud.kubi.custom_rect = Rect2(300, 130, 620, 560)  # as if dragged
+			hud.kubi.toggle_settings()
+			await get_tree().create_timer(2.5).timeout
+			print("KUBI min ", hud.kubi.get_combined_minimum_size(), " size ", hud.kubi.size, " pos ", hud.kubi.position, " screen ", hud.kubi.get_parent().size)
 		for x in OS.get_cmdline_user_args():
 			if x.begins_with("--kubi-ask="):
 				for d in Diagnose.problems(K8s.state):
