@@ -781,6 +781,20 @@ func _screenshot_and_quit(path: String) -> void:
 		print("KUBI moved from ", p0, " to ", k.position)
 		get_tree().quit()
 		return
+	if "--city-shot" in OS.get_cmdline_user_args():
+		if world.gate:
+			player.teleport(world.gate.global_position + Vector3(0, 0, 6))
+		_zoom_target = 34.0
+		_zoom = 34.0
+		_yaw_target += 90.0
+		_yaw = _yaw_target
+		_pan = Vector3(0, 0, -12)
+		hud._mission_panel.visible = false
+		hud._terminal.visible = false
+		await get_tree().create_timer(4.0).timeout
+		if "--inspect-gate" in OS.get_cmdline_user_args():
+			hud.inspect(world.gate)
+			await get_tree().create_timer(0.6).timeout
 	if "--menu-open" in OS.get_cmdline_user_args():
 		hud.toggle_menu()
 		await get_tree().create_timer(0.4).timeout

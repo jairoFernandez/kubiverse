@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -22,6 +23,7 @@ type Snapshot struct {
 	Pods       []Pod       `json:"pods"`
 	Workloads  []Workload  `json:"workloads"`
 	Services   []Service   `json:"services"`
+	Ingresses  []Ingress   `json:"ingresses"`
 	Metrics    Metrics     `json:"metrics"`
 }
 
@@ -85,7 +87,27 @@ type Service struct {
 	ClusterIP string            `json:"cluster_ip"`
 	Ports     []string          `json:"ports"`
 	Selector  map[string]string `json:"selector"`
-	Pods      []string          `json:"pods"` // matched pod names (same namespace)
+	Pods      []string          `json:"pods"`       // matched pod names (same namespace)
+	Ready     int               `json:"ready"`      // matched pods that are ready (endpoints)
+	External  []string          `json:"external"`   // LoadBalancer IPs/hostnames, externalIPs
+	NodePorts []int32           `json:"node_ports"` // ports opened on every node
+}
+
+// Ingress: how outside traffic (domains, paths) reaches Services.
+type Ingress struct {
+	Namespace string        `json:"ns"`
+	Name      string        `json:"name"`
+	Class     string        `json:"class"`
+	Rules     []IngressRule `json:"rules"`
+	TLS       []string      `json:"tls"`     // hosts served over HTTPS
+	Address   []string      `json:"address"` // where the ingress controller listens
+}
+
+type IngressRule struct {
+	Host    string `json:"host"` // "" = any host
+	Path    string `json:"path"`
+	Service string `json:"service"`
+	Port    string `json:"port"`
 }
 
 func (b *Bridge) buildSnapshot() (*Snapshot, error) {
@@ -189,12 +211,26 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 		}
 		for _, p := range sv.Spec.Ports {
 			out.Ports = append(out.Ports, fmt.Sprintf("%d/%s", p.Port, p.Protocol))
+			if p.NodePort != 0 {
+				out.NodePorts = append(out.NodePorts, p.NodePort)
+			}
 		}
+		for _, ing := range sv.Status.LoadBalancer.Ingress {
+			if ing.IP != "" {
+				out.External = append(out.External, ing.IP)
+			} else if ing.Hostname != "" {
+				out.External = append(out.External, ing.Hostname)
+			}
+		}
+		out.External = append(out.External, sv.Spec.ExternalIPs...)
 		if len(sv.Spec.Selector) > 0 {
 			sel := labels.SelectorFromSet(sv.Spec.Selector)
 			for _, p := range pods {
 				if p.Namespace == sv.Namespace && sel.Matches(labels.Set(p.Labels)) {
 					out.Pods = append(out.Pods, p.Name)
+					if podReady(p) {
+						out.Ready++
+					}
 				}
 			}
 			sort.Strings(out.Pods)
@@ -204,7 +240,70 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 	sort.Slice(s.Services, func(i, j int) bool {
 		return s.Services[i].Namespace+"/"+s.Services[i].Name < s.Services[j].Namespace+"/"+s.Services[j].Name
 	})
+	s.Ingresses = []Ingress{}
+	if b.ingLister != nil {
+		ings, _ := b.ingLister.List(labels.Everything())
+		for _, ing := range ings {
+			out := Ingress{Namespace: ing.Namespace, Name: ing.Name, Rules: []IngressRule{}}
+			if ing.Spec.IngressClassName != nil {
+				out.Class = *ing.Spec.IngressClassName
+			}
+			backend := func(svc *networkingv1.IngressServiceBackend) (string, string) {
+				if svc == nil {
+					return "", ""
+				}
+				if svc.Port.Name != "" {
+					return svc.Name, svc.Port.Name
+				}
+				return svc.Name, fmt.Sprint(svc.Port.Number)
+			}
+			if db := ing.Spec.DefaultBackend; db != nil {
+				n, port := backend(db.Service)
+				out.Rules = append(out.Rules, IngressRule{Host: "", Path: "/*", Service: n, Port: port})
+			}
+			for _, r := range ing.Spec.Rules {
+				if r.HTTP == nil {
+					continue
+				}
+				for _, p := range r.HTTP.Paths {
+					n, port := backend(p.Backend.Service)
+					path := p.Path
+					if path == "" {
+						path = "/"
+					}
+					out.Rules = append(out.Rules, IngressRule{Host: r.Host, Path: path, Service: n, Port: port})
+				}
+			}
+			for _, t := range ing.Spec.TLS {
+				out.TLS = append(out.TLS, t.Hosts...)
+			}
+			for _, a := range ing.Status.LoadBalancer.Ingress {
+				if a.IP != "" {
+					out.Address = append(out.Address, a.IP)
+				} else if a.Hostname != "" {
+					out.Address = append(out.Address, a.Hostname)
+				}
+			}
+			s.Ingresses = append(s.Ingresses, out)
+		}
+		sort.Slice(s.Ingresses, func(i, j int) bool {
+			return s.Ingresses[i].Namespace+"/"+s.Ingresses[i].Name < s.Ingresses[j].Namespace+"/"+s.Ingresses[j].Name
+		})
+	}
 	return s, nil
+}
+
+// podReady: running with every container ready (it would get traffic).
+func podReady(p *corev1.Pod) bool {
+	if p.DeletionTimestamp != nil || p.Status.Phase != corev1.PodRunning {
+		return false
+	}
+	for _, c := range p.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 func firstImage(spec corev1.PodSpec) string {

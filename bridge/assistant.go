@@ -86,7 +86,10 @@ The player can ask you anything about this cluster or about Kubernetes in genera
   red crashing, pink image can't be pulled; a grey robot with closed eyes = completed or terminating);
   brown/grey boxes on the belts = decoration meaning the line is working (not a Kubernetes object);
   loading dock = Service (blue ClusterIP, orange NodePort, pink LoadBalancer), its beams = traffic to the pods;
-  the WORKSHOP row = pods without an assembly line (Jobs, Workflows, bare pods). Translucent ghosts = other people using
+  the WORKSHOP row = pods without an assembly line (Jobs, Workflows, bare pods). North of the yard is THE INTERNET city
+  (skyscrapers under a glowing globe): each neon billboard is a domain of an Ingress; cars are requests that pass through
+  the INGRESS gate and drive to the building of the namespace whose Service answers; a car stopping at the gate with "503"
+  means the Service is missing or has no ready pods; pink roads with a toll booth are LoadBalancer Services (external IP). Translucent ghosts = other people using
   the cluster (watchtower mode). You, Kubi, are the red floating drone.`
 
 func (b *Bridge) handleAssistant(w http.ResponseWriter, r *http.Request) {

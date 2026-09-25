@@ -1205,6 +1205,9 @@ func _build_legend() -> void:
 		[Vox.GREEN, "  lit windows = pods (green ok, red failing)"],
 		[Vox.RED, "  roof light = worst status, red smoke = crashes"],
 		[Vox.YELLOW, "ENERGY PLANT = the Nodes (real machines)"],
+		[Vox.BLUE, "North: THE INTERNET city. Billboard = a domain\n  (Ingress); cars = requests to the halls"],
+		[Vox.GREEN, "INGRESS gate: routes domains to Services;\n  a car stopping with 503 = broken route"],
+		[Vox.PINK, "Pink road + toll booth = LoadBalancer\n  Service (its external IP)"],
 		[Vox.BLUE, "HALL: inside a namespace"],
 		["h", "INSIDE A HALL"],
 		[Vox.GREEN, "Assembly line = Deployment/StatefulSet/DaemonSet\n  console lamps = replicas (green = ready)"],
@@ -1936,6 +1939,14 @@ func _refresh_inspector() -> void:
 			var why: String = d.get("message", "")
 			if why != "" and cat != "ok":
 				lines.append(_kv("why", "[color=#ffec27]%s[/color]" % why.replace("[", "(")))
+			if cat == "done":
+				# Not a problem: finished work. Explain it and offer a cleanup.
+				var ok_kind: String = d.get("owner_kind", "")
+				var who: String = {"Workflow": tr("an Argo Workflow step"), "Job": tr("a Job run")}.get(ok_kind, tr("a one-off task"))
+				lines.append("[color=#00e436]%s[/color]" % (tr("It finished its work successfully: it is %s. It uses no CPU or memory; 0/N ready is normal.") % who))
+				lines.append("[color=#83769c]%s[/color]" % tr("It stays so you can read its logs. Its owner (or a TTL / podGC setting) decides when it is deleted."))
+				var clean := "kubectl -n %s delete pods --field-selector=status.phase==Succeeded" % d.ns
+				buttons.append(["CLEAN FINISHED PODS", func(): _clean_finished(d.ns), "DangerButton", ro, clean])
 			if float(d.get("cpu_req_m", 0)) > 0 or float(d.get("mem_req", 0)) > 0:
 				lines.append(_kv("requests", "cpu %s, mem %s" % [StatsPanel.cores(float(d.get("cpu_req_m", 0))), StatsPanel.mib(float(d.get("mem_req", 0)))]))
 			lines.append(_kv("ready", tr("%d/%d containers   restarts %d") % [int(d.ready), int(d.total), int(d.restarts)]))
@@ -2010,6 +2021,21 @@ func _refresh_inspector() -> void:
 				lines.append("[color=#83769c]%s[/color]" % tr("windows = pods (green ok, red failing)"))
 				lines.append("[color=#83769c]%s[/color]" % tr("roof light = worst status inside"))
 				buttons.append(["ENTER HALL [E]", func(): level_requested.emit("ns:" + d.name), "GoButton", false, "kubectl -n %s get all" % d.name])
+		"gate":
+			_insp_title.text = tr("INGRESS - THE DOOR TO THE INTERNET")
+			lines.append("[color=#83769c]%s[/color]" % tr("Requests from the Internet arrive by domain (host) and path; the Ingress controller sends each one to a Service inside a namespace. Cars = requests; they stop at the gate (503) when the Service is missing or has no ready pods."))
+			var cls: Array = d.get("classes", [])
+			lines.append(_kv("controller", ", ".join(cls) if not cls.is_empty() else tr("(default class)")))
+			var addr: Array = d.get("address", [])
+			lines.append(_kv("address", ", ".join(addr) if not addr.is_empty() else "[color=#ffec27]%s[/color]" % tr("pending (no external address yet)")))
+			var rs: Array = d.get("routes", [])
+			if rs.is_empty():
+				lines.append("[color=#ffec27]%s[/color]" % tr("No Ingress: nothing is published by domain. Services are only reachable inside the cluster (or through a LoadBalancer / NodePort)."))
+			for r in rs:
+				var st: String = {"ok": "[color=#00e436]%s[/color]" % tr("OK"), "empty": "[color=#ff004d]%s[/color]" % tr("503: no ready pods"),
+					"missing": "[color=#ff004d]%s[/color]" % tr("503: Service not found")}.get(r.status, r.status)
+				lines.append("[color=#%s]%s%s[/color]%s  ->  %s/%s:%s  %s" % [InternetCity.host_color(r.host).to_html(false),
+					r.host if r.host != "" else "*", r.path, "  [HTTPS]" if r.tls else "", r.ns, r.service, r.port, st])
 		"node":
 			_insp_title.text = tr("NODE %s") % d.name
 			lines.append(_kv("status", ("[color=#00e436]Ready[/color]" if d.ready else "[color=#ff004d]NotReady[/color]") + ("  [color=#ffec27]%s[/color]" % tr("cordoned") if d.unschedulable else "")))
@@ -2112,6 +2138,16 @@ func _workload_buttons(w: Dictionary, ro: bool) -> Array:
 	var rr := {"action": "restart", "kind": w.kind, "ns": w.ns, "name": w.name}
 	out.append(["RESTART", func(): K8s.action(rr), "", ro, Kubectl.for_action(rr)])
 	return out
+
+
+## Deletes the finished (Succeeded) pods of a namespace, after confirming.
+func _clean_finished(ns: String) -> void:
+	var line := "-n %s delete pods --field-selector=status.phase==Succeeded" % ns
+	var n: int = K8s.state.get("pods", []).filter(func(p): return p.ns == ns and PodBot.categorize(p) == "done").size()
+	confirm(tr("Delete the %d finished pods of %s? Their logs go away with them; running pods are not touched.") % [n, ns], func():
+		if not Settings.terminal and not compact:
+			toggle_terminal()
+		term_run(line), "kubectl " + line)
 
 
 func _scale(w: Dictionary, delta: int) -> void:

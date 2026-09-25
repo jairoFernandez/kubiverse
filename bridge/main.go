@@ -24,10 +24,12 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	appslisters "k8s.io/client-go/listers/apps/v1"
 	corelisters "k8s.io/client-go/listers/core/v1"
+	networkinglisters "k8s.io/client-go/listers/networking/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -53,6 +55,7 @@ type Bridge struct {
 	rsLister   appslisters.ReplicaSetLister
 	stsLister  appslisters.StatefulSetLister
 	dsLister   appslisters.DaemonSetLister
+	ingLister  networkinglisters.IngressLister // nil if Ingresses can't be listed
 
 	mu      sync.Mutex
 	dirty   bool
@@ -215,6 +218,18 @@ func startBridge(root context.Context, cc clientcmd.ClientConfig, ctxName, kubec
 			return nil, err
 		}
 	}
+	// Ingresses are optional: some users may not be allowed to list them,
+	// and a failing informer would keep the whole cluster from syncing.
+	probe, probeCancel := context.WithTimeout(ctx, 5*time.Second)
+	if _, err := cs.NetworkingV1().Ingresses("").List(probe, metav1.ListOptions{Limit: 1}); err == nil {
+		b.ingLister = f.Networking().V1().Ingresses().Lister()
+		if _, err := f.Networking().V1().Ingresses().Informer().AddEventHandler(markDirty); err != nil {
+			log.Printf("[%s] ingress informer: %v", ctxName, err)
+		}
+	} else {
+		log.Printf("[%s] ingresses not shown: %v", ctxName, err)
+	}
+	probeCancel()
 	b.watchEvents(ctx, f)
 	b.startWatch(ctx, f)
 	log.Printf("[%s] connecting to %s ...", ctxName, cfg.Host)

@@ -176,7 +176,7 @@ func _process(delta: float) -> void:
 
 func _on_state(s: Dictionary) -> void:
 	# Go encodes empty slices as null; normalise so callers can iterate.
-	for k in ["nodes", "namespaces", "pods", "workloads", "services"]:
+	for k in ["nodes", "namespaces", "pods", "workloads", "services", "ingresses"]:
 		if s.get(k) == null:
 			s[k] = []
 	state = s

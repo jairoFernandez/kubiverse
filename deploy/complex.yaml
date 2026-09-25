@@ -333,3 +333,38 @@ spec:
           # Fills a tmpfs past its 32Mi limit -> OOMKilled.
           command: ["sh", "-c", "echo 'allocating...'; sleep 5; head -c 100m /dev/zero | tail > /dev/null"]
           resources: {requests: {cpu: 5m, memory: 16Mi}, limits: {memory: 32Mi}}
+# --------------------------------------------------------------- the Internet
+# Domains for the "Internet city" of KubeCraft. kind has no Ingress
+# controller, so their address stays pending, but the routes are shown.
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: {name: storefront, namespace: ecommerce}
+spec:
+  tls: [{hosts: [shop.kubecraft.local]}]
+  rules:
+    - host: shop.kubecraft.local
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: storefront, port: {number: 80}}}}
+          - {path: /checkout, pathType: Prefix, backend: {service: {name: checkout-api, port: {number: 8080}}}}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: {name: models, namespace: ml}
+spec:
+  rules:
+    - host: models.kubecraft.local   # its backend never gets ready: 503
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: model-server, port: {number: 8501}}}}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: {name: metrics, namespace: observability}
+spec:
+  rules:
+    - host: metrics.kubecraft.local
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: prometheus, port: {number: 9090}}}}

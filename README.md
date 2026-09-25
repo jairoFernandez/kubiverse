@@ -71,6 +71,19 @@ Tu contexto actual de kubectl no cambia.
 
 Por defecto, **puentes de tablones** con escalones suaves llevan a cada isla sin saltar. El reto de plataformas estilo Mario se activa en **VISTA → Reto de saltos**. El **control-plane** es la isla central y es donde apareces; los workers orbitan a su alrededor a distintas alturas. Si el cluster no expone su control-plane (EKS, GKE...), el centro es una plataforma neutra. Cada isla tiene una **tubería warp** (E junto a ella; te hundes en ella, fundido y sales por la de la siguiente isla) y un **quiosco-terminal** (E) que abre la terminal ya ejecutando los comandos de ese nodo: sus pods y `describe node`, o `get nodes` y `cluster-info` en el control-plane. Para ir a pie hay que **saltar** por bloques "?", ladrillos y plataformas (algunas suben y bajan), recogiendo monedas. Si caes al vacío vuelves a la última plataforma donde estuviste. Hay *coyote time* (puedes saltar un instante después de salir del borde) y el salto pulsado justo antes de aterrizar también cuenta. La física es vertical de verdad: los bordes de una plataforma más alta hacen de pared y la sombra marca dónde vas a caer. Un test comprueba que cada isla es alcanzable con el salto del personaje.
 
+## La ciudad Internet: cómo se conecta el cluster con el mundo
+
+Al norte de la planta está **EL INTERNET**: una ciudad de rascacielos bajo un globo luminoso del que llueven paquetes de datos.
+
+- Cada **dominio** de un Ingress es un **cartel de neón** (con candado dorado si usa HTTPS).
+- Los **coches son peticiones**: salen del cartel, pasan por la **Puerta INGRESS** a la entrada de la planta y recorren las calles hasta la nave del namespace cuyo Service responde.
+- Si el Service **no existe o no tiene pods listos**, el coche se para en la puerta con humo rojo y un **503**; la luz de la puerta se pone roja.
+- Los Services **LoadBalancer** tienen su propia **carretera rosa con peaje**, que muestra la IP externa.
+- Sin Ingress ni LoadBalancer, la barrera está bajada: nada del cluster es accesible desde fuera.
+- Clic en la Puerta: controlador, dirección y cada ruta `dominio/ruta -> namespace/service:puerto` con su estado.
+
+`make scenario` crea tres Ingress de ejemplo en el cluster kind, uno roto a propósito.
+
 ## Misiones (J)
 
 11 misiones guiadas para entender Kubernetes haciendo: namespaces, pods, nodos, crear un Deployment, autorreparación, escalar, Services/endpoints, depurar un CrashLoop con logs, rollout, cordon/uncordon y limpieza. Cada una explica el concepto (**WHY?**) y el comando `kubectl` equivalente. Se validan contra el estado real del cluster. Las que modifican cosas usan el namespace **`academia`**, para no tocar tus aplicaciones.

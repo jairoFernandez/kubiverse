@@ -394,9 +394,28 @@ func _emit() -> void:
 		s.workloads.append({"kind": wl.kind, "ns": wl.ns, "name": wl.name, "desired": desired,
 			"ready": ready, "updated": mine.size(), "available": ready, "image": wl.image})
 	for sv in services.values():
-		var backends := pods.values().filter(func(p): return p.ns == sv.ns and p.owner_name == sv.app).map(func(p): return p.name)
+		var mine := pods.values().filter(func(p): return p.ns == sv.ns and p.owner_name == sv.app)
+		var backends := mine.map(func(p): return p.name)
+		var ready := mine.filter(func(p): return p.status == "Running" and p.ready == p.total and not p.deleting).size()
+		var ext := []
+		var nps := []
+		if sv.type == "LoadBalancer":
+			ext = ["203.0.113.%d" % (10 + abs(sv.name.hash()) % 200)]
+		if sv.type in ["LoadBalancer", "NodePort"]:
+			nps = [30000 + abs(sv.name.hash()) % 2700]
 		s.services.append({"ns": sv.ns, "name": sv.name, "type": sv.type, "cluster_ip": sv.cluster_ip,
-			"ports": sv.ports, "selector": {"app": sv.app}, "pods": backends})
+			"ports": sv.ports, "selector": {"app": sv.app}, "pods": backends, "ready": ready, "external": ext, "node_ports": nps})
+	# Ingresses: domains of the demo shop, one route pointing to a Service that doesn't exist.
+	s["ingresses"] = [
+		{"ns": "shop", "name": "storefront", "class": "nginx", "tls": ["shop.kubecraft.dev"], "address": ["198.51.100.7"],
+			"rules": [{"host": "shop.kubecraft.dev", "path": "/", "service": "frontend", "port": "80"},
+				{"host": "shop.kubecraft.dev", "path": "/cart", "service": "cart", "port": "8080"}]},
+		{"ns": "payments", "name": "payments-api", "class": "nginx", "tls": [], "address": ["198.51.100.7"],
+			"rules": [{"host": "pay.kubecraft.dev", "path": "/", "service": "ledger", "port": "9000"},
+				{"host": "pay.kubecraft.dev", "path": "/fraud", "service": "fraud-ai", "port": "8501"}]},
+		{"ns": "monitoring", "name": "grafana", "class": "nginx", "tls": ["grafana.kubecraft.dev"], "address": ["198.51.100.7"],
+			"rules": [{"host": "grafana.kubecraft.dev", "path": "/", "service": "prometheus", "port": "9100"}]},
+	]
 	# Fake but plausible metrics-server data.
 	var m := {"available": true, "nodes": {}, "pods": {}}
 	for p in pods.values():

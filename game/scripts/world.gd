@@ -49,7 +49,9 @@ var fpv := false                       # first-person view: tone down fx near th
 var _tops: Array[float] = []
 var _tops_frame := -1
 var limbo_center := Vector3.ZERO
-var workshop := {}                     # hall: row of pods without a line {pos, count, done, owners}
+var workshop := {}
+var internet: InternetCity             # plant: the Internet city (Ingress, LoadBalancers)
+var gate: IngressGate                     # hall: row of pods without a line {pos, count, done, owners}
 
 var _static: Node3D
 var _entities: Node3D
@@ -114,6 +116,8 @@ func all_entities() -> Array:
 	out.append_array(islands.values())
 	out.append_array(services.values())
 	out.append_array(lines.values())
+	if gate and is_instance_valid(gate):
+		out.append(gate)
 	for p in pods.values():
 		if not p.dying:
 			out.append(p)
@@ -122,6 +126,7 @@ func all_entities() -> Array:
 
 func find_entity(kind: String, key: String) -> Entity:
 	match kind:
+		"gate": return gate if gate and is_instance_valid(gate) else null
 		"namespace": return buildings.get(key)
 		"node": return islands.get(key)
 		"pod": return pods.get(key)
@@ -138,6 +143,10 @@ func set_level(l: String) -> void:
 	hovered = null
 	for c in _entities.get_children():
 		c.queue_free()
+	if internet:
+		internet.queue_free()
+		internet = null
+	gate = null
 	buildings.clear()
 	lines.clear()
 	services.clear()
@@ -389,6 +398,61 @@ func _apply_plant(s: Dictionary) -> void:
 		blockers.append(b.footprint())
 		blocker_heights[b.footprint()] = b.h + 0.2  # flat roof
 	fly_ceiling = 16.0
+	_apply_internet(s, cell_w, grid_w, grid_d)
+
+
+## The world outside: domains (Ingress) and LoadBalancers, as a city north
+## of the plant whose cars (requests) drive to the halls.
+func _apply_internet(s: Dictionary, cell_w: float, grid_w: float, grid_d: float) -> void:
+	var svc := {}
+	for sv in s.get("services", []):
+		svc[sv.ns + "/" + sv.name] = sv
+	var routes := []
+	var classes := []
+	var addrs := []
+	for ing in s.get("ingresses", []):
+		if not ns_visible(ing.ns):
+			continue
+		if ing.get("class", "") != "" and not ing["class"] in classes:
+			classes.append(ing["class"])
+		for a in ing.get("address", []) if ing.get("address") != null else []:
+			if not a in addrs:
+				addrs.append(a)
+		var tls: Array = ing.get("tls", []) if ing.get("tls") != null else []
+		for r in ing.get("rules", []) if ing.get("rules") != null else []:
+			var sv = svc.get(ing.ns + "/" + str(r.service))
+			var status := "missing" if sv == null else ("ok" if int(sv.get("ready", 1)) > 0 else "empty")
+			routes.append({"host": r.host, "path": r.path, "ns": ing.ns, "service": r.service, "port": r.port,
+				"tls": r.host in tls, "status": status, "ingress": ing.name})
+	var lbs := []
+	for sv in s.get("services", []):
+		if sv.type == "LoadBalancer" and ns_visible(sv.ns):
+			lbs.append({"ns": sv.ns, "name": sv.name, "external": sv.get("external", []) if sv.get("external") != null else [],
+				"ready": int(sv.get("ready", 1))})
+	var doors := {}
+	var street := {}
+	for ns in buildings:
+		if ns == "@power":
+			continue
+		var b: FactoryBuilding = buildings[ns]
+		doors[ns] = b.door_position()
+		street[ns] = b.target.x + cell_w * 0.5
+	var gate_pos := Vector3(0, 0, -grid_d - 7.5)
+	if gate == null or not is_instance_valid(gate):
+		gate = IngressGate.new()
+		gate.world = self
+		_entities.add_child(gate)
+	gate.target = gate_pos
+	gate.position = gate_pos
+	gate.setup(routes, classes, addrs)
+	for x in [-3.4, 3.4]:  # the gate towers are solid
+		blockers.append(Rect2(x - 0.6, gate_pos.z - 0.6, 1.2, 1.2))
+		blocker_heights[blockers[-1]] = 4.5
+	if internet == null:
+		internet = InternetCity.new()
+		internet.world = self
+		add_child(internet)
+	internet.setup(routes, lbs, {"z0": -grid_d - 10.0, "gw": grid_w, "gate": gate_pos, "doors": doors, "street": street})
 
 
 func _build_plant_ground(g: Rect2, n: int, cols: int, cw: float, cd: float, gw: float, gd: float) -> void:
@@ -1313,6 +1377,10 @@ func labels(player_pos: Vector3) -> Array:
 			for sv in services.values():
 				if e.data.name in sv.backends():
 					out.append({"pos": sv.beam_origin().lerp(_pod_top(e), 0.5), "text": tr("traffic from service %s") % sv.data.name, "sub": "", "color": ServicePortal.type_color(sv.data), "big": false, "small": true})
+	if level == "plant" and internet:
+		out.append_array(internet.labels())
+		if gate and is_instance_valid(gate):
+			out.append({"pos": gate.anchor(), "text": gate.label_text(), "sub": _hint(gate, gate.label_sub()), "color": gate.label_color(), "big": true, "entity": gate})
 	if level.begins_with("ns:") and not workshop.is_empty():
 		var parts := []
 		for k in workshop.owners:
