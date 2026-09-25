@@ -311,6 +311,7 @@ A "Pokédex"-style drone that follows you, looks toward the nearest problem (wit
 
 - **Ollama**, if you have it (`ollama serve`): uses the best installed model (gemma4, qwen3.5, llama3.2...), and from SETTINGS you can pull suggested models into your Ollama with a progress bar.
 - **Built-in llama.cpp**, nothing to install: from SETTINGS Kubiverse downloads the **official** build from `github.com/ggml-org/llama.cpp` for your system (~15 MB, verified against the SHA256 GitHub publishes) and a GGUF model from a list (Gemma 3 1B/4B/12B, Qwen 2.5 1.5B/3B/7B, Llama 3.2 3B) from Hugging Face with the **SHA256 pinned in the code**. Everything goes to `~/.kubecraft/` and `llama-server` only listens on `127.0.0.1`; the bridge starts it when you ask and stops it on exit.
+- In **demo mode** Kubi's AI works too when a bridge runs on this machine (the one on `127.0.0.1:8088`, or the one serving the page): the game sends it a summary of the simulated cluster (`POST /api/assistant/offline`), only its model is used.
 - `:cloud` models and remote servers are never used: the game can't change the engine URL (only the `--llm-url` flag can).
 
 ## Watchtower mode (O)

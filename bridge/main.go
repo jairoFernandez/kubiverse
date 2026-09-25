@@ -134,6 +134,7 @@ func main() {
 	mux.HandleFunc("POST /api/manifest", hub.cluster((*Bridge).handleManifestPut))
 	mux.HandleFunc("GET /api/assistant", hub.auth(hub.handleAIStatus))
 	mux.HandleFunc("POST /api/assistant", hub.cluster((*Bridge).handleAssistant))
+	mux.HandleFunc("POST /api/assistant/offline", hub.auth(hub.handleAssistantOffline))
 	mux.HandleFunc("POST /api/assistant/config", hub.auth(hub.handleAIConfig))
 	mux.HandleFunc("POST /api/assistant/download", hub.auth(hub.handleAIDownload))
 	mux.HandleFunc("DELETE /api/assistant/model", hub.auth(hub.handleAIDeleteModel))

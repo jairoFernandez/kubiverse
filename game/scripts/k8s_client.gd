@@ -327,45 +327,90 @@ func run_kubectl(line: String, cb: Callable) -> void:
 			cb.call(bool(data.get("ok", false)), str(data.get("output", ""))))
 
 
+## Where Kubi's AI lives: the connected bridge, or in demo mode the usual
+## local bridge (if one runs) — only its language model is used then.
+func _ai_base() -> String:
+	return base_url if mode == Mode.BRIDGE else normalize_url(default_bridge_url())
+
+
+func _ai_token() -> String:
+	return token if mode == Mode.BRIDGE else web_query_param("token")
+
+
 ## Assistant (Kubi) status: engines, models, catalog, downloads. cb(dict)
 func assistant_status(cb: Callable) -> void:
-	if mode != Mode.BRIDGE:
-		cb.call({"llm": false, "demo": mode == Mode.DEMO})
+	if mode == Mode.OFFLINE:
+		cb.call({"llm": false})
 		return
-	_http(HTTPClient.METHOD_GET, "/api/assistant" + _q(), "", func(ok: bool, data):
-		cb.call(data if ok else {"llm": false, "why": str(data)}))
+	var demo := mode == Mode.DEMO
+	_http_to(_ai_base(), _ai_token(), HTTPClient.METHOD_GET, "/api/assistant" + (_q() if not demo else ""), "", func(ok: bool, data):
+		if ok and typeof(data) == TYPE_DICTIONARY:
+			data["demo"] = demo
+			cb.call(data)
+		else:
+			cb.call({"llm": false, "demo": demo, "why": str(data)}), 6.0)
 
 
 ## Saves Kubi's settings on the bridge. cb(ok, error)
 func assistant_config(cfg: Dictionary, cb: Callable) -> void:
-	_http(HTTPClient.METHOD_POST, "/api/assistant/config" + _q(), JSON.stringify(cfg), func(ok: bool, data):
+	_http_to(_ai_base(), _ai_token(), HTTPClient.METHOD_POST, "/api/assistant/config" + (_q() if mode == Mode.BRIDGE else ""), JSON.stringify(cfg), func(ok: bool, data):
 		cb.call(ok and data.get("ok", false), str(data.get("error", "")) if ok else str(data)))
 
 
 ## Starts a download on the bridge: kind = llamacpp | gguf | ollama. cb(ok, error)
 func assistant_download(kind: String, id: String, cb: Callable) -> void:
-	_http(HTTPClient.METHOD_POST, "/api/assistant/download" + _q(), JSON.stringify({"kind": kind, "id": id}), func(ok: bool, data):
+	_http_to(_ai_base(), _ai_token(), HTTPClient.METHOD_POST, "/api/assistant/download" + (_q() if mode == Mode.BRIDGE else ""), JSON.stringify({"kind": kind, "id": id}), func(ok: bool, data):
 		cb.call(ok and data.get("ok", false), str(data.get("error", "")) if ok else str(data)))
 
 
 func assistant_delete_model(id: String, cb: Callable) -> void:
-	_http(HTTPClient.METHOD_DELETE, "/api/assistant/model?id=%s" % id.uri_encode() + _q(false), "", func(ok: bool, data):
+	_http_to(_ai_base(), _ai_token(), HTTPClient.METHOD_DELETE, "/api/assistant/model?id=%s" % id.uri_encode() + (_q(false) if mode == Mode.BRIDGE else ""), "", func(ok: bool, data):
 		cb.call(ok and data.get("ok", false), str(data.get("error", "")) if ok else str(data)))
 
 
 ## Asks the bridge's language model. req = {question, kind, ns, name, lang,
 ## diagnosis}. cb(ok, answer_or_error). Small local models take a while.
+## In demo mode the simulated cluster is sent along as the context.
 func ask_assistant(req: Dictionary, cb: Callable) -> void:
-	if mode != Mode.BRIDGE:
+	if mode == Mode.OFFLINE:
 		cb.call(false, "no bridge")
 		return
-	_http_to(base_url, token, HTTPClient.METHOD_POST, "/api/assistant" + _q(), JSON.stringify(req), func(ok: bool, data):
+	var path := "/api/assistant" + _q()
+	if mode == Mode.DEMO:
+		req = req.duplicate()
+		req["context"] = _demo_context()
+		path = "/api/assistant/offline"
+	_http_to(_ai_base(), _ai_token(), HTTPClient.METHOD_POST, path, JSON.stringify(req), func(ok: bool, data):
 		if not ok:
 			cb.call(false, str(data))
 		elif data.get("ok", false):
 			cb.call(true, str(data.get("answer", "")))
 		else:
 			cb.call(false, str(data.get("error", "unknown error"))), 150.0)
+
+
+## The simulated cluster in a few lines, for the AI in demo mode.
+func _demo_context() -> String:
+	var out := PackedStringArray()
+	out.append("Nodes: " + ", ".join(state.get("nodes", []).map(func(n): return "%s (%s%s)" % [n.name, "Ready" if n.get("ready", false) else "NotReady", ", cordoned" if n.get("unschedulable", false) else ""])))
+	var per := {}
+	for p in state.get("pods", []):
+		var c := PodBot.categorize(p)
+		var d: Dictionary = per.get(p.ns, {"ok": 0, "bad": 0, "wait": 0})
+		if c in ["crash", "pull", "failed"]: d.bad += 1
+		elif c in ["pending", "warn"]: d.wait += 1
+		elif c == "ok": d.ok += 1
+		per[p.ns] = d
+	out.append("Namespaces (pods ok/waiting/failing): " + ", ".join(per.keys().map(func(k): return "%s %d/%d/%d" % [k, per[k].ok, per[k].wait, per[k].bad])))
+	out.append("Workloads: " + ", ".join(state.get("workloads", []).slice(0, 40).map(func(w): return "%s/%s %s %d/%d ready image %s" % [w.ns, w.name, str(w.kind).to_lower(), int(w.ready), int(w.desired), w.get("image", "")])))
+	var bad := []
+	for p in state.get("pods", []):
+		if PodBot.categorize(p) in ["crash", "pull", "failed", "pending"]:
+			bad.append("%s/%s %s restarts=%d %s" % [p.ns, p.name, p.status, int(p.get("restarts", 0)), str(p.get("message", "")).left(160)])
+	if not bad.is_empty():
+		out.append("Pods with problems:\n- " + "\n- ".join(bad.slice(0, 15)))
+	out.append("Services: " + ", ".join(state.get("services", []).slice(0, 30).map(func(s): return "%s/%s %s -> %d ready pods" % [s.ns, s.name, s.type, int(s.get("ready", 0))])))
+	return "\n".join(out)
 
 
 ## YAML of an object for the in-game editor. cb(ok, yaml_or_error, readonly)

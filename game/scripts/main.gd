@@ -1118,6 +1118,10 @@ func _apply_scale() -> void:
 	if win.x < 2 or win.y < 2:
 		return
 	_ui = Settings.ui_factor(win, hud != null and hud.touch)
+	# Never wider than the window: if the top bars don't fit, shrink the UI.
+	var need: float = hud.bars_min_width() if hud != null else 0.0
+	if need > 0.0 and win.x / _ui < need:
+		_ui = maxf(0.4, win.x / need)
 	_base_px = maxi(2, roundi(3.0 * Settings.dpi()))
 	if hud != null and hud.touch:
 		# Phones have 3x density: 3*dpi would render at 1/9 of the screen.
@@ -1322,8 +1326,17 @@ func _add_stars() -> void:
 		s.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
+var _fit_t := 0.0
 func _process(delta: float) -> void:
 	_cooldown = maxf(0.0, _cooldown - delta)
+	# The bars' content changes (language, badges, labels): re-check the fit.
+	_fit_t += delta
+	if _fit_t > 1.0:
+		_fit_t = 0.0
+		var need: float = hud.bars_min_width()
+		var have := float(get_tree().root.size.x) / _ui
+		if (need > 0.0 and have < need - 1.0) or (have > need + 40.0 and _ui < Settings.ui_factor(Vector2(get_tree().root.size), hud.touch) - 0.01):
+			_apply_scale()
 	if world.swim_level:
 		_pod_tick(delta)
 	if weather:

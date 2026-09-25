@@ -86,6 +86,8 @@ var _view_fastday: CheckBox
 var clock_text := ""
 var weather_why := ""   # what the weather means (tooltip of the clock)
 var _look_btn: Button
+var _top_bar: PanelContainer
+var _level_strip: PanelContainer
 var _fade: ColorRect
 var _banner: PanelContainer
 var _banner_title: Label
@@ -820,6 +822,7 @@ func _build_game_ui() -> void:
 
 	# ---- Top bar
 	var bar := PanelContainer.new()
+	_top_bar = bar
 	bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	bar.add_theme_stylebox_override("panel", _flat(BG, INK, 0, 5))
 	_game_root.add_child(bar)
@@ -1172,6 +1175,7 @@ func _build_game_ui() -> void:
 
 func _build_level_strip() -> void:
 	var strip := PanelContainer.new()
+	_level_strip = strip
 	strip.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	strip.offset_top = 42
 	strip.add_theme_stylebox_override("panel", _flat(Color(0.07, 0.09, 0.18, 0.9), INK, 0, 4))
@@ -1487,6 +1491,14 @@ func _refresh_log() -> void:
 		_sync_view(), "GoButton")
 	play.disabled = not missions.playable(_log_track) or _log_sel == cur
 	_log_btns.add_child(play)
+
+
+## The width (UI units) the top bars need so nothing is cut off; the game
+## shrinks the UI scale when the window is narrower than that.
+func bars_min_width() -> float:
+	if compact or _top_bar == null or not _game_root.visible:
+		return 0.0
+	return maxf(_top_bar.get_combined_minimum_size().x, _level_strip.get_combined_minimum_size().x) + 8.0
 
 
 func toggle_missions() -> void:
@@ -1986,6 +1998,8 @@ func _on_state(s: Dictionary) -> void:
 	var ready_nodes: int = s.nodes.filter(func(n): return n.ready).size()
 	_stats_label.text = "[color=#c2c3c7]%s[/color] %d/%d  [color=#c2c3c7]%s[/color] [color=#00e436]%d %s[/color] [color=#ffec27]%d %s[/color] [color=#ff004d]%d %s[/color]" % [
 		tr("nodes"), ready_nodes, s.nodes.size(), tr("pods"), running, tr("ok"), pending, tr("wait"), bad, tr("bad")]
+	# Its full width counts for the UI fit (nothing cut off).
+	_stats_label.custom_minimum_size.x = maxf(60.0, _stats_label.get_content_width() + 4.0)
 
 
 func add_event(ev: Dictionary) -> void:

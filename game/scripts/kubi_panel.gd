@@ -373,8 +373,8 @@ func refresh_status() -> void:
 		_llm = bool(st.get("llm", false))
 		if _llm:
 			_status.text = tr("AI: %s (%s)") % [st.get("model", "?"), {"ollama": "Ollama", "llamacpp": "llama.cpp"}.get(st.get("engine", ""), "")]
-		elif st.get("demo", false):
-			_status.text = tr("demo: built-in guide only (connect a bridge to use AI)")
+		elif st.get("demo", false) and not st.has("config"):
+			_status.text = tr("demo: built-in guide only (start a bridge on this machine to use AI)")
 		else:
 			_status.text = tr("built-in guide only") + " · " + tr("SETTINGS = set up AI")
 		if _settings_page.visible:
@@ -384,8 +384,8 @@ func refresh_status() -> void:
 ## Updates the settings page (lists are only rebuilt when something changed,
 ## so the option buttons keep working while downloads progress).
 func _fill_settings(st: Dictionary) -> void:
-	if st.get("demo", false) or not st.has("config"):
-		_engine_state.text = "[color=#ffa300]%s[/color]" % tr("Needs a bridge: in demo mode Kubi only has its built-in guide.")
+	if not st.has("config"):
+		_engine_state.text = "[color=#ffa300]%s[/color]" % tr("Needs a bridge: start one on this machine (the command is on the start screen) and Kubi's AI works in the demo too.")
 		return
 	var cfg: Dictionary = st.config
 	_engine.select(maxi(0, ENGINES.find(cfg.get("provider", "auto"))))

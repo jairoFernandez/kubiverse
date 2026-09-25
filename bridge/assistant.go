@@ -63,6 +63,8 @@ type assistantRequest struct {
 	History    []chatMsg `json:"history"`     // earlier turns of this conversation
 	Location   string    `json:"location"`    // where the player is in the game
 	LocationNS string    `json:"location_ns"` // namespace of the hall the player is in
+	// Offline (demo) questions: the game sends the simulated cluster itself.
+	Context string `json:"context"`
 	// Outputs of commands the player ran in the in-game terminal.
 	Attachments []struct {
 		Cmd    string `json:"cmd"`
@@ -100,16 +102,6 @@ func (b *Bridge) handleAssistant(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 150*time.Second)
 	defer cancel()
-	lang := "English"
-	if strings.HasPrefix(req.Lang, "es") {
-		lang = "Spanish"
-	}
-	words := map[string]int{"short": 70, "normal": 150, "long": 350}[ai.cfgLength()]
-	q := clip(strings.TrimSpace(req.Question), 1500)
-	if q == "" {
-		q = "What is wrong and how do I fix it?"
-	}
-	msgs := []chatMsg{{Role: "system", Content: fmt.Sprintf(assistantSystem, lang, words)}}
 	ctxText := "CONTEXT (live cluster " + b.contextName + "):\n"
 	if req.Location != "" {
 		ctxText += "PLAYER POSITION IN THE GAME: " + clip(req.Location, 300) + ".\n"
@@ -121,6 +113,39 @@ func (b *Bridge) handleAssistant(w http.ResponseWriter, r *http.Request) {
 	if req.LocationNS != "" && req.Kind == "" {
 		ctxText += b.namespaceSummary(req.LocationNS)
 	}
+	answerAssistant(ctx, w, req, ctxText)
+}
+
+// handleAssistantOffline answers with the context the game sends (the demo's
+// simulated cluster): no cluster is needed on the bridge, only the model.
+func (h *Hub) handleAssistantOffline(w http.ResponseWriter, r *http.Request) {
+	var req assistantRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<17)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "bad json"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 150*time.Second)
+	defer cancel()
+	ctxText := "CONTEXT (a SIMULATED demo cluster in the game, not a real one):\n"
+	if req.Location != "" {
+		ctxText += "PLAYER POSITION IN THE GAME: " + clip(req.Location, 300) + ".\n"
+	}
+	ctxText += clip(req.Context, 6000)
+	answerAssistant(ctx, w, req, ctxText)
+}
+
+// answerAssistant builds the conversation around a context and asks the model.
+func answerAssistant(ctx context.Context, w http.ResponseWriter, req assistantRequest, ctxText string) {
+	lang := "English"
+	if strings.HasPrefix(req.Lang, "es") {
+		lang = "Spanish"
+	}
+	words := map[string]int{"short": 70, "normal": 150, "long": 350}[ai.cfgLength()]
+	q := clip(strings.TrimSpace(req.Question), 1500)
+	if q == "" {
+		q = "What is wrong and how do I fix it?"
+	}
+	msgs := []chatMsg{{Role: "system", Content: fmt.Sprintf(assistantSystem, lang, words)}}
 	if req.Diagnosis != "" {
 		ctxText += "\n\nKUBIVERSE RULE-BASED DIAGNOSIS:\n" + clip(req.Diagnosis, 1500)
 	}
