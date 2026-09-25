@@ -46,6 +46,8 @@ var _view_minimap: CheckBox
 var _view_fpv: CheckBox
 var fpv := false
 var kubi: KubiPanel
+var term_log := []     # last terminal outputs [{id, cmd, out, ok}]
+var _term_seq := 0
 var watch: WatchPanel
 var flying := false
 var _view_jet: CheckBox
@@ -837,7 +839,7 @@ func _build_game_ui() -> void:
 	_term_text.custom_minimum_size = Vector2(0, 120)
 	_term_text.selection_enabled = true
 	_term_text.meta_underlined = false
-	_term_text.meta_clicked.connect(func(m): _term_fill(str(m)))
+	_term_text.meta_clicked.connect(func(m): _term_meta(str(m)))
 	# Minimap (bottom-left)
 	var mm := PanelContainer.new()
 	mm.anchor_top = 1.0
@@ -1466,13 +1468,43 @@ func _term_submit(line: String) -> void:
 		return
 	if _term_history.is_empty() or _term_history[-1] != line:
 		_term_history.append(line)
+	term_run(line)
+
+
+## Runs a kubectl line in the terminal. Every output gets a "-> Kubi" link
+## that attaches it to Kubi's chat. cb(entry: {id, cmd, out, ok}) optional.
+func term_run(line: String, cb := Callable()) -> void:
+	line = line.strip_edges().trim_prefix("kubectl ").strip_edges()
 	_term_text.append_text("[color=#ffec27]$[/color] [color=#fff1e8]kubectl %s[/color]\n" % _esc(line))
 	K8s.run_kubectl(line, func(ok: bool, out: String):
+		_term_seq += 1
+		var entry := {"id": _term_seq, "cmd": "kubectl " + line, "out": out.strip_edges(), "ok": ok}
+		term_log.append(entry)
+		if term_log.size() > 30:
+			term_log.pop_front()
 		_term_text.append_text("[color=%s]%s[/color]\n" % ["#c2c3c7" if ok else "#ff4d6d", _esc(out.strip_edges())])
+		_term_text.append_text("[url=kubi:%d][color=#ff77a8]%s[/color][/url]\n" % [_term_seq, tr("-> send this output to Kubi")])
 		if ok and missions:
 			var req := Kubectl.to_action(line)
 			if not req.is_empty():
-				missions.notify("action", req, true))
+				missions.notify("action", req, true)
+		if cb.is_valid():
+			cb.call(entry))
+
+
+## "-> Kubi" link in the terminal: attach that output to Kubi's chat.
+func _term_meta(m: String) -> void:
+	if not m.begins_with("kubi:"):
+		_term_fill(m)
+		return
+	var id := int(m.substr(5))
+	for e in term_log:
+		if e.id == id:
+			if not kubi.visible:
+				kubi.open()
+			kubi.attach(e)
+			return
+	toast(tr("That output is too old, run the command again"), false)
 
 
 func _esc(t: String) -> String:
@@ -2160,7 +2192,8 @@ func _layout() -> void:
 	mm.offset_right = 10 + msz.x
 	# Kubi on the left, the watchtower on the right (over the inspector).
 	var pw := clampf(sz.x * 0.4, 360.0, 640.0)
-	kubi.place(Rect2(10.0, top, pw, sz.y - top - bottom), sz)
+	# Kubi starts compact (drag/resize it to taste).
+	kubi.place(Rect2(10.0, top, minf(pw, 470.0), minf(sz.y - top - bottom, 430.0)), sz)
 	var wh: float = watch.get_combined_minimum_size().y if watch.collapsed else sz.y - top - bottom
 	watch.size = Vector2(pw, wh)
 	watch.position = Vector2(sz.x - pw - 10.0, top)

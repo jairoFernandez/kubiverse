@@ -22,6 +22,8 @@ var _scroll: ScrollContainer
 
 func build(h) -> void:
 	hud = h
+	# Wheel and drags over the panel are the panel's: never zoom/pan the camera.
+	mouse_filter = Control.MOUSE_FILTER_STOP
 	add_theme_stylebox_override("panel", hud._flat(Color(0.02, 0.04, 0.05, 1.0), Vox.BLUE, 3, 14))
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 8)

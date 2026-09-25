@@ -2,6 +2,11 @@ extends SceneTree
 ## Headless checks: godot --headless --path game --script res://tests/test_world.gd
 
 func _init() -> void:
+	# Kubi runs only reading commands on its own.
+	for c in ["kubectl -n ml describe pod x", "kubectl get pods -A", "kubectl --namespace shop logs web --previous", "top nodes"]:
+		assert(Diagnose.is_read_only(c), c)
+	for c in ["kubectl -n ml delete pod x", "kubectl -n get delete pod x", "kubectl rollout restart deploy/a", "kubectl -n shop set image deploy/a a=b"]:
+		assert(not Diagnose.is_read_only(c), c)
 	await process_frame
 	var fails := 0
 	var mock := MockCluster.new()

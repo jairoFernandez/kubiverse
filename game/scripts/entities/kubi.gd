@@ -75,21 +75,25 @@ func _process(delta: float) -> void:
 		if global_position.distance_to(home) > 12.0:
 			global_position = home  # teleported / changed level
 		global_position = global_position.lerp(home, clampf(delta * 4.0, 0.0, 1.0))
-	# Bob, lean with speed, face the player's view or the problem.
+	# Bob; always show its face to the camera (it talks to you), glancing a
+	# little toward the problem. The arrow points at the problem by itself.
 	_body.position.y = sin(_t * 2.6) * 0.08
-	var face := Vector3.INF
-	if look_at_pos != Vector3.INF:
-		face = look_at_pos
-	elif target and target.has_method("forward"):
-		face = global_position + target.forward()
-	if face != Vector3.INF:
-		var d := face - global_position
-		d.y = 0
-		if d.length() > 0.05:
-			rotation.y = lerp_angle(rotation.y, atan2(d.x, d.z), clampf(delta * 6.0, 0.0, 1.0))
+	var cam := get_viewport().get_camera_3d()
+	if cam:
+		var toward := cam.global_basis.z  # from the scene toward the viewer
+		var yaw := atan2(toward.x, toward.z)
+		if look_at_pos != Vector3.INF and mood == "alert":
+			var d := look_at_pos - global_position
+			yaw = lerp_angle(yaw, atan2(d.x, d.z), 0.3)
+		rotation.y = lerp_angle(rotation.y, yaw, clampf(delta * 6.0, 0.0, 1.0))
 	_arrow.visible = look_at_pos != Vector3.INF and mood == "alert"
 	if _arrow.visible:
-		_arrow.position = Vector3(0, -0.1, 0.35 + sin(_t * 6.0) * 0.08)
+		var d := look_at_pos - global_position
+		d.y = 0
+		if d.length() > 0.05:
+			var dir := d.normalized()
+			_arrow.global_position = global_position + dir * (0.55 + sin(_t * 6.0) * 0.08) + Vector3(0, -0.15, 0)
+			_arrow.global_rotation = Vector3(0, atan2(dir.x, dir.z), 0)
 	# Eyes: blink; colour by mood; "thinking" scans side to side.
 	_blink -= delta
 	var open := _blink > 0.0 or _blink < -0.12

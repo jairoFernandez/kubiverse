@@ -48,6 +48,9 @@ var _ollama_box: VBoxContainer
 var _llama_box: VBoxContainer
 var _dl_box: VBoxContainer
 var _sig := ""
+var _attachments := []   # terminal outputs for the next question [{id, cmd, out, ok}]
+var _att_box: HFlowContainer
+var _explain_btn: Button
 const ENGINES := ["auto", "ollama", "llamacpp", "off"]
 const LENGTHS := ["short", "normal", "long"]
 const MIN_SIZE := Vector2(360, 220)
@@ -55,6 +58,8 @@ const MIN_SIZE := Vector2(360, 220)
 
 func build(h) -> void:
 	hud = h
+	# Wheel and drags over the panel are the panel's: never zoom/pan the camera.
+	mouse_filter = Control.MOUSE_FILTER_STOP
 	add_theme_stylebox_override("panel", hud._flat(Color(0.04, 0.03, 0.07, 1.0), Vox.RED, 3, 14))
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 8)
@@ -106,10 +111,18 @@ func build(h) -> void:
 	var quick := HFlowContainer.new()
 	quick.add_theme_constant_override("h_separation", 8)
 	quick.add_theme_constant_override("v_separation", 6)
+	_explain_btn = hud._button("What does this output mean?", func(): ask(tr("What does this output mean? Anything wrong?")), "GoButton")
+	_explain_btn.visible = false
+	quick.add_child(_explain_btn)
 	for q in ["What is wrong?", "How do I fix it?", "Explain it simply"]:
 		quick.add_child(hud._button(q, func(): ask(tr(q))))
 	v.add_child(quick)
 	_bottom.append(quick)
+	_att_box = HFlowContainer.new()
+	_att_box.add_theme_constant_override("h_separation", 6)
+	_att_box.add_theme_constant_override("v_separation", 4)
+	v.add_child(_att_box)
+	_bottom.append(_att_box)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	v.add_child(row)
@@ -478,7 +491,7 @@ func refresh(state: Dictionary) -> void:
 		c.queue_free()
 	if _problems.is_empty():
 		_list.add_child(hud._label(tr("Nothing broken right now. Ask me anything below!"), 22, Vox.GREEN))
-	for i in mini(_problems.size(), 6):
+	for i in mini(_problems.size(), 4):
 		var d: Dictionary = _problems[i]
 		var col: Color = [Vox.SILVER, Vox.YELLOW, Vox.ORANGE, Vox.RED][clampi(d.sev, 0, 3)]
 		var label := "%s  %s%s" % [d.title, (d.ns + "/") if d.ns != "" else "", d.name]
@@ -487,8 +500,8 @@ func refresh(state: Dictionary) -> void:
 		b.add_theme_color_override("font_color", col)
 		b.clip_text = true
 		_list.add_child(b)
-	if _problems.size() > 6:
-		_list.add_child(hud._label(tr("... and %d more") % (_problems.size() - 6), 20, Vox.LAVENDER))
+	if _problems.size() > 4:
+		_list.add_child(hud._label(tr("... and %d more") % (_problems.size() - 4), 20, Vox.LAVENDER))
 	if not _sel.is_empty():
 		for d in _problems:
 			if d.kind == _sel.kind and d.ns == _sel.ns and d.name == _sel.name:
@@ -538,14 +551,49 @@ func _clear_acts() -> void:
 		c.queue_free()
 
 
+## A command clicked in the diagnosis or in an answer: reading ones run now
+## and their output is attached to the chat; the rest go to the terminal
+## input for you to review (their output can be sent back with "-> Kubi").
 func _on_cmd(meta) -> void:
 	var cmd := str(meta)
 	if Diagnose.is_read_only(cmd) and not cmd.contains("|") and not cmd.contains("<"):
-		hud._term_cmd(cmd.trim_prefix("kubectl "))
 		if not Settings.terminal:
 			hud.toggle_terminal()
+		_chat.append_text("\n[color=#83769c]%s[/color] [color=#ffec27]%s[/color]\n" % [tr("Running"), hud._esc(cmd)])
+		hud.term_run(cmd, func(entry: Dictionary): attach(entry))
 	else:
 		hud._term_fill(cmd)
+		_chat.append_text("\n[color=#83769c]%s[/color]\n" % tr("It changes the cluster, so it is typed in the terminal for you to review: press Enter to run it. Then use '-> send this output to Kubi'."))
+		_scroll_down()
+
+
+## Adds a terminal output to the next question (shown as a chip; click to remove).
+func attach(entry: Dictionary) -> void:
+	for a in _attachments:
+		if a.id == entry.id:
+			return
+	_attachments.append(entry)
+	if _attachments.size() > 3:
+		_attachments.pop_front()
+	var lines: PackedStringArray = str(entry.out).split("\n")
+	var preview := "\n".join(lines.slice(0, 6))
+	_chat.append_text("[color=#83769c]%s[/color] [color=#fff1e8]%s[/color] [color=#83769c](%d %s)[/color]\n[color=#c2c3c7][font_size=18]%s%s[/font_size][/color]\n" % [
+		tr("Attached for Kubi:"), hud._esc(entry.cmd), lines.size(), tr("lines"), hud._esc(preview), "\n..." if lines.size() > 6 else ""])
+	_render_attachments()
+	_scroll_down()
+
+
+func _render_attachments() -> void:
+	for c in _att_box.get_children():
+		c.queue_free()
+	for a in _attachments:
+		var b: Button = hud._button("[x] %s" % str(a.cmd).left(48), func():
+			_attachments.erase(a)
+			_render_attachments())
+		b.tooltip_text = tr("Remove this output")
+		b.add_theme_color_override("font_color", Vox.PINK)
+		_att_box.add_child(b)
+	_explain_btn.visible = not _attachments.is_empty()
 
 
 ## Asks a question: to the AI when the bridge has one (with the conversation
@@ -561,6 +609,8 @@ func ask(q: String) -> void:
 	_input.text = ""
 	_chat.append_text("\n[color=#29adff]%s:[/color] %s\n" % [tr("You"), hud._esc(q)])
 	if not _llm:
+		_attachments.clear()
+		_render_attachments()
 		var a := _offline_answer(q)
 		_chat.append_text("[color=#ff004d]Kubi:[/color] %s\n" % a)
 		answered.emit(a)
@@ -570,16 +620,23 @@ func ask(q: String) -> void:
 	_ask_btn.disabled = true
 	thinking.emit(true)
 	_chat.append_text("[color=#83769c]%s[/color]\n" % tr("Kubi is thinking... (a local model can take a few seconds)"))
+	var atts := _attachments.map(func(a): return {"cmd": a.cmd, "output": str(a.out).left(6000)})
 	var req := {"question": q, "lang": TranslationServer.get_locale(), "kind": _sel.get("kind", ""),
 		"ns": _sel.get("ns", ""), "name": _sel.get("name", ""),
 		"diagnosis": Diagnose.as_text(_sel) if not _sel.is_empty() else "",
-		"history": _history.slice(maxi(0, _history.size() - 10))}
+		"history": _history.slice(maxi(0, _history.size() - 10)), "attachments": atts}
+	# The outputs go with this question (and a short copy stays in the memory).
+	var remembered := q
+	for a in atts:
+		remembered += "\n[output of %s]\n%s" % [a.cmd, str(a.output).left(1000)]
+	_attachments.clear()
+	_render_attachments()
 	K8s.ask_assistant(req, func(ok: bool, text: String):
 		_busy = false
 		_ask_btn.disabled = false
 		thinking.emit(false)
 		if ok:
-			_history.append({"role": "user", "content": q})
+			_history.append({"role": "user", "content": remembered})
 			_history.append({"role": "assistant", "content": text})
 			_chat.append_text("[color=#ff004d]Kubi:[/color] %s\n" % _format(text))
 			answered.emit(text)

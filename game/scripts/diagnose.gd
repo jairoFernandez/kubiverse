@@ -12,11 +12,16 @@ const READ_VERBS := ["get", "describe", "logs", "top", "events", "explain", "aut
 ## True if a kubectl line only reads (Kubi may run it straight away).
 static func is_read_only(cmd: String) -> bool:
 	var parts := cmd.trim_prefix("kubectl ").strip_edges().split(" ", false)
+	var skip := false
 	for p in parts:
+		if skip:  # value of -n / --namespace / --context...
+			skip = false
+			continue
+		if p in ["-n", "--namespace"]:
+			skip = true
+			continue
 		if not p.begins_with("-"):
 			return p in READ_VERBS
-		if p in ["-n", "--namespace"]:
-			continue
 	return false
 
 

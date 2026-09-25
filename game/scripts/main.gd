@@ -445,6 +445,12 @@ func _screenshot_and_quit(path: String) -> void:
 	if "--kubi" in OS.get_cmdline_user_args():
 		hud.toggle_kubi()
 		await get_tree().create_timer(1.0).timeout
+		if "--kubi-attach" in OS.get_cmdline_user_args():
+			for d in Diagnose.problems(K8s.state):
+				if d.name.begins_with("giant"):
+					hud.kubi.select(d)
+			hud.kubi._on_cmd("kubectl -n ml describe pod giant-experiment")
+			await get_tree().create_timer(3.0).timeout
 		if "--kubi-settings" in OS.get_cmdline_user_args():
 			hud.kubi.custom_rect = Rect2(300, 130, 620, 560)  # as if dragged
 			hud.kubi.toggle_settings()
@@ -1476,9 +1482,9 @@ func _kubi_act(id: String, d: Dictionary) -> void:
 			if not pod.is_empty():
 				hud.open_logs(pod)
 		"describe":
-			hud._term_cmd("-n %s describe pod %s" % [d.ns, d.name])
 			if not Settings.terminal:
 				hud.toggle_terminal()
+			hud.term_run("-n %s describe pod %s" % [d.ns, d.name], func(entry: Dictionary): hud.kubi.attach(entry))
 		"restart":
 			var ok_kind: String = pod.get("owner_kind", "")
 			var req := {"action": "restart", "kind": ok_kind, "ns": d.ns, "name": pod.get("owner_name", "")}
