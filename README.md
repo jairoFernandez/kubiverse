@@ -367,6 +367,14 @@ English and Spanish (the system language is detected; change it on the start scr
 - **Hundreds of namespaces**: VIEW → "Only these namespaces" (per cluster): `shop, team-*`, or a word they contain.
 - **Less traffic**: the bridge sends the full state once and then only what changed (tested: 10 MB → 127 KB over 20 s with 1,000 pods rolling), and browsers get it compressed (permessage-deflate, a 384 KB state goes as 16 KB).
 
+## Safe operations
+
+- **Who else has a say**: the inspector of a workload says if **Argo CD**, **Flux** or **Helm** manage it (from the labels and annotations they leave), if an **HPA** owns its replicas and which **PodDisruptionBudget** protects its pods (and how many may go down right now). Changing something they own asks first and says what will happen: GitOps puts it back from git, the HPA changes the replicas back. The bridge adds the same note to the result for any API client.
+- **Rollouts**: PAUSE / RESUME, ROLLBACK to the previous revision, and HISTORY lists the revisions (image, age, change-cause) with UNDO TO rN, like `kubectl rollout undo --to-revision`.
+- **Diff before applying**: the YAML editor's DIFF button shows exactly what APPLY would change: the live object against a server-side dry run, without the fields that always move.
+- **Drain**: on a node, DRAIN cordons it and evicts its pods through the Eviction API, so PodDisruptionBudgets are honoured; DaemonSet and static pods stay. What a budget holds back is reported, to drain again once the replacements are ready.
+- In the demo, `payments/ledger`'s last deploy is the broken one: HISTORY → UNDO TO r1 fixes it.
+
 ## Quick start
 
 Requirements: Go (version in `bridge/go.mod`), Godot 4.7 (`brew install --cask godot`), a working kubeconfig.
@@ -467,7 +475,7 @@ The defaults expect oauth2-proxy answering `/oauth2/*` on the same host (see [va
 | GET · POST | `/api/assistant` | engine status, models, catalog and downloads · `{"question","kind","ns","name","lang","diagnosis","history"}` → `{"ok","answer","model"}` |
 | POST | `/api/assistant/config` · `/api/assistant/download` | Kubi settings · download `{"kind":"llamacpp"\|"gguf"\|"ollama","id"}` |
 | DELETE | `/api/assistant/model?id=` | delete a downloaded GGUF model |
-| GET · POST | `/api/manifest` | an object's YAML (`?kind=&ns=&name=`) · replace it `{"kind","ns","name","yaml","dry_run"}` |
+| GET · POST | `/api/manifest` | an object's YAML (`?kind=&ns=&name=`) · replace it `{"kind","ns","name","yaml","dry_run"}` · `"diff": true` returns `{diff, changed}` (live vs server dry run) |
 | GET | `/api/state` | current Snapshot as JSON |
 | GET | `/api/logs?ns=&pod=&container=&tail=&previous=1` | container logs |
 | POST | `/api/kubectl` | `{"line": "get pods -A"}` → `{"ok", "exit_code", "output"}` (real kubectl with the restrictions above) |
@@ -477,7 +485,8 @@ The defaults expect oauth2-proxy answering `/oauth2/*` on the same host (see [va
 | GET · POST | `/api/kind` | `?context=` → `{kind, locked}` · `{"context","kind":"prod"\|"sandbox"}` marks it (refused for `--production` contexts) |
 | GET | `/api/audit?limit=&context=` | the change log (newest first) |
 | GET | `/api/whoami` | `{team, user, groups, in_cluster}`: who changes are made as |
-| POST | `/api/action` | `{"action": "delete_pod" \| "scale" \| "restart" \| "cordon" \| "uncordon" \| "create_deployment" \| "delete_workload", "kind", "ns", "name", "replicas", "image", "service"}` |
+| POST | `/api/action` | `{"action": "delete_pod" \| "scale" \| "restart" \| "pause" \| "resume" \| "rollout_undo" \| "cordon" \| "uncordon" \| "drain" \| "create_deployment" \| "delete_workload", "kind", "ns", "name", "replicas", "image", "service", "revision"}` |
+| GET | `/api/rollout?ns=&name=` | a Deployment's revisions (newest first), paused, and its `hpa`, `pdb` and `gitops` owner |
 
 ## Layout
 

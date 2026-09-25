@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/pmezard/go-difflib/difflib"
 	"io"
 	"net/http"
 	"os/exec"
@@ -122,6 +123,7 @@ type manifestPut struct {
 	Name   string `json:"name"`
 	YAML   string `json:"yaml"`
 	DryRun bool   `json:"dry_run"`
+	Diff   bool   `json:"diff"` // what would change (a server dry-run), nothing applied
 }
 
 func (b *Bridge) handleManifestPut(w http.ResponseWriter, r *http.Request) {
@@ -129,6 +131,9 @@ func (b *Bridge) handleManifestPut(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "bad json"})
 		return
+	}
+	if req.Diff {
+		req.DryRun = true
 	}
 	if b.readOnly && !req.DryRun {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "the bridge is read-only"})
@@ -154,6 +159,10 @@ func (b *Bridge) handleManifestPut(w http.ResponseWriter, r *http.Request) {
 	// Keep the hidden last-applied annotation so later `kubectl apply` works.
 	if cur, err := b.getObject(r.Context(), kind, ns, req.Name); err == nil {
 		js = restoreLastApplied(js, cur)
+	}
+	if req.Diff {
+		b.manifestDiff(w, r, js, kind, ns, req.Name)
+		return
 	}
 	args := []string{"replace", "-f", "-", "-o", "name"}
 	if req.DryRun {
@@ -226,4 +235,53 @@ func restoreLastApplied(js []byte, cur map[string]any) []byte {
 	}
 	out, _ := json.Marshal(obj)
 	return out
+}
+
+// manifestDiff: the object now and as the server would leave it (dry-run),
+// as a unified diff of their YAML without the fields that always move.
+func (b *Bridge) manifestDiff(w http.ResponseWriter, r *http.Request, js []byte, kind, ns, name string) {
+	get := []string{"get", strings.ToLower(kind) + "/" + name, "-o", "json"}
+	if ns != "" {
+		get = append(get, "-n", ns)
+	}
+	before, err := b.kubectlRun(r.Context(), nil, get...)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": strings.TrimSpace(string(before))})
+		return
+	}
+	after, err := b.kubectlRun(r.Context(), js, "replace", "-f", "-", "--dry-run=server", "-o", "json")
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": strings.TrimSpace(string(after))})
+		return
+	}
+	a, b2 := diffYAML(before), diffYAML(after)
+	d, _ := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{A: difflib.SplitLines(a), B: difflib.SplitLines(b2),
+		FromFile: "live", ToFile: "edited", Context: 3})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "diff": redact(d), "changed": d != ""})
+}
+
+// diffYAML: an object as YAML minus what changes on every write.
+func diffYAML(raw []byte) string {
+	var obj map[string]any
+	if json.Unmarshal(raw, &obj) != nil {
+		return string(raw)
+	}
+	delete(obj, "status")
+	if md, ok := obj["metadata"].(map[string]any); ok {
+		for _, k := range []string{"managedFields", "resourceVersion", "generation", "uid", "creationTimestamp"} {
+			delete(md, k)
+		}
+		if an, ok := md["annotations"].(map[string]any); ok {
+			delete(an, lastApplied)
+			delete(an, "deployment.kubernetes.io/revision")
+			if len(an) == 0 {
+				delete(md, "annotations")
+			}
+		}
+	}
+	out, err := yaml.Marshal(obj)
+	if err != nil {
+		return string(raw)
+	}
+	return string(out)
 }

@@ -125,6 +125,7 @@ func build(h) -> void:
 	v.add_child(bar)
 	_validate_btn = hud._button("VALIDATE (dry run)", func(): _submit(true))
 	bar.add_child(_validate_btn)
+	bar.add_child(hud._button("DIFF (what changes)", _diff))
 	_apply_btn = hud._button("APPLY", func(): _submit(false), "GoButton")
 	bar.add_child(_apply_btn)
 	bar.add_child(hud._button("ASK KUBI ABOUT THIS LINE", _ask_kubi_line))
@@ -326,6 +327,33 @@ func _update_detail() -> void:
 	_detail.text = t
 
 
+## The server's dry run against what is live: exactly what APPLY would change.
+func _diff() -> void:
+	if _phase != "edit" or _orig == "":
+		return
+	_result.text = "[color=#00e436]%s[/color]" % tr("asking the API server what would change...")
+	K8s.diff_manifest(kind, ns, obj_name, _code.text, _orig, func(ok: bool, text: String, changed: bool):
+		if not ok:
+			Sfx.play("error")
+			_last_error = text
+			_result.text = "[color=#ff004d]%s[/color] %s" % [tr("REJECTED:"), hud._esc(text)]
+			return
+		if not changed:
+			_result.text = "[color=#83769c]%s[/color]" % tr("No difference with what is running.")
+			return
+		var out := []
+		for l in text.split("\n"):
+			var c := "c2c3c7"
+			if l.begins_with("+") and not l.begins_with("+++"):
+				c = "00e436"
+			elif l.begins_with("-") and not l.begins_with("---"):
+				c = "ff004d"
+			elif l.begins_with("@@"):
+				c = "83769c"
+			out.append("[color=#%s]%s[/color]" % [c, hud._esc(l)])
+		_result.text = "[color=#ffec27]%s[/color]\n%s" % [tr("DIFF (live -> edited, as the server would store it):"), "\n".join(out)])
+
+
 func _submit(dry: bool) -> void:
 	if _phase != "edit" or _orig == "":
 		return
@@ -359,7 +387,11 @@ func _submit(dry: bool) -> void:
 		for i in maxi(a.size(), b.size()):
 			if i >= a.size() or i >= b.size() or a[i] != b[i]:
 				n += 1
-		hud.confirm(tr("Apply %d changed line(s) to %s %s? This replaces the object in the cluster.") % [n, kind, obj_name], send,
+		var q := tr("Apply %d changed line(s) to %s %s? This replaces the object in the cluster.") % [n, kind, obj_name]
+		var w: Dictionary = hud._find_workload(ns, kind, obj_name)
+		if w.get("gitops") != null:
+			q = tr("Managed by GitOps: %s") % tr(w.gitops.hint) + "\n\n" + q
+		hud.confirm(q, send,
 			"kubectl %sreplace -f %s.yaml" % [("-n %s " % ns) if ns != "" else "", obj_name])
 
 

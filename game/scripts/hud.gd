@@ -2686,6 +2686,7 @@ func _refresh_inspector() -> void:
 			lines.append(_kv("replicas", tr("%d wanted, [color=#00e436]%d ready[/color]") % [int(d.desired), int(d.ready)]))
 			lines.append(_kv("", tr("%d up-to-date, %d available") % [int(d.updated), int(d.available)]))
 			lines.append(_kv("image", "[color=#83769c]%s[/color]" % d.get("image", "")))
+			lines.append_array(_owner_lines(d))
 			lines.append_array(_usage_lines(K8s.state.get("pods", []).filter(func(p): return p.ns == d.ns and p.get("owner_kind") == d.kind and p.get("owner_name") == d.name)))
 			buttons.append_array(_workload_buttons(d, ro))
 			buttons.append(["EDIT YAML", func(): open_editor(d.kind, d.ns, d.name), "", false, "kubectl -n %s edit %s %s" % [d.ns, str(d.kind).to_lower(), d.name]])
@@ -2837,6 +2838,8 @@ func _refresh_inspector() -> void:
 			else:
 				var req := {"action": "cordon", "name": d.name}
 				buttons.append(["CORDON", func(): _cordon(d), "DangerButton", ro, Kubectl.for_action(req)])
+			var dr := {"action": "drain", "name": d.name}
+			buttons.append(["DRAIN", func(): _drain(d), "DangerButton", ro, Kubectl.for_action(dr)])
 	_insp_info.text = "\n".join(lines)
 	var sig := str(buttons.map(func(b): return [b[0], b[3], b[4]])) + _insp_key
 	if sig != _insp_sig:
@@ -2918,8 +2921,89 @@ func _workload_buttons(w: Dictionary, ro: bool) -> Array:
 		out.append(["SCALE +", func(): _scale(w, 1), "GoButton", ro,
 			Kubectl.for_action({"action": "scale", "kind": w.kind, "ns": w.ns, "name": w.name, "replicas": cur + 1})])
 	var rr := {"action": "restart", "kind": w.kind, "ns": w.ns, "name": w.name}
-	out.append(["RESTART", func(): K8s.action(rr), "", ro, Kubectl.for_action(rr)])
+	out.append(["RESTART", func(): _guarded(w, rr), "", ro, Kubectl.for_action(rr)])
+	if w.kind == "Deployment":
+		var pr := {"action": "resume" if w.get("paused", false) else "pause", "kind": w.kind, "ns": w.ns, "name": w.name}
+		out.append(["RESUME" if w.get("paused", false) else "PAUSE", func(): _guarded(w, pr), "GoButton" if w.get("paused", false) else "", ro, Kubectl.for_action(pr)])
+		var ur := {"action": "rollout_undo", "kind": w.kind, "ns": w.ns, "name": w.name}
+		out.append(["ROLLBACK", func(): _rollback(w, 0), "DangerButton", ro, Kubectl.for_action(ur)])
+		var hk: String = "%s/%s" % [w.ns, w.name]
+		if _history.has(hk):
+			for r in (_history[hk] as Array).slice(0, 5):
+				if not r.get("current", false):
+					var to := int(r.revision)
+					out.append([tr("UNDO TO r%d") % to, func(): _rollback(w, to), "", ro,
+						Kubectl.for_action({"action": "rollout_undo", "kind": w.kind, "ns": w.ns, "name": w.name, "revision": to})])
+		else:
+			out.append(["HISTORY", func(): _load_history(w), "", false, "kubectl -n %s rollout history deployment/%s" % [w.ns, w.name]])
 	return out
+
+
+var _history := {}   # "ns/name" -> revisions shown in the inspector
+
+## Who else decides about this workload, and its rollout history if loaded.
+func _owner_lines(w: Dictionary) -> Array:
+	var out := []
+	var g = w.get("gitops")
+	if g != null:
+		var tool: String = {"argocd": "Argo CD", "flux": "Flux", "helm": "Helm"}.get(g.tool, g.tool)
+		out.append(_kv("managed by", "[color=#ffa300]%s %s[/color]" % [tool, g.name]))
+		out.append("[color=#83769c]  %s[/color]" % tr(g.hint))
+	var h = w.get("hpa")
+	if h != null:
+		out.append(_kv("autoscaler", tr("HPA %s: %d-%d replicas (wants %d)") % [h.name, int(h.min), int(h.max), int(h.desired)]))
+	var b = w.get("pdb")
+	if b != null:
+		var rule: String = ("min available " + str(b.min_available)) if str(b.get("min_available", "")) != "" else ("max unavailable " + str(b.get("max_unavailable", "")))
+		out.append(_kv("budget", tr("PDB %s: %s, %d may go down now") % [b.name, rule, int(b.allowed)]))
+	if int(w.get("revision", 0)) > 0:
+		out.append(_kv("revision", str(int(w.revision)) + ("  [color=#ffec27]%s[/color]" % tr("rollout PAUSED") if w.get("paused", false) else "")))
+	var hk: String = "%s/%s" % [w.ns, w.name]
+	if _history.has(hk):
+		out.append("[color=#83769c]%s[/color]" % tr("ROLLOUT HISTORY"))
+		for r in (_history[hk] as Array).slice(0, 5):
+			var imgs: Array = r.images if r.get("images") != null else []
+			out.append("  r%d  %s  [color=#5f574f]%s%s[/color]%s" % [int(r.revision), ", ".join(imgs), _age(r.get("age", 0)),
+				("  " + str(r.cause)) if str(r.get("cause", "")) != "" else "", "  [color=#00e436]%s[/color]" % tr("(current)") if r.get("current", false) else ""])
+	return out
+
+
+func _load_history(w: Dictionary) -> void:
+	K8s.rollout(w.ns, w.name, func(ok: bool, data: Dictionary):
+		if not ok:
+			toast(str(data.get("error", "history not available")), false)
+			return
+		_history["%s/%s" % [w.ns, w.name]] = data.get("revisions", []) if data.get("revisions") != null else []
+		_insp_sig = ""
+		_refresh_inspector())
+
+
+func _rollback(w: Dictionary, to: int) -> void:
+	var req := {"action": "rollout_undo", "kind": w.kind, "ns": w.ns, "name": w.name, "revision": to}
+	var what := tr("revision %d") % to if to > 0 else tr("the previous revision")
+	_guarded(w, req, tr("Roll %s/%s back to %s? Its pods are replaced with that version's template.") % [w.ns, w.name, what])
+	_history.erase("%s/%s" % [w.ns, w.name])
+
+
+## Changes to a workload someone else owns: say so first (GitOps puts it
+## back, an HPA overrides the replicas). question = the confirmation anyway.
+func _guarded(w: Dictionary, req: Dictionary, question := "") -> void:
+	var warn := []
+	var g = w.get("gitops")
+	if g != null and g.tool != "helm" and req.action != "restart":
+		warn.append(tr("Managed by GitOps: %s") % tr(g.hint))
+	elif g != null and g.tool == "helm" and req.action in ["scale", "rollout_undo"]:
+		warn.append(tr(g.hint))
+	var h = w.get("hpa")
+	if h != null and req.action == "scale":
+		warn.append(tr("HPA %s owns the replicas (%d-%d): it will change them back.") % [h.name, int(h.min), int(h.max)])
+	if warn.is_empty() and question == "":
+		K8s.action(req)
+		return
+	var text := question if question != "" else tr("Change %s/%s?") % [w.ns, w.name]
+	if not warn.is_empty():
+		text = "\n".join(warn) + "\n\n" + text + (" " + tr("(it may be reverted)") if g != null and g.tool != "helm" else "")
+	confirm(text, func(): K8s.action(req), Kubectl.for_action(req))
 
 
 ## Deletes the finished (Succeeded) pods of a namespace, after confirming.
@@ -2938,15 +3022,33 @@ func _scale(w: Dictionary, delta: int) -> void:
 	if want == cur:
 		return
 	var req := {"action": "scale", "kind": w.kind, "ns": w.ns, "name": w.name, "replicas": want}
+	var full := _find_workload(w.ns, w.kind, w.name)
 	if want == 0:
-		confirm(tr("Scale %s/%s to 0 replicas? It will stop serving.") % [w.ns, w.name], func(): K8s.action(req), Kubectl.for_action(req))
+		_guarded(full if not full.is_empty() else w, req, tr("Scale %s/%s to 0 replicas? It will stop serving.") % [w.ns, w.name])
 	else:
-		K8s.action(req)
+		_guarded(full if not full.is_empty() else w, req)
 
 
 func _delete_workload(d: Dictionary) -> void:
 	var req := {"action": "delete_workload", "kind": d.kind, "ns": d.ns, "name": d.name}
 	confirm(tr("Delete %s %s/%s and all its pods?") % [d.kind, d.ns, d.name], func(): K8s.action(req), Kubectl.for_action(req))
+
+
+func _drain(d: Dictionary) -> void:
+	var req := {"action": "drain", "name": d.name}
+	var here: Array = K8s.state.get("pods", []).filter(func(p): return p.get("node", "") == d.name and not p.get("deleting", false) and PodBot.categorize(p) != "done")
+	var ds := here.filter(func(p): return p.get("owner_kind", "") == "DaemonSet").size()
+	var guarded := {}
+	for w in K8s.state.get("workloads", []):
+		if w.get("pdb") != null and here.any(func(p): return p.ns == w.ns and str(p.get("owner_name", "")).begins_with(w.name)):
+			guarded["%s/%s" % [w.ns, w.name]] = int(w.pdb.allowed)
+	var text := tr("Drain node %s? It is cordoned and its %d pods are evicted (moved elsewhere); %d DaemonSet pods stay. Pods with emptyDir lose that data.") % [d.name, here.size() - ds, ds]
+	if not guarded.is_empty():
+		var parts := []
+		for k in guarded:
+			parts.append("%s (%d may go down)" % [k, guarded[k]])
+		text += "\n" + tr("Disruption budgets will hold back some of them: %s") % ", ".join(parts)
+	confirm(text, func(): K8s.action(req), Kubectl.for_action(req))
 
 
 func _cordon(d: Dictionary) -> void:

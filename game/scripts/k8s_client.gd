@@ -454,6 +454,19 @@ func action(req: Dictionary) -> void:
 	)
 
 
+## A Deployment's rollout history and who else has a say. cb(ok, data)
+func rollout(ns: String, name: String, cb: Callable) -> void:
+	if mode == Mode.DEMO:
+		var res: Dictionary = _mock.rollout(ns, name)
+		cb.call(res.ok, res)
+		return
+	if mode != Mode.BRIDGE:
+		cb.call(false, {"error": "not connected"})
+		return
+	_http(HTTPClient.METHOD_GET, "/api/rollout?ns=%s&name=%s%s" % [ns.uri_encode(), name.uri_encode(), _q(false)], "", func(ok: bool, data):
+		cb.call(ok and typeof(data) == TYPE_DICTIONARY and bool(data.get("ok", false)), data if typeof(data) == TYPE_DICTIONARY else {"error": str(data)}))
+
+
 ## Runs a kubectl command line in the in-game terminal. cb(ok, output)
 func run_kubectl(line: String, cb: Callable) -> void:
 	if mode == Mode.DEMO:
@@ -582,6 +595,62 @@ func put_manifest(kind: String, ns: String, name: String, yaml: String, dry: boo
 			cb.call(false, str(data))
 		else:
 			cb.call(bool(data.get("ok", false)), str(data.get("output", data.get("error", "")))))
+
+
+## What APPLY would change: cb(ok, unified diff or error, changed). The demo
+## compares the text; the bridge compares live vs a server dry run.
+func diff_manifest(kind: String, ns: String, name: String, yaml: String, orig: String, cb: Callable) -> void:
+	if mode != Mode.BRIDGE:
+		cb.call(true, simple_diff(orig, yaml), orig != yaml)
+		return
+	var body := JSON.stringify({"kind": kind, "ns": ns, "name": name, "yaml": yaml, "diff": true})
+	_http(HTTPClient.METHOD_POST, "/api/manifest" + _q(), body, func(ok: bool, data):
+		if not ok or typeof(data) != TYPE_DICTIONARY:
+			cb.call(false, str(data), false)
+		elif not bool(data.get("ok", false)):
+			cb.call(false, str(data.get("error", "")), false)
+		else:
+			cb.call(true, str(data.get("diff", "")), bool(data.get("changed", false))))
+
+
+## A line diff (lines removed with -, added with +) for the demo.
+static func simple_diff(a: String, b: String) -> String:
+	var la := a.split("\n")
+	var lb := b.split("\n")
+	var out := PackedStringArray()
+	var i := 0
+	var j := 0
+	while i < la.size() or j < lb.size():
+		if i < la.size() and j < lb.size() and la[i] == lb[j]:
+			i += 1
+			j += 1
+			continue
+		# a changed stretch: find where they meet again
+		var ni := i
+		var nj := j
+		var found := false
+		for d in range(1, 40):
+			for k in d + 1:
+				var x := i + k
+				var y := j + d - k
+				if x < la.size() and y < lb.size() and la[x] == lb[y]:
+					ni = x
+					nj = y
+					found = true
+					break
+			if found:
+				break
+		if not found:
+			ni = la.size()
+			nj = lb.size()
+		out.append("@@ line %d @@" % (j + 1))
+		for x in range(i, ni):
+			out.append("-" + la[x])
+		for y in range(j, nj):
+			out.append("+" + lb[y])
+		i = ni
+		j = nj
+	return "\n".join(out)
 
 
 ## Deploys (or removes) the sample scenario the sandbox missions use: broken

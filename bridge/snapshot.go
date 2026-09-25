@@ -78,6 +78,12 @@ type Workload struct {
 	Updated   int32  `json:"updated"`
 	Available int32  `json:"available"`
 	Image     string `json:"image"`
+	// Who else has a say: a GitOps tool, an autoscaler, a disruption budget.
+	GitOps   *GitOps `json:"gitops,omitempty"`
+	HPA      *HPARef `json:"hpa,omitempty"`
+	PDB      *PDBRef `json:"pdb,omitempty"`
+	Paused   bool    `json:"paused,omitempty"`   // Deployment rollout paused
+	Revision int64   `json:"revision,omitempty"` // Deployment rollout revision
 }
 
 type Service struct {
@@ -175,6 +181,8 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 			Kind: "Deployment", Namespace: d.Namespace, Name: d.Name,
 			Desired: desired, Ready: d.Status.ReadyReplicas, Updated: d.Status.UpdatedReplicas,
 			Available: d.Status.AvailableReplicas, Image: firstImage(d.Spec.Template.Spec),
+			GitOps: gitOpsOf(d.ObjectMeta), HPA: b.hpaFor("Deployment", d.Namespace, d.Name),
+			PDB: b.pdbFor(d.Namespace, d.Spec.Template.Labels), Paused: d.Spec.Paused, Revision: revisionOf(d.ObjectMeta),
 		})
 	}
 	sts, _ := b.stsLister.List(labels.Everything())
@@ -187,6 +195,8 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 			Kind: "StatefulSet", Namespace: d.Namespace, Name: d.Name,
 			Desired: desired, Ready: d.Status.ReadyReplicas, Updated: d.Status.UpdatedReplicas,
 			Available: d.Status.AvailableReplicas, Image: firstImage(d.Spec.Template.Spec),
+			GitOps: gitOpsOf(d.ObjectMeta), HPA: b.hpaFor("StatefulSet", d.Namespace, d.Name),
+			PDB: b.pdbFor(d.Namespace, d.Spec.Template.Labels),
 		})
 	}
 	dss, _ := b.dsLister.List(labels.Everything())
@@ -195,7 +205,7 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 			Kind: "DaemonSet", Namespace: d.Namespace, Name: d.Name,
 			Desired: d.Status.DesiredNumberScheduled, Ready: d.Status.NumberReady,
 			Updated: d.Status.UpdatedNumberScheduled, Available: d.Status.NumberAvailable,
-			Image: firstImage(d.Spec.Template.Spec),
+			Image: firstImage(d.Spec.Template.Spec), GitOps: gitOpsOf(d.ObjectMeta),
 		})
 	}
 	sort.Slice(s.Workloads, func(i, j int) bool {

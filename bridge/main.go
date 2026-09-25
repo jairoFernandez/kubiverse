@@ -62,6 +62,7 @@ type Bridge struct {
 	stsLister  appslisters.StatefulSetLister
 	dsLister   appslisters.DaemonSetLister
 	ingLister  networkinglisters.IngressLister // nil if Ingresses can't be listed
+	ops        opsListers                      // HPAs and PDBs (each nil if not allowed)
 
 	mu      sync.Mutex
 	dirty   bool
@@ -153,6 +154,7 @@ func main() {
 	mux.HandleFunc("GET /api/audit", hub.auth(hub.handleAudit))
 	mux.HandleFunc("/api/portforward", hub.cluster((*Bridge).handleForwards))
 	mux.HandleFunc("GET /api/pod", hub.cluster((*Bridge).handlePod))
+	mux.HandleFunc("GET /api/rollout", hub.cluster((*Bridge).handleRollout))
 	mux.HandleFunc("GET /api/manifest", hub.cluster((*Bridge).handleManifestGet))
 	mux.HandleFunc("POST /api/manifest", hub.cluster((*Bridge).handleManifestPut))
 	mux.HandleFunc("GET /api/assistant", hub.auth(hub.handleAIStatus))
@@ -259,6 +261,15 @@ func startBridge(root context.Context, cfg *rest.Config, ctxName, kubeconfigPath
 		}
 	} else {
 		log.Printf("[%s] ingresses not shown: %v", ctxName, err)
+	}
+	// HPAs and PodDisruptionBudgets, optional the same way.
+	if _, err := cs.AutoscalingV2().HorizontalPodAutoscalers("").List(probe, metav1.ListOptions{Limit: 1}); err == nil {
+		b.ops.hpa = f.Autoscaling().V2().HorizontalPodAutoscalers().Lister()
+		f.Autoscaling().V2().HorizontalPodAutoscalers().Informer().AddEventHandler(markDirty)
+	}
+	if _, err := cs.PolicyV1().PodDisruptionBudgets("").List(probe, metav1.ListOptions{Limit: 1}); err == nil {
+		b.ops.pdb = f.Policy().V1().PodDisruptionBudgets().Lister()
+		f.Policy().V1().PodDisruptionBudgets().Informer().AddEventHandler(markDirty)
 	}
 	probeCancel()
 	b.watchEvents(ctx, f)

@@ -19,6 +19,15 @@ static func for_action(req: Dictionary) -> String:
 			return "kubectl %sscale %s/%s --replicas=%d" % [_ns(ns), kind, n, int(req.get("replicas", 0))]
 		"restart":
 			return "kubectl %srollout restart %s/%s" % [_ns(ns), kind, n]
+		"pause":
+			return "kubectl %srollout pause %s/%s" % [_ns(ns), kind, n]
+		"resume":
+			return "kubectl %srollout resume %s/%s" % [_ns(ns), kind, n]
+		"rollout_undo":
+			var to := int(req.get("revision", 0))
+			return "kubectl %srollout undo %s/%s%s" % [_ns(ns), kind, n, (" --to-revision=%d" % to) if to > 0 else ""]
+		"drain":
+			return "kubectl drain %s --ignore-daemonsets --delete-emptydir-data" % n
 		"cordon":
 			return "kubectl cordon %s" % n
 		"uncordon":

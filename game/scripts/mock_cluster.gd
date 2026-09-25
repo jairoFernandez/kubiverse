@@ -60,6 +60,18 @@ func start() -> void:
 	_wl("StatefulSet", "elastic", "elasticsearch", 1, "elasticsearch:8.16", "ok")
 	for ns in ["argocd", "vault", "cert-manager", "ingress-nginx", "grafana", "elastic"]:
 		namespaces.append(ns)
+	# Who else has a say (block 3): GitOps, an autoscaler, a disruption budget,
+	# and a rollout history (ledger's last deploy is the broken one).
+	var fe: Dictionary = workloads["shop/Deployment/frontend"]
+	fe.gitops = {"tool": "argocd", "name": "shop", "hint": "Argo CD app shop: change it in its git repo (a manual change is reverted on the next sync if self-heal is on, or shows as OutOfSync)"}
+	fe.hpa = {"name": "frontend", "min": 2, "max": 6, "current": 3, "desired": 3}
+	fe.pdb = {"name": "frontend", "allowed": 1, "min_available": "2"}
+	fe.history = ["nginx:1.25-alpine", "nginx:1.26-alpine", "nginx:alpine"]
+	var lg: Dictionary = workloads["payments/Deployment/ledger"]
+	lg.history = ["busybox:1.35", "busybox:1.36"]
+	lg.good = 1   # revision 1 was the last one that worked
+	workloads["shop/StatefulSet/redis"].gitops = {"tool": "helm", "name": "redis", "hint": "Helm release redis: the next helm upgrade puts back what its values say"}
+	workloads["shop/StatefulSet/redis"].pdb = {"name": "redis", "allowed": 0, "max_unavailable": "0"}
 	_svc("data", "broker", "ClusterIP", "broker", ["9092/TCP"], true)
 	# CI namespace full of finished Argo Workflow steps (they pile up in real clusters).
 	namespaces.append("ci")
@@ -320,6 +332,62 @@ func action(req: Dictionary) -> Dictionary:
 				if p._wl == wkey:
 					_kill(p)
 			return {"ok": true, "message": "%s %s rollout restarted" % [kind, n]}
+		"pause", "resume":
+			var wl = workloads.get(ns + "/" + kind + "/" + n)
+			if wl == null or kind != "Deployment":
+				return {"ok": false, "error": "only Deployments can pause their rollout"}
+			wl.paused = req.action == "pause"
+			_dirty = true
+			return {"ok": true, "message": "deployment %s rollout %s" % [n, "paused" if wl.paused else "resumed"]}
+		"rollout_undo":
+			var wkey := ns + "/" + kind + "/" + n
+			var wl = workloads.get(wkey)
+			if wl == null or kind != "Deployment":
+				return {"ok": false, "error": "rollback works on Deployments"}
+			if wl.get("paused", false):
+				return {"ok": false, "error": "deployment %s is paused: resume it before rolling back" % n}
+			var hist: Array = wl.get("history", [wl.image])
+			var cur := hist.find(wl.image)
+			var to := int(req.get("revision", 0))
+			var idx := (to - 1) if to > 0 else cur - 1
+			if idx < 0 or idx >= hist.size() or idx == cur:
+				return {"ok": false, "error": "no previous revision to roll back to"}
+			wl.image = hist[idx]
+			wl.undos = int(wl.get("undos", 0)) + 1
+			if wl.has("good"):
+				wl.behaviour = "ok" if idx + 1 <= int(wl.good) else "crash"
+			wl.gen += 1
+			for p in pods.values():
+				if p._wl == wkey:
+					_kill(p)
+			_ev(ns, "Deployment", n, "DeploymentRollback", "Rolled back to revision %d (%s)" % [idx + 1, wl.image], "Normal")
+			_dirty = true
+			return {"ok": true, "message": "deployment %s rolled back to revision %d" % [n, idx + 1]}
+		"drain":
+			if not nodes.has(n):
+				return {"ok": false, "error": "node not found"}
+			nodes[n].unschedulable = true
+			var evicted := 0
+			var blocked := []
+			var budget := {}
+			for p in pods.values():
+				if p.node != n or p.deleting or str(p._wl).contains("/DaemonSet/") or p.status in ["Completed", "Succeeded", "Failed"]:
+					continue
+				var wl = workloads.get(p._wl)
+				if wl != null and wl.has("pdb"):
+					var left: int = budget.get(p._wl, int(wl.pdb.allowed))
+					if left <= 0:
+						blocked.append(p.ns + "/" + p.name)
+						continue
+					budget[p._wl] = left - 1
+				_kill(p)
+				evicted += 1
+			_ev("", "Node", n, "NodeNotSchedulable", "Node %s drained" % n, "Normal")
+			_dirty = true
+			var msg := "node %s cordoned; %d pods evicted" % [n, evicted]
+			if not blocked.is_empty():
+				msg += "; %d blocked by a PodDisruptionBudget (drain again once their replacements are ready): %s" % [blocked.size(), ", ".join(blocked)]
+			return {"ok": true, "message": msg}
 		"cordon", "uncordon":
 			if not nodes.has(n):
 				return {"ok": false, "error": "node not found"}
@@ -453,8 +521,15 @@ func _emit() -> void:
 		var mine := pods.values().filter(func(p): return p._wl == wkey and not p.deleting)
 		var ready := mine.filter(func(p): return p.status == "Running" and p.ready == p.total).size()
 		var desired: int = nodes.size() if wl.kind == "DaemonSet" else wl.desired
-		s.workloads.append({"kind": wl.kind, "ns": wl.ns, "name": wl.name, "desired": desired,
-			"ready": ready, "updated": mine.size(), "available": ready, "image": wl.image})
+		var wo := {"kind": wl.kind, "ns": wl.ns, "name": wl.name, "desired": desired,
+			"ready": ready, "updated": mine.size(), "available": ready, "image": wl.image}
+		for k in ["gitops", "hpa", "pdb"]:
+			if wl.has(k):
+				wo[k] = wl[k]
+		if wl.kind == "Deployment":
+			wo["paused"] = wl.get("paused", false)
+			wo["revision"] = wl.get("history", [wl.image]).size() + int(wl.get("undos", 0))
+		s.workloads.append(wo)
 	for sv in services.values():
 		var mine := pods.values().filter(func(p): return p.ns == sv.ns and p.owner_name == sv.app)
 		var backends := mine.map(func(p): return p.name)
@@ -796,3 +871,15 @@ func apply_manifest(kind: String, ns: String, n: String, yaml: String, dry: bool
 			_dirty = true
 			return {"ok": true, "message": label + " replaced"}
 	return {"ok": dry, "message": label + " (server dry run)", "error": "the demo can't apply %s changes" % kind}
+
+
+## A Deployment's rollout history, like the bridge's /api/rollout.
+func rollout(ns: String, n: String) -> Dictionary:
+	var wl = workloads.get(ns + "/Deployment/" + n)
+	if wl == null:
+		return {"ok": false, "error": "not found"}
+	var hist: Array = wl.get("history", [wl.image])
+	var revs := []
+	for i in range(hist.size() - 1, -1, -1):
+		revs.append({"revision": i + 1, "images": [hist[i]], "cause": "", "age": 3600 * (hist.size() - i), "current": hist[i] == wl.image})
+	return {"ok": true, "revisions": revs, "paused": wl.get("paused", false), "hpa": wl.get("hpa"), "pdb": wl.get("pdb"), "gitops": wl.get("gitops")}

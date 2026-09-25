@@ -28,6 +28,7 @@ type ActionRequest struct {
 	Replicas int32  `json:"replicas"`
 	Image    string `json:"image"`
 	Service  bool   `json:"service"`
+	Revision int64  `json:"revision"` // rollout_undo: 0 = the previous one
 }
 
 var dnsName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
@@ -82,7 +83,7 @@ func (b *Bridge) doAction(ctx context.Context, req ActionRequest) (string, error
 		default:
 			return "", fmt.Errorf("cannot scale %s", req.Kind)
 		}
-		return fmt.Sprintf("%s %s scaled to %d", req.Kind, req.Name, req.Replicas), err
+		return fmt.Sprintf("%s %s scaled to %d", req.Kind, req.Name, req.Replicas) + b.notes(req.Kind, req.NS, req.Name, "scale"), err
 
 	case "restart":
 		patch := []byte(fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":%q}}}}}`,
@@ -99,6 +100,24 @@ func (b *Bridge) doAction(ctx context.Context, req ActionRequest) (string, error
 			return "", fmt.Errorf("cannot restart %s", req.Kind)
 		}
 		return req.Kind + " " + req.Name + " rollout restarted", err
+
+	case "pause", "resume":
+		if req.Kind != "Deployment" {
+			return "", fmt.Errorf("only Deployments can pause their rollout")
+		}
+		patch := []byte(fmt.Sprintf(`{"spec":{"paused":%v}}`, req.Action == "pause"))
+		_, err := cs.AppsV1().Deployments(req.NS).Patch(ctx, req.Name, types.MergePatchType, patch, metav1.PatchOptions{})
+		return "deployment " + req.Name + " rollout " + map[bool]string{true: "paused", false: "resumed"}[req.Action == "pause"] + b.notes(req.Kind, req.NS, req.Name, req.Action), err
+
+	case "rollout_undo":
+		if req.Kind != "Deployment" {
+			return "", fmt.Errorf("rollback works on Deployments")
+		}
+		msg, err := b.rollback(ctx, req.NS, req.Name, req.Revision)
+		return msg + b.notes(req.Kind, req.NS, req.Name, req.Action), err
+
+	case "drain":
+		return b.drain(ctx, req.Name)
 
 	case "cordon", "uncordon":
 		patch := []byte(fmt.Sprintf(`{"spec":{"unschedulable":%v}}`, req.Action == "cordon"))
