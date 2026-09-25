@@ -169,12 +169,7 @@ static func _bucket(st: int) -> String:
 
 
 static func status_color(st: int) -> Color:
-	match _bucket(st):
-		"2xx": return Vox.GREEN
-		"3xx": return Vox.BLUE
-		"4xx": return Vox.YELLOW
-		"5xx": return Vox.RED
-	return Vox.SILVER
+	return World.http_color(st)
 
 
 func _render() -> void:

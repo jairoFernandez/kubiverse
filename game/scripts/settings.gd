@@ -21,12 +21,15 @@ var mission_kubi := false     # playing Kubi's dynamic missions (any cluster kin
 var kubi_active := ""         # id of the dynamic mission being played
 var kubi_steps := {}          # dynamic mission id -> current step
 var cluster_kinds := {}       # "bridge url|context" -> "prod" | "sandbox"
+var cluster_looks := {}       # "bridge url|context" (or "demo") -> Look id (farm, space...)
 var lang := ""
 var always_run := false
 var minimap := true
 var minimap_size := 2
 var challenge := false
 var fast_day := false
+var weather := "cluster"      # cluster (health) | real (a city, Open-Meteo) | off
+var weather_city := ""
 var servers: Array = []   # [{name, url, token, context}]
 var music_volume := 0.5
 var sfx_volume := 0.8
@@ -54,12 +57,15 @@ func _ready() -> void:
 		kubi_active = cf.get_value("missions", "kubi_active", kubi_active)
 		kubi_steps = cf.get_value("missions", "kubi_steps", kubi_steps)
 		cluster_kinds = cf.get_value("clusters", "kinds", cluster_kinds)
+		cluster_looks = cf.get_value("clusters", "looks", cluster_looks)
 		lang = cf.get_value("ui", "lang", lang)
 		always_run = cf.get_value("ui", "always_run", always_run)
 		minimap = cf.get_value("ui", "minimap", minimap)
 		minimap_size = cf.get_value("ui", "minimap_size", minimap_size)
 		challenge = cf.get_value("ui", "challenge", challenge)
 		fast_day = cf.get_value("ui", "fast_day", fast_day)
+		weather = cf.get_value("ui", "weather", weather)
+		weather_city = cf.get_value("ui", "weather_city", weather_city)
 		servers = cf.get_value("servers", "list", servers)
 		music_volume = cf.get_value("audio", "music", music_volume)
 		sfx_volume = cf.get_value("audio", "sfx", sfx_volume)
@@ -112,12 +118,15 @@ func save() -> void:
 	cf.set_value("missions", "kubi_active", kubi_active)
 	cf.set_value("missions", "kubi_steps", kubi_steps)
 	cf.set_value("clusters", "kinds", cluster_kinds)
+	cf.set_value("clusters", "looks", cluster_looks)
 	cf.set_value("ui", "lang", lang)
 	cf.set_value("ui", "always_run", always_run)
 	cf.set_value("ui", "minimap", minimap)
 	cf.set_value("ui", "minimap_size", minimap_size)
 	cf.set_value("ui", "challenge", challenge)
 	cf.set_value("ui", "fast_day", fast_day)
+	cf.set_value("ui", "weather", weather)
+	cf.set_value("ui", "weather_city", weather_city)
 	cf.set_value("servers", "list", servers)
 	cf.set_value("audio", "music", music_volume)
 	cf.set_value("audio", "sfx", sfx_volume)

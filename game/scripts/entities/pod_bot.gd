@@ -147,6 +147,7 @@ func _rebuild() -> void:
 	Vox.box(_body, Vector3(0.06, 0.3, 0.06), Vector3(0, y + 0.15, 0), Vox.SLATE, 0.0, false)
 	_gem = Vox.box(_body, Vector3(0.24, 0.24, 0.24), Vector3(0, y + 0.45, 0), category_color(category), 2.0)
 	_gem.rotation = Vector3(deg_to_rad(45), 0, deg_to_rad(35))
+	Look.decorate_pod(_body, top_y)
 
 
 func _process(delta: float) -> void:

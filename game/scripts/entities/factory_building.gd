@@ -41,7 +41,7 @@ func setup(ns_name: String, st: Dictionary, power := false) -> void:
 		w = 12.0
 		d = 8.0
 		h = 4.0
-	var sig := "%s|%.1f|%s" % [str(st), w, power]
+	var sig := "%s|%.1f|%s|%s" % [str(st), w, power, Look.current]
 	if sig != _sig:
 		_sig = sig
 		_rebuild()
@@ -126,7 +126,7 @@ func _rebuild() -> void:
 	_geo = Node3D.new()
 	add_child(_geo)
 	var nsc := Vox.YELLOW if is_power else Vox.ns_color(key)
-	var wall := Color("8a8f9e").lerp(nsc, 0.25)
+	var wall: Color = (Look.v("building") as Color).lerp(nsc, 0.25)
 	var wall_dark := wall.darkened(0.25)
 	# Foundation, walls, colored band
 	Vox.box(_geo, Vector3(w + 0.6, 0.2, d + 0.6), Vector3(0, 0.1, 0), Vox.SLATE)
@@ -134,7 +134,7 @@ func _rebuild() -> void:
 	Vox.box(_geo, Vector3(w + 0.04, 0.35, d + 0.04), Vector3(0, h - 0.3, 0), nsc.darkened(0.1))
 	var style: String = info.get("style", "factory")
 	var roof_top := h + 1.0
-	if style == "factory" or is_power:
+	if (style == "factory" and Look.current == "factory") or is_power:
 		# Saw-tooth factory roof
 		var teeth := maxi(2, int(w / 2.2))
 		var tw := w / teeth
@@ -146,7 +146,10 @@ func _rebuild() -> void:
 	else:
 		Vox.box(_geo, Vector3(w + 0.3, 0.3, d + 0.3), Vector3(0, h + 0.35, 0), wall_dark)
 		roof_top = h + 0.5
-		_style_extras(style, nsc, wall, wall_dark)
+		if style != "factory":
+			_style_extras(style, nsc, wall, wall_dark)
+		# Every namespace wears the chosen look (barn, dome, module, castle).
+		Look.decorate_building(_geo, w, d, h, roof_top, nsc)
 	# Door (front, +z) with frame and light
 	Vox.box(_geo, Vector3(2.4, 2.6, 0.12), Vector3(0, 1.5, d * 0.5 + 0.02), Color("1b1b2a"), 0.0, false)
 	Vox.box(_geo, Vector3(2.8, 0.3, 0.3), Vector3(0, 2.95, d * 0.5 + 0.1), nsc)

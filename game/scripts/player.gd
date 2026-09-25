@@ -17,6 +17,8 @@ const SWIM_SPEED := 3.6
 const SWIM_RUN := 6.0
 const SWIM_UP := 3.2
 var _bubble_t := 0.0
+var push := Vector3.ZERO        # outside push (conveyor belt fling), decays
+var _flip := 0.0                # somersault left to spin (radians)
 
 var cam_yaw := 0.0
 var input_enabled := true
@@ -148,6 +150,15 @@ func face_look(yaw: float) -> void:
 	_facing = yaw + PI
 
 
+## Thrown through the air (end of a conveyor belt): a push, a hop and a flip.
+func launch(dir: Vector3, up: float) -> void:
+	push = dir
+	_vy = up
+	_grounded = false
+	_flip = TAU
+	_sfx("jump")
+
+
 func on_ground() -> bool:
 	return _grounded
 
@@ -254,6 +265,9 @@ func _process(delta: float) -> void:
 	var step := dir * speed * delta
 	var feet := position.y
 	position = world.move_player(position, step, feet) if world else position + step
+	if push.length() > 0.05:
+		position = world.move_player(position, push * delta, feet) if world else position + push * delta
+		push = push.move_toward(Vector3.ZERO, delta * (2.0 if not _grounded else 14.0))
 
 	# Gravity: stand on the highest surface under the feet, or fall.
 	# Surfaces up to one step above the feet count as ground: walking onto a
@@ -317,6 +331,10 @@ func _process(delta: float) -> void:
 
 	var amp := 0.3 if running else 0.15
 	_body.rotation = Vector3(_lean, _facing, 0)
+	if _flip > 0.0:
+		# Somersault (flung off a conveyor belt): spin forward while airborne.
+		_flip = maxf(0.0, _flip - delta * 11.0) if not _grounded or _flip > 0.5 else 0.0
+		_body.rotate_object_local(Vector3.RIGHT, -(TAU - _flip))
 	_body.position.y = absf(sin(_walk)) * (0.12 if running else 0.07) if on_ground() else 0.0
 	if flying and not _grounded:
 		_body.position.y = sin(Time.get_ticks_msec() * 0.004) * 0.06  # hover bob

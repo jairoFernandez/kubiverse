@@ -27,7 +27,7 @@ func update_data(d: Dictionary, pod_count: int) -> void:
 	data = d
 	key = d.name
 	var need := maxi(3, ceili(sqrt(float(maxi(pod_count, 1)))))
-	var sig := "%d|%s|%s|%s" % [need, d.ready, d.unschedulable, d.get("roles", [])]
+	var sig := "%d|%s|%s|%s|%s" % [need, d.ready, d.unschedulable, d.get("roles", []), Look.current]
 	if sig != _sig:
 		_sig = sig
 		cols = need
@@ -138,8 +138,8 @@ func _rebuild() -> void:
 	size = cols * SLOT + MARGIN
 	var s := size
 	var ready: bool = data.get("ready", true)
-	var grass := Vox.GREEN if ready else Color("8a7a55")
-	var grass_dark := Vox.FOREST if ready else Color("5f574f")
+	var grass: Color = Look.v("island") if ready else Color("8a7a55")
+	var grass_dark: Color = Look.v("island_dark") if ready else Color("5f574f")
 	var rng := Vox.rng_for(key)
 
 	# Top soil + dirt + a tapering rocky underside.

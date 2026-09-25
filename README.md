@@ -189,6 +189,22 @@ Click a robot and **ENTER POD [E]** to swim inside it. The pod is a **fish tank*
 
 The bridge serves it at `GET /api/pod?ns=&name=` (per-container usage comes from metrics-server when installed).
 
+## The engine room: how Kubernetes works inside
+
+South of the **Kubernetes Quarter** stands the **ENGINE ROOM** (also a button in the level bar). Inside, the control plane's machines, piped to the API server: the **API server** (the front desk every request goes through), **etcd** (the vault with the whole desired state, one disk per member), the **controller manager** (gears: control loops that make reality match), the **scheduler** (a crane that picks a node for each pod), a **kubelet** per node with its container runtime, **CoreDNS**, **kube-proxy**, the **CNI** and **you** at the kubectl desk. Each lamp shows the health of its pod in kube-system (managed clusters hide the control plane: "managed by the provider").
+
+- Every **real event** of your cluster becomes a **work order** that travels between the machines (ScalingReplicaSet and SuccessfulCreate from the controllers, Scheduled from the scheduler to a node's kubelet, Pulling/Started at the kubelet, FailedScheduling, BackOff...), and a panel says in plain words what each component just did. Your own changes start at your desk.
+- **TEACH ME: THE LIFE OF A POD**: on a sandbox it creates a tiny `engine-tour` Deployment in `academia` and follows its six steps with its real events (and a REMOVE button); on production it replays the last pod the cluster started, creating nothing.
+- Click a machine for a longer explanation.
+
+## Looks (themes)
+
+**VIEW → Look** dresses the same cluster as a **factory** (default), a **farm** (red barns with silos and hay, crops and apple trees, straw hats), a **futuristic megacity** (neon edges, hologram rings, halos), a **space station** (glass domes, antennas, solar wings, rocks and crystals, always a starry sky, bubble helmets) or a **medieval kingdom** (battlements, towers with pointed roofs and banners, cobbled roads, cottages, plumed helmets). The level names follow (FARM, BARN, THE FIELDS...). The look is saved **per cluster**, so each cluster can have its own; Kubernetes words (pod, service, namespace) stay the same.
+
+## Conveyor belts
+
+Jump onto a working assembly line's belt and it carries you to its end, then flings you off with a somersault.
+
 ## Port-forward: glass tubes
 
 A port-forward is a private tunnel from your machine straight to a pod or a Service, skipping the Ingress. In Kubiverse it's a **pneumatic glass tube**: it starts on the roof of **YOUR PC** (a cabin in the south-east corner of the plant, 127.0.0.1) and lands on the hall of its namespace; inside that hall it comes up through a floor hatch next to the pod or loading dock. **Glowing packets move with the real traffic**: cyan = answers coming to you, yellow = your requests going in. Its sign shows `localhost:8080 → shop/frontend:80` and the bytes and connections; the glass turns red if it loses its pod.
@@ -318,7 +334,9 @@ Perspective camera at helmet height: the mouse looks around (it's captured; ESC 
 
 ## Day and night
 
-Lighting follows the **cluster's time** (the bridge's clock, in your time zone). The sun crosses the sky, there are orange sunrises and sunsets, and at night a moon and stars. The time is shown in the level bar. In demo mode (or with **VIEW → Accelerated day/night cycle**) a day lasts 4 minutes.
+Lighting follows the **cluster's time** (the bridge's clock, in your time zone), in real time. The sun crosses the sky, there are orange sunrises and sunsets, and at night a moon and stars. The time is shown in the level bar. With **VIEW → Accelerated day/night cycle** a day lasts 4 minutes.
+
+**Weather** (VIEW → Weather): by default it is the **cluster's health**: clear when everything is healthy, clouds when pods wait, rain when pods fail (heavier the more fail), a thunderstorm with lightning when nodes are down or many pods fail. It can also be the **real weather of a city** (Open-Meteo, no account: the game asks it for that city only) or off. Rain and snow fall outdoors; the clock shows the weather and its tooltip why.
 
 ## Halls on fire
 

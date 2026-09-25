@@ -65,6 +65,10 @@ var _pod_labels: Array = []               # static labels inside the tank (ports
 var _bubbles: Array = []                  # [{node, vy, life, text?}] rising bubbles (log lines too)
 var _bubble_t := 0.0
 var _floaters: Array = []                 # [{pos, text, color, t}] short-lived labels (requests)
+var engine_hall: EngineHall               # plant: the ENGINE ROOM building (Kubernetes Quarter)
+var demo := false                         # simulated cluster (set by main)
+var machines := {}                        # engine level: component key -> EngineMachine
+var _tokens: Array = []                   # engine level: work orders travelling between machines
 var _in_flight := 0
 var districts: Array = []                 # plant: [{district, rect, title, sub, color, ground}]
 var gate: IngressGate                     # hall: row of pods without a line {pos, count, done, owners}
@@ -127,12 +131,14 @@ func pod_key() -> String:
 
 func level_title() -> String:
 	if level == "plant":
-		return tr("PLANT")
+		return tr(Look.v("plant"))
 	if level == "power":
-		return tr("ENERGY ROOM (nodes)")
+		return tr(Look.v("energy"))
+	if level == "engine":
+		return tr("ENGINE ROOM")
 	if level.begins_with("pod:"):
-		return tr("HALL %s") % current_ns() + "  >  " + tr("POD %s") % pod_key().get_slice("/", 1)
-	return tr("HALL %s") % current_ns()
+		return tr(Look.v("hall")) % current_ns() + "  >  " + tr("POD %s") % pod_key().get_slice("/", 1)
+	return tr(Look.v("hall")) % current_ns()
 
 
 func all_entities() -> Array:
@@ -147,6 +153,9 @@ func all_entities() -> Array:
 		out.append(home)
 	out.append_array(tunnels.values())
 	out.append_array(capsules.values())
+	out.append_array(machines.values())
+	if engine_hall and is_instance_valid(engine_hall):
+		out.append(engine_hall)
 	for p in pods.values():
 		if not p.dying:
 			out.append(p)
@@ -159,6 +168,8 @@ func find_entity(kind: String, key: String) -> Entity:
 		"home": return home if home and is_instance_valid(home) else null
 		"forward": return tunnels.get(key)
 		"container": return capsules.get(key.get_slice("/", 2))
+		"engine": return machines.get(key)
+		"engine_hall": return engine_hall if engine_hall and is_instance_valid(engine_hall) else null
 		"namespace": return buildings.get(key)
 		"node": return islands.get(key)
 		"pod": return pods.get(key)
@@ -180,6 +191,11 @@ func set_level(l: String) -> void:
 		internet = null
 	gate = null
 	home = null
+	engine_hall = null
+	machines.clear()
+	for t in _tokens:
+		t.node.queue_free()
+	_tokens.clear()
 	_floaters.clear()
 	_in_flight = 0
 	tunnels.clear()
@@ -210,6 +226,8 @@ func apply_state(s: Dictionary) -> void:
 		_apply_power(s)
 	elif level.begins_with("pod:"):
 		_apply_pod()
+	elif level == "engine":
+		_apply_engine(s)
 	else:
 		_apply_hall(s, current_ns())
 	_apply_tunnels()
@@ -464,13 +482,23 @@ func _apply_plant(s: Dictionary) -> void:
 	pw.target = Vector3(0, 0, 12.0)
 	if pw.position == Vector3.ZERO:
 		pw.position = pw.target
-	var ground := Rect2(minf(grid_l, -12.0) - 6.0, -grid_d - 10.0, maxf(grid_r, 12.0) - minf(grid_l, -12.0) + 12.0, grid_d + 36.0)
-	if _begin_static("plant|%s|%s" % [str(blocks), str(ground)]):
+	# The ENGINE ROOM stands south of the Kubernetes Quarter (west side).
+	var sys_i: int = blocks.map(func(bl): return bl.district).find("system")
+	var eng_x: float = (blocks[sys_i].x0 + blocks[sys_i].w * 0.5) if sys_i != -1 else minf(grid_l, -12.0) - 2.0
+	eng_x = minf(eng_x, -14.0)
+	if engine_hall == null:
+		engine_hall = EngineHall.new()
+		engine_hall.world = self
+		_entities.add_child(engine_hall)
+	engine_hall.position = Vector3(eng_x, 0, 12.0)
+	var ground := Rect2(minf(minf(grid_l, -12.0), eng_x - EngineHall.W) - 6.0, -grid_d - 10.0, maxf(grid_r, 12.0) - minf(minf(grid_l, -12.0), eng_x - EngineHall.W) + 12.0, grid_d + 36.0)
+	if _begin_static("plant|%s|%s|%s" % [str(blocks), str(ground), Look.current]):
 		_build_plant_ground(ground, blocks, cell_w, cell_d, grid_d)
 		for n in names:
 			var b: FactoryBuilding = buildings[n]
 			_add_door(b.door_position(), "ns:" + n, "enter hall %s|" + n, Vox.ns_color(n))
 		_add_door(pw.door_position(), "power", "enter the energy room", Vox.YELLOW)
+		_add_door(engine_hall.door_position(), "engine", "enter the ENGINE ROOM", Vox.ORANGE)
 		# Start in the street in the middle of your apps, not by the energy plant.
 		var home: Dictionary = blocks[center_i] if not blocks.is_empty() else {"x0": 0.0, "cols": 0, "rows": 1}
 		var sx: float = home.x0 + roundi(home.cols * 0.5) * cell_w
@@ -489,6 +517,8 @@ func _apply_plant(s: Dictionary) -> void:
 		blocker_heights[b.footprint()] = b.h + 0.2  # flat roof
 	blockers.append(home.footprint())
 	blocker_heights[home.footprint()] = 2.6
+	blockers.append(engine_hall.footprint())
+	blocker_heights[engine_hall.footprint()] = EngineHall.H + 0.5
 	fly_ceiling = 16.0
 	# The city is centred on the gate (x = 0): make it as wide as the plant.
 	_apply_internet(s, cell_w, 2.0 * maxf(absf(grid_l), absf(grid_r)), grid_d)
@@ -651,6 +681,25 @@ func _pipe_on_sand(a: Vector3, b: Vector3, col: Color) -> void:
 		Vox.box(_static, size, (p + q) * 0.5 + Vector3(0, 0.12, 0), col.darkened(0.2), 0.3)
 
 
+static func http_color(st: int) -> Color:
+	if st >= 200 and st < 300: return Vox.GREEN
+	if st >= 300 and st < 400: return Vox.BLUE
+	if st >= 400 and st < 500: return Vox.YELLOW
+	if st >= 500: return Vox.RED
+	return Vox.SILVER
+
+
+## The assembly line whose belt the player is riding (feet on the belt), or null.
+func belt_under(p: Vector3) -> ProductionLine:
+	if not level.begins_with("ns:") or p.y < 0.45 or p.y > 0.9:
+		return null
+	for line in lines.values():
+		var r: Rect2 = line.blockers()[1]
+		if r.has_point(Vector2(p.x, p.z)):
+			return line
+	return null
+
+
 ## A request seen in the logs of a Service's pod: a packet from the loading
 ## dock to the robot that served it, and the request floating by the dock.
 func traffic_packet(svc_key: String, pod_key: String, status: int, text: String) -> void:
@@ -658,7 +707,7 @@ func traffic_packet(svc_key: String, pod_key: String, status: int, text: String)
 	var bot: PodBot = pods.get(pod_key)
 	if sv == null or bot == null or _in_flight > 24:
 		return
-	var col := TrafficView.status_color(status)
+	var col := http_color(status)
 	_in_flight += 1
 	bolt(sv.beam_origin(), _pod_top(bot), col, func(): _in_flight -= 1, 5.0)
 	_floaters.append({"pos": sv.beam_origin() + Vector3(randf_range(-0.8, 0.8), 2.2 + randf_range(0.0, 0.6), 0), "text": text, "color": col, "t": 0.0})
@@ -693,6 +742,165 @@ func _swim_fx(delta: float) -> void:
 			var busy: float = clampf(float(cap.data.get("cpu_use_m", 0)) / 200.0, 0.05, 1.0) if cap.state() != "done" else 0.0
 			if randf() < busy * 0.6:
 				bubble(cap.top() + Vector3(randf_range(-0.4, 0.4), 0, randf_range(-0.4, 0.4)))
+
+
+const ENGINE_KEYS := {"api": ["kube-apiserver"], "etcd": ["etcd"], "controllers": ["kube-controller-manager"],
+	"scheduler": ["kube-scheduler"], "dns": ["coredns", "kube-dns"], "proxy": ["kube-proxy"],
+	"cni": ["calico", "cilium", "flannel", "kube-flannel", "kindnet", "weave", "canal", "aws-node", "azure-cni", "antrea"]}
+const ENGINE_INFO := {
+	"api": ["API SERVER", "the front desk: every request (kubectl, controllers, kubelets) goes through it"],
+	"etcd": ["ETCD", "the vault: the whole desired state of the cluster, as key-values"],
+	"controllers": ["CONTROLLER MANAGER", "loops that make reality match the desired state (Deployment -> ReplicaSet -> Pods)"],
+	"scheduler": ["SCHEDULER", "the crane: picks a node for every pod that has none"],
+	"you": ["YOU (kubectl)", "you ask for things; the API server writes them down"],
+	"dns": ["CoreDNS", "names: my-svc.my-ns.svc.cluster.local -> the Service IP"],
+	"proxy": ["kube-proxy", "turns each Service into network rules on every node"],
+	"cni": ["CNI (pod network)", "gives every pod an IP and connects pods across nodes"],
+}
+
+## The look changed: rebuild the level from scratch with the new style.
+func restyle() -> void:
+	var l := level
+	level = ""
+	_layout_sig = ""
+	set_level(l)
+
+
+## The ENGINE ROOM: the control plane's machines, piped to the API server.
+func _apply_engine(s: Dictionary) -> void:
+	var fl := Rect2(-25.0, -19.0, 50.0, 34.0)
+	var nodes: Array = s.get("nodes", [])
+	var pos := {"api": Vector3(0, 0, -3), "etcd": Vector3(-13, 0, -13), "controllers": Vector3(-16, 0, 1), "scheduler": Vector3(14, 0, 0),
+		"you": Vector3(0, 0, 10), "dns": Vector3(-18, 0, 10), "proxy": Vector3(-10, 0, 10), "cni": Vector3(20, 0, -13)}
+	var shown: Array = nodes.slice(0, 3)
+	for i in shown.size():
+		pos["kubelet:" + str(shown[i].name)] = Vector3(3.0 + i * 5.5, 0, -14)
+	if _begin_static("engine|%s" % [shown.map(func(n): return n.name)]):
+		_add_walk(fl)
+		var c := fl.get_center()
+		Vox.box(_static, Vector3(fl.size.x, 0.4, fl.size.y), Vector3(c.x, -0.2, c.y), Color("4b4038"))
+		for zi in int(fl.size.y / 3.0):
+			for xi in int(fl.size.x / 3.0):
+				if (xi + zi) % 2 == 0:
+					Vox.box(_static, Vector3(3.0, 0.03, 3.0), Vector3(fl.position.x + 1.5 + xi * 3.0, 0.005, fl.position.y + 1.5 + zi * 3.0), Color("574a40"), 0.0, false)
+		Vox.box(_static, Vector3(fl.size.x, 3.0, 0.5), Vector3(c.x, 1.5, fl.position.y - 0.25), Color("8a4b3a"))
+		Vox.box(_static, Vector3(0.5, 3.0, fl.size.y), Vector3(fl.position.x - 0.25, 1.5, c.y), Color("7a4234"))
+		# Pipes to the API server: everything talks through it.
+		for k in pos:
+			if k == "api":
+				continue
+			var to := "api" if k != "cni" else ("kubelet:" + str(shown[-1].name) if not shown.is_empty() else "api")
+			_pipe_on_floor(pos[k], pos[to], Vox.SILVER if k != "cni" else Vox.PINK)
+		var exit_pos := Vector3(fl.position.x + 3.0, 0, fl.end.y - 2.0)
+		_add_door(exit_pos, "plant", "exit to the plant", Vox.YELLOW)
+		spawn = pos.you + Vector3(3.0, 0, 1.5)
+	var ks: Array = s.get("pods", []).filter(func(p): return p.ns == "kube-system")
+	var has_cp: bool = ks.any(func(p): return str(p.name).begins_with("kube-apiserver"))
+	var seen := {}
+	for k in pos:
+		var comp: String = k.get_slice(":", 0)
+		var d := {}
+		if comp == "kubelet":
+			var nn: String = k.get_slice(":", 1)
+			var node: Dictionary = nodes.filter(func(n): return n.name == nn)[0]
+			d = {"title": "KUBELET @ %s" % nn, "role": "starts the containers of its node",
+				"status": "ok" if node.get("ready", false) else "bad", "node": nn}
+			if k == "kubelet:" + str(shown[-1].name) and nodes.size() > shown.size():
+				d.role += "  (+%d more nodes)" % (nodes.size() - shown.size())
+		else:
+			var info: Array = ENGINE_INFO[comp]
+			d = {"title": info[0], "role": info[1]}
+			if comp == "you":
+				d.status = "ok"
+			else:
+				var mine: Array = ks.filter(func(p): return ENGINE_KEYS[comp].any(func(pre): return str(p.name).begins_with(pre)))
+				if demo:
+					d.status = "ok"  # the simulated cluster has no control-plane pods
+				elif mine.is_empty():
+					d.status = "managed" if comp in ["api", "etcd", "controllers", "scheduler"] and not has_cp else "none"
+				else:
+					d.status = "ok" if mine.all(func(p): return PodBot.categorize(p) == "ok") else "bad"
+					d.pods = mine.map(func(p): return p.name)
+			if comp == "etcd":
+				d.members = maxi(1, nodes.filter(func(n): return "control-plane" in (n.get("roles", []) if n.get("roles") != null else [])).size())
+		seen[k] = true
+		var m: EngineMachine = machines.get(k)
+		if m == null:
+			m = EngineMachine.new()
+			m.world = self
+			_entities.add_child(m)
+			machines[k] = m
+		m.position = pos[k]
+		m.target = pos[k]
+		m.setup(comp, k, d)
+	for k in machines.keys():
+		if not seen.has(k):
+			machines[k].queue_free()
+			machines.erase(k)
+	blockers.clear()
+	for m in machines.values():
+		var fr := Rect2(m.position.x - 2.0, m.position.z - 1.8, 4.0, 3.6)
+		blockers.append(fr)
+		blocker_heights[fr] = 3.0
+	block_h = 3.0
+	fly_ceiling = 12.0
+
+
+func _pipe_on_floor(a: Vector3, b: Vector3, col: Color) -> void:
+	var mid := Vector3(b.x, 0, a.z)
+	for seg in [[a, mid], [mid, b]]:
+		var p: Vector3 = seg[0]
+		var q: Vector3 = seg[1]
+		var len := p.distance_to(q)
+		if len < 0.1:
+			continue
+		var size := Vector3(len, 0.35, 0.35) if absf(q.x - p.x) > absf(q.z - p.z) else Vector3(0.35, 0.35, len)
+		Vox.box(_static, size, (p + q) * 0.5 + Vector3(0, 0.2, 0), col.darkened(0.3), 0.2)
+
+
+## A work order: a glowing card that travels machine to machine (the same
+## L-shaped route as the pipes), with a caption; each machine it reaches
+## jolts. hops: component keys, e.g. ["scheduler", "api", "etcd"].
+func engine_flow(hops: Array, text: String, col: Color) -> void:
+	var pts := []
+	for i in hops.size():
+		var m: EngineMachine = machines.get(hops[i])
+		if m == null:
+			continue
+		if not pts.is_empty():
+			var a: Vector3 = pts[-1]
+			pts.append(Vector3(m.port().x, a.y, a.z))
+		pts.append(m.port())
+	if pts.size() < 1:
+		return
+	var n := Vox.box(_fx_root, Vector3(0.7, 0.5, 0.9), pts[0], col, 3.0, false)
+	_tokens.append({"node": n, "pts": pts, "i": 0, "t": 0.0, "text": text, "col": col, "hops": hops.duplicate(), "hop": 0, "life": 0.0})
+
+
+func _engine_fx(delta: float) -> void:
+	for k in range(_tokens.size() - 1, -1, -1):
+		var tk: Dictionary = _tokens[k]
+		tk.life += delta
+		var pts: Array = tk.pts
+		if tk.i >= pts.size() - 1:
+			if tk.life > 30.0 or tk.get("done_t", 0.0) > 1.5:
+				tk.node.queue_free()
+				_tokens.remove_at(k)
+			else:
+				tk["done_t"] = tk.get("done_t", 0.0) + delta
+			continue
+		var a: Vector3 = pts[tk.i]
+		var b: Vector3 = pts[tk.i + 1]
+		var seg := maxf(0.2, a.distance_to(b))
+		tk.t += delta * 7.0 / seg
+		if tk.t >= 1.0:
+			tk.t = 0.0
+			tk.i += 1
+			# Arriving at a machine (not at a pipe corner): make it jolt.
+			for m in machines.values():
+				if m.port().distance_to(pts[tk.i]) < 0.1:
+					m.pulse()
+		tk.node.position = a.lerp(b, clampf(tk.t, 0.0, 1.0)) + Vector3(0, 0.25 * sin(tk.life * 8.0), 0)
 
 
 ## Port-forwards changed (or their traffic counters).
@@ -802,9 +1010,9 @@ func _apply_internet(s: Dictionary, cell_w: float, grid_w: float, grid_d: float)
 
 func _build_plant_ground(g: Rect2, blocks: Array, cw: float, cd: float, gd: float) -> void:
 	_add_walk(g)
-	Vox.box(_static, Vector3(g.size.x, 0.4, g.size.y), Vector3(g.get_center().x, -0.2, g.get_center().y), Color("4a5a3a"))
+	Vox.box(_static, Vector3(g.size.x, 0.4, g.size.y), Vector3(g.get_center().x, -0.2, g.get_center().y), Look.v("ground"))
 	Vox.box(_static, Vector3(g.size.x - 0.6, 1.2, g.size.y - 0.6), Vector3(g.get_center().x, -1.0, g.get_center().y), Vox.BROWN.darkened(0.2))
-	var asphalt := Color("3b3f4f")
+	var asphalt: Color = Look.v("road")
 	# District plates, each with its own paving and a gateway sign.
 	for dd in districts:
 		var r: Rect2 = dd.rect
@@ -840,8 +1048,7 @@ func _build_plant_ground(g: Rect2, blocks: Array, cw: float, cd: float, gd: floa
 		var p := Vector3(rng.randf_range(g.position.x + 1, g.end.x - 1), 0, g.end.y - rng.randf_range(0.8, 2.5))
 		if absf(p.x) < 8.0:
 			continue
-		Vox.box(_static, Vector3(0.3, 1.2, 0.3), p + Vector3(0, 0.6, 0), Vox.BROWN, 0.0, false)
-		Vox.box(_static, Vector3(1.3, 1.3, 1.3), p + Vector3(0, 1.8, 0), Vox.FOREST)
+		Look.ground_prop(_static, p, i)
 
 
 # ------------------------------------------------------------------- hall
@@ -960,20 +1167,20 @@ func _apply_hall(s: Dictionary, ns: String) -> void:
 	var depth := maxf(rows * LINE_GAP, svcs.size() * DOCK_GAP) + 6.0
 	var width := dock_x + 6.0
 	var fl := Rect2(-3.0, -depth + 3.0, width, depth + 4.0)
-	if _begin_static("hall|%s|%s|%d" % [ns, str(fl), loose.size()]):
+	if _begin_static("hall|%s|%s|%d|%s" % [ns, str(fl), loose.size(), Look.current]):
 		var nsc := Vox.ns_color(ns)
 		_add_walk(fl)
 		var c := fl.get_center()
-		Vox.box(_static, Vector3(fl.size.x, 0.4, fl.size.y), Vector3(c.x, -0.2, c.y), Color("565c6e"))
+		Vox.box(_static, Vector3(fl.size.x, 0.4, fl.size.y), Vector3(c.x, -0.2, c.y), Look.v("floor"))
 		Vox.box(_static, Vector3(fl.size.x - 0.5, 1.4, fl.size.y - 0.5), Vector3(c.x, -1.1, c.y), Color("3a3f55"))
 		for zi in int(fl.size.y / 2.0):
 			for xi in int(fl.size.x / 2.0):
 				if (xi + zi) % 2 == 0:
-					Vox.box(_static, Vector3(2.0, 0.03, 2.0), Vector3(fl.position.x + 1.0 + xi * 2.0, 0.005, fl.position.y + 1.0 + zi * 2.0), Color("5e6477"), 0.0, false)
+					Vox.box(_static, Vector3(2.0, 0.03, 2.0), Vector3(fl.position.x + 1.0 + xi * 2.0, 0.005, fl.position.y + 1.0 + zi * 2.0), Look.v("tile"), 0.0, false)
 		Vox.box(_static, Vector3(fl.size.x, 0.04, 0.25), Vector3(c.x, 0.02, fl.end.y - 2.6), nsc, 0.5, false)
 		# Back and left walls (low so the iso camera sees inside) + banner
-		Vox.box(_static, Vector3(fl.size.x, 2.6, 0.5), Vector3(c.x, 1.3, fl.position.y - 0.25), Color("7a8094"))
-		Vox.box(_static, Vector3(0.5, 2.6, fl.size.y), Vector3(fl.position.x - 0.25, 1.3, c.y), Color("6d7386"))
+		Vox.box(_static, Vector3(fl.size.x, 2.6, 0.5), Vector3(c.x, 1.3, fl.position.y - 0.25), Look.v("wall"))
+		Vox.box(_static, Vector3(0.5, 2.6, fl.size.y), Vector3(fl.position.x - 0.25, 1.3, c.y), (Look.v("wall") as Color).darkened(0.1))
 		Vox.box(_static, Vector3(minf(fl.size.x - 2.0, 10.0), 1.0, 0.1), Vector3(c.x, 2.0, fl.position.y + 0.02), nsc, 0.6, false)
 		if loose.size() > 0:
 			Vox.box(_static, Vector3(loose.size() * 1.8 + 1.0, 0.03, 2.4), Vector3(1.4 + loose.size() * 0.9, 0.02, loose_z + 1.2), Vox.LAVENDER.darkened(0.5), 0.0, false)
@@ -988,7 +1195,7 @@ func _apply_hall(s: Dictionary, ns: String) -> void:
 		var lb: Array[Rect2] = line.blockers()
 		blockers.append_array(lb)
 		blocker_heights[lb[0]] = 2.2   # console
-		blocker_heights[lb[1]] = 1.95  # belt: higher than a jump, pods stay off-limits
+		blocker_heights[lb[1]] = 0.6   # belt top: jump on it and ride it to the end
 	for dk in services.values():
 		blockers.append(Rect2(dk.target.x - 0.5, dk.target.z - 1.1, 1.0, 2.2))
 	block_h = 2.2
@@ -1608,6 +1815,8 @@ func _process(delta: float) -> void:
 	_t += delta
 	if swim_level:
 		_swim_fx(delta)
+	if level == "engine":
+		_engine_fx(delta)
 	for i in range(_floaters.size() - 1, -1, -1):
 		_floaters[i].t += delta
 		_floaters[i].pos.y += delta * 0.5
@@ -1772,6 +1981,12 @@ func labels(player_pos: Vector3) -> Array:
 		out.append({"pos": t.anchor(), "text": t.label_text(), "sub": _hint(t, t.label_sub()), "color": t.label_color(), "big": false, "entity": t})
 	for f in _floaters:
 		out.append({"pos": f.pos, "text": f.text, "sub": "", "color": f.color, "big": false, "small": true})
+	if engine_hall and is_instance_valid(engine_hall):
+		out.append({"pos": engine_hall.anchor(), "text": engine_hall.label_text(), "sub": _hint(engine_hall, engine_hall.label_sub()), "color": engine_hall.label_color(), "big": true, "entity": engine_hall})
+	for m in machines.values():
+		out.append({"pos": m.anchor(), "text": m.label_text(), "sub": _hint(m, m.label_sub()), "color": m.label_color(), "big": true, "entity": m})
+	for tk in _tokens:
+		out.append({"pos": tk.node.position + Vector3(0, 1.0, 0), "text": tk.text, "sub": "", "color": tk.col, "big": false, "small": true})
 	if swim_level:
 		for cap in capsules.values():
 			out.append({"pos": cap.anchor(), "text": cap.label_text(), "sub": _hint(cap, cap.label_sub()), "color": cap.label_color(), "big": true, "entity": cap})

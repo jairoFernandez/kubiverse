@@ -84,6 +84,8 @@ var _view_stats: CheckBox
 var _view_challenge: CheckBox
 var _view_fastday: CheckBox
 var clock_text := ""
+var weather_why := ""   # what the weather means (tooltip of the clock)
+var _look_btn: Button
 var _fade: ColorRect
 var _banner: PanelContainer
 var _banner_title: Label
@@ -149,6 +151,7 @@ var _view_scale: Label
 var _legend: PanelContainer
 var _pod_legend: PanelContainer   # the legend inside a pod (the tank)
 var traffic: TrafficView          # live requests of a Service (from its pods' logs)
+var engine: EngineView            # ENGINE ROOM narrator (events -> work orders)
 
 var _inspector: PanelContainer
 var _insp_scroll: ScrollContainer
@@ -963,6 +966,31 @@ func _build_game_ui() -> void:
 		Settings.fast_day = not Settings.fast_day
 		Settings.save())
 	vv.add_child(_view_fastday)
+	_look_btn = _button("", func():
+		set_look(Look.next(Look.current)))
+	vv.add_child(_look_btn)
+	_update_look_btn()
+	var wrow := HBoxContainer.new()
+	wrow.add_theme_constant_override("separation", 8)
+	var wbtn := _button("", func(): pass)
+	var city := LineEdit.new()
+	city.placeholder_text = tr("city, e.g. Bogotá")
+	city.text = Settings.weather_city
+	city.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	city.text_submitted.connect(func(t: String):
+		Settings.weather_city = t.strip_edges()
+		Settings.save())
+	var refresh := func():
+		wbtn.text = tr("Weather: %s") % tr({"cluster": "the cluster's health", "real": "real (city)", "off": "off"}[Settings.weather])
+		city.visible = Settings.weather == "real"
+	wbtn.pressed.connect(func():
+		Settings.weather = {"cluster": "real", "real": "off", "off": "cluster"}[Settings.weather]
+		Settings.save()
+		refresh.call())
+	refresh.call()
+	wrow.add_child(wbtn)
+	wrow.add_child(city)
+	vv.add_child(wrow)
 	vv.add_child(_button("Recenter camera  [HOME]", func(): recenter_requested.emit()))
 	vv.add_child(_button("Mission log (all missions)", func():
 		_view_panel.visible = false
@@ -974,6 +1002,12 @@ func _build_game_ui() -> void:
 	_build_level_strip()
 	_build_legend()
 	_build_pod_legend()
+	engine = EngineView.new(self)
+	engine.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	engine.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	engine.offset_left = 10
+	engine.offset_bottom = -44
+	_game_root.add_child(engine)
 	traffic = TrafficView.new(self)
 	traffic.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	traffic.grow_vertical = Control.GROW_DIRECTION_BEGIN
@@ -1147,6 +1181,7 @@ func _build_level_strip() -> void:
 	strip.add_child(h)
 	h.add_child(_button("PLANT", func(): level_requested.emit("plant")))
 	h.add_child(_button("ENERGY (nodes)", func(): level_requested.emit("power")))
+	h.add_child(_button("ENGINE ROOM", func(): level_requested.emit("engine")))
 	_level_label = _label("", 26, Vox.YELLOW)
 	_level_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_level_label.clip_text = true
@@ -2515,6 +2550,21 @@ func _refresh_inspector() -> void:
 			buttons.append(["LOGS [L]", func():
 				open_logs(pod_d), "", false, "kubectl -n %s logs %s -c %s --tail=200" % [c.ns, c.pod, c.name]])
 			buttons.append(["EDIT POD YAML", func(): open_editor("Pod", c.ns, c.pod), "", false, "kubectl -n %s edit pod %s" % [c.ns, c.pod]])
+		"engine_hall":
+			_insp_title.text = tr("ENGINE ROOM")
+			lines.append("[color=#83769c]%s[/color]" % tr("How Kubernetes works inside. The control plane's machines (API server, etcd, controller manager, scheduler) and the kubelet of each node, piped together; every event of your cluster travels between them."))
+			buttons.append(["ENTER [E]", func(): level_requested.emit("engine"), "GoButton", false, "kubectl get --raw /readyz?verbose"])
+		"engine":
+			_insp_title.text = str(_insp_target.label_text())
+			lines.append("[color=#ffccaa]%s[/color]" % tr(str(d.get("role", ""))))
+			match str(d.get("status", "")):
+				"ok": lines.append(_kv("status", "[color=#00e436]%s[/color]" % tr("healthy")))
+				"bad": lines.append(_kv("status", "[color=#ff004d]%s[/color]" % tr("NOT HEALTHY")))
+				"managed": lines.append(_kv("status", "[color=#83769c]%s[/color]" % tr("managed by the provider: it runs outside your nodes, so it isn't visible (EKS, GKE, AKS...)")))
+			for pn in d.get("pods", []):
+				lines.append(_kv("pod", "kube-system/%s" % pn))
+			lines.append("")
+			lines.append("[color=#c2c3c7]%s[/color]" % tr(EngineView.explain(_insp_target.comp)))
 		"home":
 			_insp_title.text = tr("YOUR PC  127.0.0.1")
 			lines.append("[color=#83769c]%s[/color]" % tr("The machine where the bridge runs. Port-forwards are glass tubes from here straight to a pod or Service: private doors that skip the Ingress. To open one: click a pod or a loading dock and PORT-FORWARD (or type 'port-forward svc/<name> 8080:80 -n <ns>' in the terminal)."))
@@ -3160,7 +3210,29 @@ func _update_kind_btn() -> void:
 		_kind_btn.theme_type_variation = "DangerButton"
 
 
+## This cluster's look (theme): farm, futuristic, space station, medieval...
+func set_look(id: String, save := true) -> void:
+	if save:
+		Settings.cluster_looks[K8s.kind_key()] = id
+		Settings.save()
+	if id == Look.current:
+		return
+	Look.current = id
+	_update_look_btn()
+	if world:
+		world.restyle()
+	if save:
+		toast(tr("Look for this cluster: %s") % tr(Look.DATA[id].title), true)
+
+
+func _update_look_btn() -> void:
+	if _look_btn:
+		_look_btn.text = tr("Look: %s  (this cluster)") % tr(Look.DATA[Look.current].title)
+
+
 func _on_kind_changed(kind: String) -> void:
+	# A cluster connected (or switched): put on the look saved for it.
+	set_look(str(Settings.cluster_looks.get(K8s.kind_key(), "factory")), false)
 	_update_kind_btn()
 	if kind == "prod" and chaos:
 		chaos = false
@@ -3411,6 +3483,7 @@ func _process(delta: float) -> void:
 	if _perf_t > 0.5 and _perf_label:
 		_perf_t = 0.0
 		_perf_label.text = clock_text + "  " + StatsPanel.summary()
+		_perf_label.tooltip_text = weather_why
 	_insp_t += delta
 	if _insp_t > 0.3:
 		_insp_t = 0.0

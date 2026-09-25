@@ -11,7 +11,7 @@ const DRAG_THRESHOLD := 6.0  # px before a click becomes a drag
 const ZOOM_MIN := 10.0
 const ZOOM_MAX := 70.0         # desktop; touch screens can zoom out twice as far
 
-const LEVEL_ZOOM := {"plant": 34.0, "power": 38.0}
+const LEVEL_ZOOM := {"plant": 34.0, "power": 38.0, "engine": 40.0}
 
 var world: World
 var player: Player
@@ -54,6 +54,7 @@ var _kubi_tap_ms := 0
 var _base_px := 3             # pixel-art scale at normal zoom
 # Day/night cycle driven by the cluster clock
 var _env: Environment
+var weather: Weather
 var _sun: DirectionalLight3D
 var _moon: DirectionalLight3D
 var _stars: Node3D
@@ -216,7 +217,10 @@ func _ready() -> void:
 		_start_intro.call_deferred())
 	hud.goto_requested.connect(_goto)
 
+	weather = Weather.new()
+	world.add_child(weather)
 	K8s.forwards_updated.connect(world.set_forwards)
+	K8s.connection_changed.connect(func(_st, _d): world.demo = K8s.is_demo())
 	missions = Missions.new()
 	add_child(missions)
 	hud.missions = missions
@@ -343,6 +347,45 @@ func _screenshot_and_quit(path: String) -> void:
 				if "--inspect-container" in OS.get_cmdline_user_args() and not caps.is_empty():
 					hud.inspect(caps[0])
 				await get_tree().create_timer(1.0).timeout
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--weather="):
+			Settings.weather = arg.substr(10)
+		if arg.begins_with("--look="):
+			hud.set_look(arg.substr(7), false)
+			hud._terminal.visible = false
+			hud._mission_panel.visible = false
+			await get_tree().create_timer(1.5).timeout
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--fpv-weapon="):
+			hud._terminal.visible = false
+			hud._mission_panel.visible = false
+			_toggle_fpv()
+			_select_weapon(int(arg.substr(13)))
+			await get_tree().create_timer(1.0).timeout
+	if "--belt-test" in OS.get_cmdline_user_args():
+		var line: ProductionLine = null
+		for l in world.lines.values():
+			if int(l.data.get("ready", 0)) > 0:
+				line = l
+				break
+		if line:
+			player.teleport(line.target + Vector3(2.2, 0.62, 0))
+			print("BT start %s y=%.2f on_belt=%s end_x=%.1f" % [player.global_position.round(), player.global_position.y, world.belt_under(player.global_position) != null, line.target.x + line.length])
+			var launched := false
+			for i in 80:
+				await get_tree().create_timer(0.1).timeout
+				if player.push.length() > 1.0:
+					launched = true
+			print("BT after x=%.1f y=%.2f launched=%s" % [player.global_position.x, player.global_position.y, launched])
+	if "--engine-demo" in OS.get_cmdline_user_args():
+		_go_level("engine")
+		await get_tree().create_timer(1.5).timeout
+		hud._terminal.visible = false
+		hud.engine.teach()
+		await get_tree().create_timer(0.3).timeout
+		hud._confirm_yes()
+		hud.engine._list.visible = false
+		await get_tree().create_timer(11.0).timeout
 	if "--traffic-demo" in OS.get_cmdline_user_args():
 		for sv in K8s.state.services:
 			if sv.ns == world.current_ns() and sv.get("pods") != null and not (sv.pods as Array).is_empty():
@@ -1107,11 +1150,17 @@ func _on_level_changed(l: String) -> void:
 	_ghosts.clear()
 	player.teleport(world.spawn)
 	# Coming back to the plant: stand in front of the door you came out of.
-	if l == "plant" and _prev_level != "plant":
+	if l == "plant" and _prev_level == "engine" and world.engine_hall:
+		player.teleport(_standable_near(world.engine_hall.door_position() + Vector3(0, 0, 1.8)))
+	elif l == "plant" and _prev_level != "plant":
 		var key := "@power" if _prev_level == "power" else _prev_level.substr(3)
 		var b: FactoryBuilding = world.buildings.get(key)
 		if b:
 			player.teleport(_standable_near(b.door_position() + Vector3(0, 0, 1.8)))
+	hud.engine.visible = l == "engine"
+	if l == "engine":
+		hud._mission_panel.visible = false
+		hud.banner(tr("ENGINE ROOM"), tr("The control plane at work. Every event of your cluster travels between the machines as a work order. Click a machine to see what it does, or TEACH ME to follow the life of a pod."))
 	# Out of a pod: back next to its robot in the hall.
 	if l.begins_with("ns:") and _prev_level.begins_with("pod:"):
 		var bot: PodBot = world.pods.get(_prev_level.substr(4))
@@ -1143,6 +1192,31 @@ func _on_level_changed(l: String) -> void:
 	_zoom_target = _pod_zoom() if l.begins_with("pod:") else LEVEL_ZOOM.get(l, 26.0)
 	hud.set_level_title(world.level_title())
 	missions.notify("level", l)
+
+
+## Conveyor belts: stand on one and it carries you to its end, then flings
+## you off with a somersault (just for fun). Stopped belts don't move.
+var _belt_cd := 0.0
+func _ride_belt(delta: float) -> void:
+	_belt_cd = maxf(0.0, _belt_cd - delta)
+	if player.flying:
+		return
+	var line := world.belt_under(player.global_position)
+	if line == null or not player.on_ground():
+		return
+	var ready := int(line.data.get("ready", 0))
+	if ready <= 0:
+		return
+	var speed := maxf(2.2, 3.0 * float(ready) / maxf(1.0, float(line.data.get("desired", 1))))
+	player.position.x += speed * delta
+	var end_x := line.target.x + line.length - 0.3
+	if player.position.x >= end_x and _belt_cd <= 0.0:
+		_belt_cd = 1.0
+		player.launch(Vector3(7.5, 0, randf_range(-1.5, 1.5)), 10.5)
+		world.poof(player.global_position + Vector3(0, 0.6, 0), Vox.YELLOW)
+		world.poof(player.global_position + Vector3(0.4, 1.0, 0), Vox.PINK)
+		Sfx.play("coin")
+		hud.toast(tr("Wheee! Shipped by %s") % line.data.get("name", ""), true)
 
 
 ## Frame the whole tank front: its width across the screen.
@@ -1252,6 +1326,10 @@ func _process(delta: float) -> void:
 	_cooldown = maxf(0.0, _cooldown - delta)
 	if world.swim_level:
 		_pod_tick(delta)
+	if weather:
+		weather.tick(delta, player.global_position, K8s.state, world.level in ["plant", "power"] and not Look.always_night())
+		hud.weather_why = weather.why
+	_ride_belt(delta)
 	# Dragged to another monitor (Retina <-> 1x): its density changes the scale.
 	var screen := DisplayServer.window_get_current_screen()
 	if screen != _screen:
@@ -1356,51 +1434,82 @@ func _build_viewmodel(i: int) -> void:
 	var g := Node3D.new()
 	_viewmodel.add_child(g)
 	_vm_parts.clear()
-	# Arm and glove
-	Vox.box(g, Vector3(0.16, 0.16, 0.5), Vector3(0.05, -0.12, 0.35), Vox.WHITE)
-	Vox.box(g, Vector3(0.18, 0.2, 0.18), Vector3(0.0, -0.05, 0.05), Vox.BLUE)
-	# Body of the gun
-	Vox.box(g, Vector3(0.16, 0.16, 0.6), Vector3(0, 0.08, -0.15), Vox.SLATE)
-	Vox.box(g, Vector3(0.1, 0.18, 0.1), Vector3(0, -0.06, 0.02), Vox.NAVY)
-	Vox.box(g, Vector3(0.12, 0.12, 0.08), Vector3(0, 0.08, -0.48), col, 3.0, false)
+	var metal := Color("4a5068")
+	var dark := Color("2a2f45")
+	var trim := Color("8b93b0")
+	# Sleeve and glove wrapped around an angled grip.
+	Vox.box(g, Vector3(0.2, 0.2, 0.55), Vector3(0.04, -0.2, 0.42), Vox.WHITE)
+	Vox.box(g, Vector3(0.22, 0.08, 0.22), Vector3(0.04, -0.12, 0.16), Vox.BLUE)
+	var grip := Vox.box(g, Vector3(0.11, 0.26, 0.13), Vector3(0, -0.1, 0.06), dark)
+	grip.rotation.x = -0.35
+	var glove := Vox.box(g, Vector3(0.17, 0.17, 0.17), Vector3(0.0, -0.08, 0.08), Vox.BLUE.darkened(0.2))
+	glove.rotation.x = -0.35
+	for k in 3:  # fingers around the grip
+		Vox.box(g, Vector3(0.05, 0.05, 0.08), Vector3(-0.07, -0.05 - k * 0.06, 0.0 - k * 0.02), Vox.BLUE.lightened(0.1))
+	Vox.box(g, Vector3(0.06, 0.05, 0.12), Vector3(0.0, -0.04, -0.02), trim)  # trigger guard
+	# Receiver with side panels and a rail on top.
+	Vox.box(g, Vector3(0.17, 0.16, 0.42), Vector3(0, 0.06, -0.06), metal)
+	for sx in [-1.0, 1.0]:
+		Vox.box(g, Vector3(0.02, 0.1, 0.3), Vector3(sx * 0.095, 0.06, -0.06), dark)
+		for k in 3:  # charge bars (lit)
+			var bar := Vox.box(g, Vector3(0.015, 0.03, 0.06), Vector3(sx * 0.106, 0.04, -0.14 + k * 0.08), col, 2.5, false)
+			_vm_parts["bar%d%d" % [int(sx), k]] = bar
+	Vox.box(g, Vector3(0.06, 0.03, 0.36), Vector3(0, 0.155, -0.06), trim)
+	# Energy cell on top: the weapon's colour, glowing.
+	Vox.box(g, Vector3(0.1, 0.08, 0.14), Vector3(0, 0.2, 0.04), dark)
+	Vox.box(g, Vector3(0.07, 0.06, 0.11), Vector3(0, 0.215, 0.04), col, 3.0, false)
+	# Barrel: shroud with vents, coils, muzzle.
+	Vox.box(g, Vector3(0.13, 0.13, 0.26), Vector3(0, 0.07, -0.36), dark)
+	for k in 3:
+		Vox.box(g, Vector3(0.15, 0.03, 0.02), Vector3(0, 0.12, -0.28 - k * 0.06), trim)
+	for k in 2:
+		Vox.box(g, Vector3(0.16, 0.16, 0.035), Vector3(0, 0.07, -0.3 - k * 0.1), col, 2.0, false)
+	Vox.box(g, Vector3(0.08, 0.08, 0.1), Vector3(0, 0.07, -0.52), metal)
+	Vox.box(g, Vector3(0.05, 0.05, 0.02), Vector3(0, 0.07, -0.575), col, 4.0, false)
 	match w.id:
 		"hammer":
-			Vox.box(g, Vector3(0.36, 0.22, 0.22), Vector3(0, 0.22, -0.42), col, 1.0)
+			Vox.box(g, Vector3(0.4, 0.22, 0.2), Vector3(0, 0.1, -0.58), col, 1.0)
+			Vox.box(g, Vector3(0.44, 0.06, 0.22), Vector3(0, 0.22, -0.58), trim)
 		"ray":
-			var dish := Vox.box(g, Vector3(0.34, 0.34, 0.05), Vector3(0, 0.08, -0.52), col, 1.5)
-			dish.rotation.x = 0.0
-			Vox.box(g, Vector3(0.05, 0.05, 0.18), Vector3(0, 0.08, -0.6), Vox.WHITE, 3.0, false)
+			Vox.box(g, Vector3(0.32, 0.32, 0.04), Vector3(0, 0.07, -0.6), col, 1.5)
+			Vox.box(g, Vector3(0.2, 0.2, 0.05), Vector3(0, 0.07, -0.62), dark)
+			Vox.box(g, Vector3(0.04, 0.04, 0.16), Vector3(0, 0.07, -0.7), Vox.WHITE, 3.0, false)
 		"freeze":
-			Vox.box(g, Vector3(0.14, 0.26, 0.14), Vector3(0.14, 0.2, -0.05), col, 1.2)
-			Vox.box(g, Vector3(0.14, 0.26, 0.14), Vector3(-0.14, 0.2, -0.05), col, 1.2)
+			for sx in [-1.0, 1.0]:
+				Vox.box(g, Vector3(0.1, 0.24, 0.1), Vector3(sx * 0.15, 0.14, -0.02), col, 1.2)
+				Vox.box(g, Vector3(0.11, 0.03, 0.11), Vector3(sx * 0.15, 0.27, -0.02), trim)
 		"cutter":
-			var blade := Vox.box(g, Vector3(0.04, 0.3, 0.3), Vector3(0, 0.12, -0.55), col, 2.0, false)
+			var blade := Vox.box(g, Vector3(0.03, 0.3, 0.3), Vector3(0, 0.1, -0.6), col, 2.0, false)
 			blade.rotation.x = 0.6
 			_vm_parts.blade = blade
 		"nuke":
-			Vox.box(g, Vector3(0.24, 0.24, 0.7), Vector3(0, 0.14, -0.2), Vox.FOREST)
-			_vm_parts.warhead = Vox.box(g, Vector3(0.18, 0.18, 0.22), Vector3(0, 0.14, -0.62), col, 2.0)
+			Vox.box(g, Vector3(0.24, 0.24, 0.62), Vector3(0, 0.12, -0.24), Vox.FOREST)
+			for k in 3:
+				Vox.box(g, Vector3(0.26, 0.03, 0.03), Vector3(0, 0.25, -0.05 - k * 0.18), Vox.YELLOW)
+			_vm_parts.warhead = Vox.box(g, Vector3(0.18, 0.18, 0.2), Vector3(0, 0.12, -0.64), col, 2.0)
 	# Muzzle flash: a star of glowing blocks, shown for a couple of frames.
 	var fl := Node3D.new()
-	fl.position = Vector3(0, 0.08, -0.62 if w.id != "nuke" else -0.78)
+	fl.position = Vector3(0, 0.07, -0.66 if w.id != "nuke" else -0.8)
 	g.add_child(fl)
-	Vox.box(fl, Vector3(0.22, 0.22, 0.22), Vector3.ZERO, Vox.WHITE, 5.0, false)
-	Vox.box(fl, Vector3(0.7, 0.08, 0.08), Vector3.ZERO, col, 5.0, false)
-	Vox.box(fl, Vector3(0.08, 0.7, 0.08), Vector3.ZERO, col, 5.0, false)
-	Vox.box(fl, Vector3(0.1, 0.1, 0.5), Vector3(0, 0, -0.25), col.lightened(0.4), 5.0, false)
+	Vox.box(fl, Vector3(0.2, 0.2, 0.2), Vector3.ZERO, Vox.WHITE, 5.0, false)
+	Vox.box(fl, Vector3(0.6, 0.07, 0.07), Vector3.ZERO, col, 5.0, false)
+	Vox.box(fl, Vector3(0.07, 0.6, 0.07), Vector3.ZERO, col, 5.0, false)
+	Vox.box(fl, Vector3(0.09, 0.09, 0.45), Vector3(0, 0, -0.22), col.lightened(0.4), 5.0, false)
 	fl.visible = false
 	_vm_parts.flash = fl
-	# Drawn on top of everything (no depth test) so it never clips into walls.
+	# Drawn on top of everything (no depth test) so it never clips into walls;
+	# parts are painted back to front by their depth, so they cover each other
+	# the right way.
 	for mi in g.find_children("*", "MeshInstance3D", true, false):
 		var m: StandardMaterial3D = mi.material_override.duplicate()
 		m.no_depth_test = true
-		# Transparent pass is drawn after every opaque object: stays on top.
 		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		m.render_priority = 10
+		var zc: float = g.to_local(mi.global_position).z if mi.is_inside_tree() else mi.position.z
+		m.render_priority = clampi(20 + int(zc * 60.0), 1, 120)
 		m.next_pass = null
 		mi.material_override = m
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_viewmodel.scale = Vector3.ONE * 0.42
+	_viewmodel.scale = Vector3.ONE * 0.5
 	_viewmodel.position = VM_POS
 	_viewmodel.rotation = Vector3(0.04, 0.07, 0)
 	_viewmodel.visible = _fpv
@@ -1433,7 +1542,7 @@ func _update_fpv(delta: float) -> void:
 
 
 ## Hour of day (0-24) from the cluster clock in the player's time zone.
-## Demo mode, or the "accelerated" option, runs a whole day in 4 minutes.
+## Real time by default; the "accelerated" option runs a day in 4 minutes.
 func _cluster_hour(delta: float) -> float:
 	_clock_local += delta
 	var t := _clock_base + _clock_local if _clock_base > 0.0 else Time.get_unix_time_from_system()
@@ -1442,7 +1551,7 @@ func _cluster_hour(delta: float) -> float:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--hour="):
 			return float(arg.substr(7))
-	if Settings.fast_day or K8s.mode == K8s.Mode.DEMO:
+	if Settings.fast_day:
 		_fast_t += delta
 		hour = fposmod(hour + _fast_t * 24.0 / 240.0, 24.0)
 	return hour
@@ -1455,19 +1564,31 @@ func _update_daylight(delta: float) -> void:
 	var elev := sin((h - 6.0) / 12.0 * PI)
 	var day := clampf(elev * 2.5, 0.0, 1.0)            # 0 night .. 1 full day
 	var golden := clampf(1.0 - absf(elev) * 4.0, 0.0, 1.0) * (1.0 if elev > -0.25 else 0.0)
+	if Look.always_night():
+		day = 0.25  # space: starry black, lit a little by the station
+		golden = 0.0
 	_sun.rotation_degrees = Vector3(-clampf(elev * 80.0, 4.0, 80.0), -30.0 + (h - 12.0) * 12.0, 0)
 	_sun.light_energy = 1.15 * day
 	_sun.light_color = Color("fff1e8").lerp(Color("ff9a4a"), golden)
 	_sun.visible = day > 0.01
 	_moon.light_energy = 0.6 * (1.0 - day)
-	var night_sky := Color("0d1230")
-	var day_sky := Color("2b4a8a")
-	var dusk_sky := Color("5a2450")
+	var night_sky: Color = Look.v("sky_night")
+	var day_sky: Color = Look.v("sky_day")
+	var dusk_sky: Color = Look.v("sky_dusk")
 	var sky := night_sky.lerp(day_sky, day).lerp(dusk_sky, golden * 0.6)
 	_env.background_color = sky
 	_env.fog_light_color = sky
 	_env.ambient_light_color = Color("5a6aa8").lerp(Color("8fa0d8"), day).lerp(Color("c98b7a"), golden * 0.4)
 	_env.ambient_light_energy = lerpf(0.55, 0.6, day)
+	# Weather on top: dimmer sun, greyer sky, thicker fog, lightning flashes.
+	var wl: Array = weather.light() if weather else [1.0, Color.WHITE, 0.0, 0.006]
+	_sun.light_energy *= float(wl[0])
+	_env.background_color = sky.lerp(wl[1], float(wl[2]))
+	_env.fog_light_color = _env.background_color
+	_env.fog_density = float(wl[3])
+	_env.ambient_light_energy += weather.flash() * 1.5 if weather else 0.0
+	if weather and weather.kind != "clear":
+		hud.clock_text += "  " + tr(weather.kind.to_upper())
 	Sfx.set_night(1.0 - day)
 	_stars.visible = day < 0.35
 
@@ -1803,7 +1924,7 @@ func _update_zone() -> void:
 				body = tr("A machine that runs your workloads. Its kubelet starts the containers the scheduler assigns here and reports their health to the control-plane. %d pods here.") % here
 			if isl.data.get("unschedulable", false):
 				body += " " + tr("It is CORDONED: no new pods will be scheduled here.")
-	elif world.level.begins_with("pod:"):
+	elif world.level.begins_with("pod:") or world.level == "engine":
 		zone = world.level
 	elif world.level.begins_with("ns:"):
 		var ns := world.current_ns()
@@ -1878,6 +1999,9 @@ func _interact() -> void:
 	var e := hud.inspected()
 	if e is FactoryBuilding:
 		_go_level("power" if e.is_power else "ns:" + e.key)
+		return
+	if e is EngineHall:
+		_go_level("engine")
 		return
 	if e is PodBot and not world.swim_level:
 		_go_level("pod:" + e.key)
