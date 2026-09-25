@@ -1,0 +1,6 @@
+# The e2e cluster (CI): a control-plane and a worker, so a drain has somewhere to go.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+- role: worker

@@ -35,6 +35,27 @@ jobs:
       - run: make test
       - run: helm lint deploy/helm/kubiverse
 
+  # A real bridge against a real cluster: kind with two nodes, the e2e test
+  # (production guard, patches over the WebSocket, rollouts, diff, drain
+  # with a PodDisruptionBudget, permissions, audit log).
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: bridge/go.mod
+          cache-dependency-path: bridge/go.sum
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: kubiverse-e2e
+          config: bridge/testdata/kind-e2e.yaml
+      - name: e2e
+        working-directory: bridge
+        env:
+          KUBIVERSE_E2E_CONTEXT: kind-kubiverse-e2e
+        run: go test -tags e2e -run E2E -count=1 -v ./...
+
   # Single-file bridges with the web build embedded: run one, open http://127.0.0.1:8088.
   bridge:
     needs: game
@@ -173,13 +194,67 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # macOS: signed with a Developer ID and notarized, when the certificate is
+  # in the repository secrets (APPLE_CERT_P12 base64, APPLE_CERT_PASSWORD,
+  # APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD). Without them the release
+  # keeps the ad-hoc signed app.
+  sign-macos:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [bridge, game]
+    runs-on: macos-latest
+    env:
+      HAS_CERT: ${{ secrets.APPLE_CERT_P12 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Sign and notarize
+        if: env.HAS_CERT == 'true'
+        env:
+          CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          kc=$RUNNER_TEMP/sign.keychain-db; kp=$(openssl rand -hex 16)
+          echo "$CERT_P12" | base64 --decode > $RUNNER_TEMP/cert.p12
+          security create-keychain -p "$kp" "$kc" && security set-keychain-settings -lut 3600 "$kc" && security unlock-keychain -p "$kp" "$kc"
+          security import $RUNNER_TEMP/cert.p12 -k "$kc" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kp" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          id=$(security find-identity -v -p codesigning "$kc" | awk -F'"' '/Developer ID Application/{print $2; exit}')
+          notarize() { xcrun notarytool submit "$1" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait; }
+          # The game
+          mkdir -p out app && ditto -x -k dist/kubiverse-macos/Kubiverse.zip app
+          codesign --force --deep --options runtime --timestamp -s "$id" app/Kubiverse.app
+          ditto -c -k --keepParent app/Kubiverse.app out/kubiverse-macos.zip
+          notarize out/kubiverse-macos.zip
+          xcrun stapler staple app/Kubiverse.app
+          rm out/kubiverse-macos.zip && ditto -c -k --keepParent app/Kubiverse.app out/kubiverse-macos.zip
+          # The bridge binaries (a zip to notarize; the binaries themselves are shipped)
+          for b in dist/k8s-bridge/k8s-bridge-darwin-*; do
+            codesign --force --options runtime --timestamp -s "$id" "$b"; cp "$b" out/
+          done
+          ditto -c -k out/k8s-bridge-darwin-* bridges.zip && notarize bridges.zip
+      - uses: actions/upload-artifact@v4
+        if: env.HAS_CERT == 'true'
+        with:
+          name: signed-macos
+          path: out/*
+
   # Tag vX.Y.Z -> GitHub Release with one archive per platform plus the bridge binaries.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test, bridge, game]
+    needs: [test, e2e, bridge, game, sign-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      HAS_WINDOWS_CERT: ${{ secrets.WINDOWS_CERT_PFX != '' }}
+      HAS_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -193,7 +268,45 @@ jobs:
           (cd kubiverse-linux && chmod +x kubiverse.x86_64 && tar czf ../out/kubiverse-linux-x86_64.tar.gz .)
           (cd kubiverse-windows && zip -qr ../out/kubiverse-windows-x86_64.zip .)
           chmod +x k8s-bridge/* && cp k8s-bridge/* out/
-          (cd out && sha256sum * > SHA256SUMS.txt)
+          # Signed and notarized macOS builds replace the ad-hoc ones when present.
+          if [ -d signed-macos ]; then cp signed-macos/* out/; fi
+      # Windows: Authenticode signature when WINDOWS_CERT_PFX (base64) and
+      # WINDOWS_CERT_PASSWORD are in the secrets.
+      - name: Sign Windows executables
+        env:
+          PFX: ${{ secrets.WINDOWS_CERT_PFX }}
+          PFX_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        if: env.HAS_WINDOWS_CERT == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq osslsigncode >/dev/null
+          echo "$PFX" | base64 --decode > $RUNNER_TEMP/cert.pfx
+          sign() { osslsigncode sign -pkcs12 $RUNNER_TEMP/cert.pfx -pass "$PFX_PASSWORD" -n Kubiverse -i https://github.com/${{ github.repository }} -t http://timestamp.digicert.com -in "$1" -out "$1.signed" && mv "$1.signed" "$1"; }
+          for b in dist/out/k8s-bridge-windows-*.exe; do sign "$b"; done
+          cd dist && rm -rf winsign && mkdir winsign && cd winsign && unzip -q ../out/kubiverse-windows-x86_64.zip
+          for e in *.exe; do sign "$e"; done
+          rm ../out/kubiverse-windows-x86_64.zip && zip -qr ../out/kubiverse-windows-x86_64.zip .
+      - uses: actions/checkout@v4
+        with:
+          path: src
+      - name: Checksums, Homebrew and winget manifests
+        run: |
+          (cd dist/out && sha256sum * > SHA256SUMS.txt)
+          cd src && packaging/render.sh "${GITHUB_REF_NAME#v}" ../dist/out ../dist/packaging
+          cp ../dist/packaging/* ../dist/out/
+      # Homebrew tap (a repo jairoFernandez/homebrew-kubiverse), updated when
+      # HOMEBREW_TAP_TOKEN (a token that can push there) is in the secrets.
+      - name: Update the Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        if: env.HAS_TAP_TOKEN == 'true'
+        run: |
+          set -euo pipefail
+          git clone -q "https://x-access-token:${TAP_TOKEN}@github.com/${{ github.repository_owner }}/homebrew-kubiverse.git" tap
+          mkdir -p tap/Formula tap/Casks
+          cp dist/packaging/k8s-bridge.rb tap/Formula/ && cp dist/packaging/kubiverse.rb tap/Casks/
+          cd tap && git config user.name "kubiverse release" && git config user.email "actions@users.noreply.github.com"
+          git add -A && git commit -qm "kubiverse ${GITHUB_REF_NAME}" && git push -q
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -31,6 +31,17 @@ curl -fsSL https://raw.githubusercontent.com/jairoFernandez/kubiverse/main/bridg
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/jairoFernandez/kubiverse/main/bridge/get-bridge.ps1)))
 ```
 
+Or with a package manager (once the tap / winget package are published, see [Releases and packages](#releases-and-packages)):
+
+```bash
+brew install jairofernandez/kubiverse/k8s-bridge          # the bridge (macOS, Linux)
+brew install --cask jairofernandez/kubiverse/kubiverse    # the native macOS game
+```
+
+```powershell
+winget install JairoFernandez.K8sBridge
+```
+
 Then open **http://127.0.0.1:8088**: the bridge carries the game inside. To use the [online version](https://jairofernandez.github.io/kubiverse/) instead, add `--allow-origin https://jairofernandez.github.io` to the command (after `sh -s --` on macOS/Linux). The game's start screen shows these commands ready to copy, with the right origin.
 
 The native apps (smoother than the browser) are in the [latest release](https://github.com/jairoFernandez/kubiverse/releases/latest); the web start screen links them under **+ NATIVE APP**, with how to open each one:
@@ -425,6 +436,25 @@ make test                # bridge tests (Go) + world/collisions (headless Godot)
 *Export templates* are installed from the editor (Editor → Manage Export Templates) or by unzipping `Godot_v4.7.2-stable_export_templates.tpz` into `~/Library/Application Support/Godot/export_templates/4.7.2.stable/` (macOS).
 
 ### CI, releases and web deployment
+
+- **Tests**: `make test` (Go unit tests and the game's headless tests), `helm lint`, and an **end-to-end** job: a two-node kind cluster, the real bridge, and [`bridge/e2e_test.go`](bridge/e2e_test.go) checking the production guard, patches over the WebSocket, pause/resume/rollback, the YAML diff, drain with a PodDisruptionBudget, permissions and the audit log. Locally, against a disposable cluster:
+
+  ```bash
+  kind create cluster --name kubiverse-e2e --config bridge/testdata/kind-e2e.yaml
+  cd bridge && KUBIVERSE_E2E_CONTEXT=kind-kubiverse-e2e go test -tags e2e -run E2E -v ./...
+  ```
+
+### Releases and packages
+
+A `v*` tag builds everything and publishes the release with `SHA256SUMS.txt`, the Homebrew formula (`k8s-bridge.rb`) and cask (`kubiverse.rb`) and the winget manifest, filled with that release's checksums ([`packaging/`](packaging)). What turns on with repository secrets:
+
+| Secret(s) | What it does |
+|---|---|
+| `APPLE_CERT_P12` (base64 .p12 with a *Developer ID Application* certificate), `APPLE_CERT_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` (an app-specific password) | signs the macOS app and bridges with the hardened runtime, notarizes them and staples the ticket: no more right-click → Open |
+| `WINDOWS_CERT_PFX` (base64 .pfx, code signing), `WINDOWS_CERT_PASSWORD` | Authenticode signature (timestamped) on Kubiverse.exe and the Windows bridges: SmartScreen trusts them as the certificate gains reputation |
+| `HOMEBREW_TAP_TOKEN` (a token that can push to `jairoFernandez/homebrew-kubiverse`) | copies the formula and the cask to the tap, so `brew install jairofernandez/kubiverse/...` gets each release |
+
+winget: the rendered `JairoFernandez.K8sBridge.yaml` goes to microsoft/winget-pkgs with `wingetcreate submit` (the first time it's reviewed by hand).
 
 [`.github/workflows/build.yml`](.github/workflows/build.yml) runs the tests, exports Web, macOS, Linux and Windows with Godot 4.7.2 and builds the bridges with the web build embedded; each one is uploaded as a workflow artifact. Pushing a `v*` tag publishes a GitHub Release with every archive and `SHA256SUMS.txt`. The macOS app is ad-hoc signed, not notarized: the first time, open it with right-click → Open.
 

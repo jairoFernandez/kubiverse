@@ -1,0 +1,37 @@
+# Fixture for e2e_test.go (go test -tags e2e): a namespace with a Deployment
+# guarded by a PodDisruptionBudget, a Service and a lone Deployment.
+apiVersion: v1
+kind: Namespace
+metadata: {name: kv-e2e}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: web, namespace: kv-e2e}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: web}}
+  template:
+    metadata: {labels: {app: web}}
+    spec:
+      tolerations: [{key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}]
+      containers: [{name: pause, image: "registry.k8s.io/pause:3.9"}]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: web, namespace: kv-e2e}
+spec: {minAvailable: 2, selector: {matchLabels: {app: web}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: web, namespace: kv-e2e}
+spec: {selector: {app: web}, ports: [{port: 80}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: solo, namespace: kv-e2e}
+spec:
+  selector: {matchLabels: {app: solo}}
+  template:
+    metadata: {labels: {app: solo}}
+    spec:
+      containers: [{name: pause, image: "registry.k8s.io/pause:3.10"}]

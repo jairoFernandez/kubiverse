@@ -249,6 +249,15 @@ func (b *Bridge) manifestDiff(w http.ResponseWriter, r *http.Request, js []byte,
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": strings.TrimSpace(string(before))})
 		return
 	}
+	// Against what is live now: the editor's resourceVersion may be old (the
+	// controllers write status all the time) and a diff changes nothing.
+	var obj map[string]any
+	if json.Unmarshal(js, &obj) == nil {
+		if md, ok := obj["metadata"].(map[string]any); ok {
+			delete(md, "resourceVersion")
+		}
+		js, _ = json.Marshal(obj)
+	}
 	after, err := b.kubectlRun(r.Context(), js, "replace", "-f", "-", "--dry-run=server", "-o", "json")
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": strings.TrimSpace(string(after))})

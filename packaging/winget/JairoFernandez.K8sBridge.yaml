@@ -1,0 +1,22 @@
+# winget manifest (singleton) for the bridge, rendered by packaging/render.sh.
+# Submit with: wingetcreate submit --token <PAT> <this file's folder>
+PackageIdentifier: JairoFernandez.K8sBridge
+PackageVersion: "@VERSION@"
+PackageName: k8s-bridge (Kubiverse)
+Publisher: Jairo Fernandez
+License: MIT
+ShortDescription: Bridge between Kubiverse (a voxel game) and your Kubernetes cluster
+PackageUrl: https://github.com/jairoFernandez/kubiverse
+Moniker: k8s-bridge
+Commands: [k8s-bridge]
+Installers:
+  - Architecture: x64
+    InstallerType: portable
+    InstallerUrl: https://github.com/jairoFernandez/kubiverse/releases/download/v@VERSION@/k8s-bridge-windows-amd64.exe
+    InstallerSha256: "@SHA_WINDOWS_AMD64@"
+  - Architecture: arm64
+    InstallerType: portable
+    InstallerUrl: https://github.com/jairoFernandez/kubiverse/releases/download/v@VERSION@/k8s-bridge-windows-arm64.exe
+    InstallerSha256: "@SHA_WINDOWS_ARM64@"
+ManifestType: singleton
+ManifestVersion: 1.6.0

@@ -11,7 +11,7 @@ bridge:
 	cd bridge && go build -o bin/k8s-bridge .
 
 bridge-all:
-	cd bridge && for t in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64; do \
+	cd bridge && for t in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do \
 	  os=$${t%/*}; arch=$${t#*/}; ext=$$( [ $$os = windows ] && echo .exe ); \
 	  GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/k8s-bridge-$$os-$$arch$$ext . ; done
 
