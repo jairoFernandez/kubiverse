@@ -76,10 +76,13 @@ func build(h) -> void:
 	title.add_theme_font_size_override("font_size", 18)
 	title.mouse_filter = Control.MOUSE_FILTER_PASS
 	head.add_child(title)
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	spacer.mouse_filter = Control.MOUSE_FILTER_PASS
-	head.add_child(spacer)
+	# A visible grip: on touch screens it's not obvious the bar can be dragged.
+	var handle: Label = hud._label("::::", 28, Vox.RED.darkened(0.2))
+	handle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	handle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	handle.mouse_filter = Control.MOUSE_FILTER_PASS
+	handle.tooltip_text = tr("Drag to move, double-click to fold")
+	head.add_child(handle)
 	head.add_child(hud._button("SETTINGS", toggle_settings))
 	_fold_btn = hud._button("_", func(): set_collapsed(not collapsed))
 	head.add_child(_fold_btn)
@@ -88,7 +91,9 @@ func build(h) -> void:
 	_status = hud._label("", 18, Vox.LAVENDER)
 	_status.clip_text = true
 	_status.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	_status.mouse_filter = Control.MOUSE_FILTER_PASS
+	_status.mouse_filter = Control.MOUSE_FILTER_STOP
+	_status.mouse_default_cursor_shape = Control.CURSOR_MOVE
+	_status.gui_input.connect(func(e): _drag_input(e, "move"))  # also a handle
 	v.add_child(_status)
 	_bottom.append(_status)
 	_scroll = ScrollContainer.new()

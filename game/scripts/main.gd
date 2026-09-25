@@ -754,6 +754,33 @@ func _screenshot_and_quit(path: String) -> void:
 			Settings.save()
 			get_tree().quit()
 			return
+	if "--kubi-touch-test" in OS.get_cmdline_user_args():
+		hud.toggle_kubi()
+		await get_tree().create_timer(0.5).timeout
+		var k: KubiPanel = hud.kubi
+		var p0 := k.position
+		var at := get_tree().root.get_final_transform() * (k.get_global_transform() * Vector2(k.size.x * 0.45, 20))
+		var t := InputEventScreenTouch.new()
+		t.index = 0
+		t.pressed = true
+		t.position = at
+		Input.parse_input_event(t)
+		await get_tree().process_frame
+		for i in 10:
+			var d := InputEventScreenDrag.new()
+			d.index = 0
+			d.position = at + Vector2(i * 8, i * 6)
+			d.relative = Vector2(8, 6)
+			Input.parse_input_event(d)
+			await get_tree().process_frame
+		t = t.duplicate()
+		t.pressed = false
+		Input.parse_input_event(t)
+		await get_tree().process_frame
+		await get_tree().process_frame
+		print("KUBI moved from ", p0, " to ", k.position)
+		get_tree().quit()
+		return
 	if "--menu-open" in OS.get_cmdline_user_args():
 		hud.toggle_menu()
 		await get_tree().create_timer(0.4).timeout

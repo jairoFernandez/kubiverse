@@ -49,6 +49,7 @@ var fpv := false                       # first-person view: tone down fx near th
 var _tops: Array[float] = []
 var _tops_frame := -1
 var limbo_center := Vector3.ZERO
+var workshop := {}                     # hall: row of pods without a line {pos, count, done, owners}
 
 var _static: Node3D
 var _entities: Node3D
@@ -462,6 +463,17 @@ func _apply_hall(s: Dictionary, ns: String) -> void:
 			lines.erase(k)
 	var rows: int = wls.size() + (1 if loose.size() > 0 else 0)
 	var loose_z: float = -wls.size() * LINE_GAP
+	# The workshop row: pods of Jobs, Workflows, bare pods... explained by a sign.
+	workshop = {}
+	if not loose.is_empty():
+		var owners := {}
+		var done := 0
+		for p in loose:
+			var ok: String = p.get("owner_kind", "")
+			owners[ok if ok != "" else "Pod"] = owners.get(ok if ok != "" else "Pod", 0) + 1
+			if PodBot.categorize(p) == "done":
+				done += 1
+		workshop = {"pos": Vector3(1.0, 1.6, loose_z + 1.2), "count": loose.size(), "done": done, "owners": owners}
 	# Docks (Services) along the right side
 	var dock_x := max_len + 4.0
 	seen = {}
@@ -1301,6 +1313,14 @@ func labels(player_pos: Vector3) -> Array:
 			for sv in services.values():
 				if e.data.name in sv.backends():
 					out.append({"pos": sv.beam_origin().lerp(_pod_top(e), 0.5), "text": tr("traffic from service %s") % sv.data.name, "sub": "", "color": ServicePortal.type_color(sv.data), "big": false, "small": true})
+	if level.begins_with("ns:") and not workshop.is_empty():
+		var parts := []
+		for k in workshop.owners:
+			parts.append("%s %d" % [k, workshop.owners[k]])
+		var sub := tr("pods without an assembly line (%s)") % ", ".join(parts)
+		if workshop.done > 0:
+			sub += "\n" + tr("%d finished (Completed): grey, eyes closed") % workshop.done
+		out.append({"pos": workshop.pos, "text": tr("WORKSHOP"), "sub": sub, "color": Vox.LAVENDER, "big": true})
 	var dn := door_near(player_pos, 3.0)
 	if not dn.is_empty():
 		out.append({"pos": dn.pos + Vector3(0, 1.2, 0), "text": "E: " + _door_text(dn), "sub": "", "color": Vox.YELLOW, "big": false})
