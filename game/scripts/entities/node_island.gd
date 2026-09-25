@@ -158,6 +158,7 @@ func _rebuild() -> void:
 			if (r + c) % 2 == 0:
 				Vox.box(_geo, Vector3(SLOT, 0.04, SLOT), Vector3(c * SLOT - off2, 0.0, r * SLOT - off2), grass_dark, 0.0, false)
 
+	Look.decorate_island(_geo, s)
 	# Flowers and tufts along the rim.
 	for i in cols * 3:
 		var side := rng.randi() % 4

@@ -350,6 +350,9 @@ func _screenshot_and_quit(path: String) -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--weather="):
 			Settings.weather = arg.substr(10)
+		if arg.begins_with("--at="):
+			var xz := arg.substr(5).split(",")
+			player.teleport(Vector3(float(xz[0]), 0, float(xz[1])))
 		if arg.begins_with("--look="):
 			hud.set_look(arg.substr(7), false)
 			hud._terminal.visible = false

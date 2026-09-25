@@ -494,6 +494,7 @@ func _apply_plant(s: Dictionary) -> void:
 	var ground := Rect2(minf(minf(grid_l, -12.0), eng_x - EngineHall.W) - 6.0, -grid_d - 10.0, maxf(grid_r, 12.0) - minf(minf(grid_l, -12.0), eng_x - EngineHall.W) + 12.0, grid_d + 36.0)
 	if _begin_static("plant|%s|%s|%s" % [str(blocks), str(ground), Look.current]):
 		_build_plant_ground(ground, blocks, cell_w, cell_d, grid_d)
+		Look.plant_extras(_static, ground, -2.0, [Vector3(0, 0, 12), engine_hall.position, Vector3(ground.end.x - 4.5, 0, ground.end.y - 7.0)])
 		for n in names:
 			var b: FactoryBuilding = buildings[n]
 			_add_door(b.door_position(), "ns:" + n, "enter hall %s|" + n, Vox.ns_color(n))
