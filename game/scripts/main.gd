@@ -807,6 +807,13 @@ func _screenshot_and_quit(path: String) -> void:
 		print("HYG done_after=", count.call(), " problems_left=", Diagnose.problems(K8s.state).filter(func(d): return d.sev == 0).size())
 		get_tree().quit()
 		return
+	if "--island-size-test" in OS.get_cmdline_user_args():
+		_go_level("power")
+		await get_tree().create_timer(1.0).timeout
+		for k in world.islands:
+			print("ISLAND ", k, " cols=", world.islands[k].cols, " slots=", world.islands[k].slots.size())
+		get_tree().quit()
+		return
 	if "--menu-open" in OS.get_cmdline_user_args():
 		hud.toggle_menu()
 		await get_tree().create_timer(0.4).timeout

@@ -670,11 +670,20 @@ func _drop_missing_pods(seen: Dictionary) -> void:
 func _apply_power(s: Dictionary) -> void:
 	var per_node := {}
 	var req := {}   # node -> [cpu_m, mem] requested by every pod on it
+	var show_all := _show_finished()
+	var finished_seen := {}
 	for p in s.pods:
 		if p.get("node", "") == "":
 			continue
 		if ns_visible(p.ns):
-			per_node[p.node] = per_node.get(p.node, 0) + 1
+			# Size the island for the robots actually drawn: hidden finished
+			# pods (all but 2 per node) must not reserve room.
+			var hidden := false
+			if not show_all and PodBot.categorize(p) == "done":
+				finished_seen[p.node] = finished_seen.get(p.node, 0) + 1
+				hidden = finished_seen[p.node] > 2
+			if not hidden:
+				per_node[p.node] = per_node.get(p.node, 0) + 1
 		if not p.get("deleting", false) and PodBot.categorize(p) != "done":
 			var r: Array = req.get(p.node, [0.0, 0.0])
 			req[p.node] = [r[0] + float(p.get("cpu_req_m", 0)), r[1] + float(p.get("mem_req", 0))]
@@ -808,7 +817,6 @@ func _apply_power(s: Dictionary) -> void:
 			Vox.box(cloud, sz, limbo_center + Vector3(-4.0 + i * 1.0, -0.4 - cr.randf() * 0.3, cr.randf_range(-1.0, 1.0)), Vox.WHITE, 0.3, false)
 	var pseen := {}
 	var finished_per_node := {}
-	var show_all := _show_finished()
 	for d in s.pods:
 		if not ns_visible(d.ns):
 			continue
