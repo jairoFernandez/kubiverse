@@ -61,6 +61,10 @@ var _clock_base := 0.0      # unix time of the last snapshot
 var _clock_local := 0.0     # seconds since that snapshot
 var _fast_t := 0.0
 var _yaw := 45.0
+var _pitch := PITCH           # camera tilt: isometric, or low and frontal inside a pod
+var _pitch_target := PITCH
+var _yaw_before_pod := 45.0
+const POD_PITCH := -14.0      # inside a pod: look at the tank through its front glass
 var _yaw_target := 45.0
 var _zoom := 30.0
 var _zoom_target := 30.0
@@ -1102,21 +1106,38 @@ func _on_level_changed(l: String) -> void:
 		var bot: PodBot = world.pods.get(_prev_level.substr(4))
 		if bot:
 			player.teleport(_standable_near(bot.target + Vector3(1.2, 0, 1.6)))
+	# Inside a pod the camera looks at the tank from the front, low, so the
+	# containers stand side by side with their labels; outside, isometric.
+	if l.begins_with("pod:") and _pitch_target != POD_PITCH:
+		_yaw_before_pod = _yaw_target
+		_yaw_target = 0.0
+		_pitch_target = POD_PITCH
+	elif not l.begins_with("pod:") and _pitch_target != PITCH:
+		_yaw_target = _yaw_before_pod
+		_pitch_target = PITCH
 	if l.begins_with("pod:"):
 		if player.flying:
 			player.set_flying(false)
 		_pod_t = 99.0
 		_pod_logs = {}
-		hud.banner(tr("INSIDE POD %s") % l.substr(4).get_slice("/", 1),
-			tr("You are swimming in the pod: the water is its network, shared by all its containers (they reach each other on localhost). Capsules are containers, valves are ports, chests and barrels are volumes. Bubbles carry its live logs. SPACE swims up, CTRL down; the yellow hatch takes you back."))
+		hud.banner(tr("INSIDE POD %s") % l.substr(4).get_slice("/", 1), tr("G: what is what. SPACE swims up, CTRL down."))
+		hud.show_pod_legend(true)
+	elif _prev_level.begins_with("pod:"):
+		hud.show_pod_legend(false)
 	_prev_level = l
 	_door_armed = false
 	_zone = ""
 	_fyaw = deg_to_rad(_yaw)
 	_pan = Vector3.ZERO
-	_zoom_target = 30.0 if l.begins_with("pod:") else LEVEL_ZOOM.get(l, 26.0)
+	_zoom_target = _pod_zoom() if l.begins_with("pod:") else LEVEL_ZOOM.get(l, 26.0)
 	hud.set_level_title(world.level_title())
 	missions.notify("level", l)
+
+
+## Frame the whole tank front: its width across the screen.
+func _pod_zoom() -> float:
+	var aspect := float(_vp.size.x) / maxf(1.0, float(_vp.size.y))
+	return clampf((world.pod_width + 4.0) / maxf(1.0, aspect), 11.0, 26.0)
 
 
 ## Inside a pod: refresh its detail every 5 s and turn new log lines into
@@ -1133,6 +1154,7 @@ func _pod_tick(delta: float) -> void:
 				return
 			if ok:
 				world.set_pod_detail(d)
+				_zoom_target = _pod_zoom()
 			else:
 				hud.toast(tr("This pod is gone: back to the hall."), false)
 				_go_level("ns:" + ns))
@@ -1253,11 +1275,18 @@ func _process(delta: float) -> void:
 	_yaw = lerpf(_yaw, _yaw_target, clampf(delta * 10.0, 0.0, 1.0))
 	_zoom = lerpf(_zoom, _zoom_target, clampf(delta * 10.0, 0.0, 1.0))
 	_cam.size = _zoom
+	if absf(_pitch - _pitch_target) > 0.01:
+		_pitch = lerpf(_pitch, _pitch_target, clampf(delta * 6.0, 0.0, 1.0))
+		_cam.rotation_degrees.x = _pitch
+		_cam.position = Vector3(0, 0, 100).rotated(Vector3.RIGHT, deg_to_rad(_pitch))
 	_pivot.rotation_degrees.y = _yaw
 	player.cam_yaw = deg_to_rad(_yaw)
 	if player.moving:
 		_pan = _pan.lerp(Vector3.ZERO, clampf(delta * 3.0, 0.0, 1.0))
 	var focus := player.global_position + _pan + Vector3(0, 0.8, 0)
+	if world.swim_level:
+		# Keep the whole tank height (capsules and their labels) in view.
+		focus.y = clampf(player.global_position.y + 0.8, 4.2, World.TANK_TOP - 3.0)
 	if _intro_t >= 0.0:
 		focus = _intro_tick(delta)
 	var basis := _pivot.global_basis * _cam.basis
@@ -1668,7 +1697,7 @@ func _drag_pan(rel_px: Vector2) -> void:
 	var right := Vector3(cos(yaw), 0, -sin(yaw))
 	var fwd := Vector3(-sin(yaw), 0, -cos(yaw))
 	_pan -= right * rel_px.x * units
-	_pan += fwd * rel_px.y * units / sin(deg_to_rad(-PITCH))
+	_pan += fwd * rel_px.y * units / sin(deg_to_rad(-_pitch))
 
 
 func _nearest(max_dist: float, kind: String) -> Entity:

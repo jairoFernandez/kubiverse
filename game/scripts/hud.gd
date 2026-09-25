@@ -147,6 +147,7 @@ var _view_legend: CheckBox
 var _view_scale: Label
 
 var _legend: PanelContainer
+var _pod_legend: PanelContainer   # the legend inside a pod (the tank)
 
 var _inspector: PanelContainer
 var _insp_scroll: ScrollContainer
@@ -971,6 +972,7 @@ func _build_game_ui() -> void:
 
 	_build_level_strip()
 	_build_legend()
+	_build_pod_legend()
 	_build_missions_panel()
 	stats = StatsPanel.new()
 	stats.offset_left = 10
@@ -1760,10 +1762,69 @@ func toggle_view() -> void:
 
 
 func toggle_legend() -> void:
+	if world and world.swim_level:
+		show_pod_legend(not _pod_legend.visible)
+		return
 	_legend.visible = not _legend.visible
 	if _legend.visible:
 		_mission_panel.visible = false
 	_sync_view()
+
+
+func show_pod_legend(on: bool) -> void:
+	_pod_legend.visible = on
+	if on:
+		_legend.visible = false
+		_mission_panel.visible = false
+	_sync_view()
+
+
+## What is what inside a pod: each piece of the tank and what it stands for.
+func _build_pod_legend() -> void:
+	_pod_legend = PanelContainer.new()
+	_pod_legend.offset_left = 10
+	_pod_legend.offset_top = TOP
+	_pod_legend.visible = false
+	_pod_legend.add_theme_stylebox_override("panel", _flat(Color(0.04, 0.1, 0.18, 0.94), Vox.BLUE, 3, 12))
+	_game_root.add_child(_pod_legend)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 5)
+	v.custom_minimum_size = Vector2(420, 0)
+	_pod_legend.add_child(v)
+	var hh := HBoxContainer.new()
+	var t := _label("INSIDE A POD: WHAT IS WHAT", 24, Color("a8e6ff"))
+	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hh.add_child(t)
+	hh.add_child(_button("X", func(): show_pod_legend(false)))
+	v.add_child(hh)
+	var rows := [
+		[Color("2e7fc4"), "The water = the pod's network: one IP shared\n  by every container (they talk on localhost)"],
+		[Vox.GREEN, "Glass capsule = a CONTAINER (a running process\n  from an image). Inner column = the app"],
+		[Vox.GREEN, "Water inside the capsule = memory in use\n  (green, yellow near the limit, red at it)"],
+		[Vox.SILVER, "Propeller on top = CPU: the faster, the busier"],
+		[Vox.GREEN, "Ring around it = health checks (probes):\n  green ready, red failing"],
+		[Vox.YELLOW, "Lamp at its foot = state: green running,\n  yellow waiting / not ready, red crashing"],
+		[Vox.RED, "Red chips = restarts"],
+		[Vox.SLATE, "Small sealed capsule at the back = INIT\n  container: runs once before the others"],
+		[Vox.BLUE, "Blue valve on the back glass = a PORT the\n  container listens on"],
+		[Vox.PEACH, "Scroll = ConfigMap, chest = Secret, barrel =\n  PVC (persistent), jar = emptyDir / projected.\n  Pipes = which containers mount it"],
+		[Color("c8f0ff"), "Bubbles with text = live log lines"],
+		[Vox.SILVER, "EVENT signs near the surface = what\n  Kubernetes did with this pod lately"],
+		[Vox.YELLOW, "Yellow hatch = back to the hall.\n  SPACE swim up, CTRL down, G this legend"],
+	]
+	for r in rows:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		var sw := ColorRect.new()
+		sw.color = r[0]
+		sw.custom_minimum_size = Vector2(14, 14)
+		sw.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		var swm := MarginContainer.new()
+		swm.add_theme_constant_override("margin_top", 5)
+		swm.add_child(sw)
+		row.add_child(swm)
+		row.add_child(_label(r[1], 20))
+		v.add_child(row)
 
 
 func toggle_lines() -> void:

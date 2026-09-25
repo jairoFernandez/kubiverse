@@ -59,6 +59,7 @@ var forwards: Array = []               # K8s.forwards (port-forwards open on the
 var _home_pos := Vector3.ZERO
 var swim_level := false                   # inside a pod: you swim (no gravity, slow)
 var pod_detail := {}                      # K8s.get_pod() of the pod we are in
+var pod_width := 22.0                     # tank width (the camera frames it)
 var capsules := {}                        # container name -> PodCapsule
 var _pod_labels: Array = []               # static labels inside the tank (ports, volumes, IP)
 var _bubbles: Array = []                  # [{node, vy, life, text?}] rising bubbles (log lines too)
@@ -510,6 +511,7 @@ func _apply_pod() -> void:
 	var n := maxi(1, ctrs.size())
 	var width := maxf(22.0, n * 6.5 + 10.0)
 	var fl := Rect2(-width * 0.5, -10.0, width, 17.0)
+	pod_width = width
 	var cpos := func(i: int) -> Vector3: return Vector3((i - (n - 1) * 0.5) * 6.5, 0, -2.5)
 	var ipos := func(i: int) -> Vector3: return Vector3(fl.position.x + 3.0 + i * 3.4, 0, -7.5)
 	var vpos := {}
@@ -570,8 +572,8 @@ func _apply_pod() -> void:
 				Vox.box(_static, Vector3(0.9, 0.9, 0.5), at, Vox.BLUE, 1.2)
 				Vox.box(_static, Vector3(0.4, 0.4, 0.8), at + Vector3(0, 0, 0.5), Vox.SILVER)
 				var pt: Dictionary = ports[k]
-				_pod_labels.append({"pos": at + Vector3(0, 1.0, 0), "text": "%d/%s" % [int(pt.port), pt.get("protocol", "TCP")],
-					"sub": tr("port %s of %s") % [pt.get("name", "") if str(pt.get("name", "")) != "" else "-", ctrs[i].name], "color": Vox.BLUE, "big": false})
+				_pod_labels.append({"pos": at + Vector3(0, 1.0, 0), "text": tr("PORT %d/%s") % [int(pt.port), pt.get("protocol", "TCP")],
+					"sub": tr("%s listens here%s") % [ctrs[i].name, (" (%s)" % pt.name) if str(pt.get("name", "")) != "" else ""], "color": Vox.BLUE, "big": false})
 		# Volumes along the right side; pipes on the sand to the containers that mount them.
 		for v in vols:
 			var at: Vector3 = vpos[v.name]
@@ -590,16 +592,18 @@ func _apply_pod() -> void:
 						Vox.box(_static, Vector3(1.3, 0.15, 1.3), at + Vector3(0, y, 0), Vox.SLATE)
 				_:
 					Vox.box(_static, Vector3(1.0, 1.1, 1.0), at + Vector3(0, 0.55, 0), Color("a8e6ff"), 0.6, false)
-			var vt: String = {"configMap": "ConfigMap", "secret": "Secret", "pvc": "PVC", "emptyDir": "emptyDir", "projected": "projected", "hostPath": "hostPath"}.get(str(v.type), str(v.type))
-			_pod_labels.append({"pos": at + Vector3(0, 2.0, 0), "text": "%s %s" % [vt, v.name],
-				"sub": str(v.get("source", "")) + ("  " + tr("(contents never shown)") if v.type == "secret" else ""), "color": Vox.PEACH if v.type != "secret" else Vox.RED, "big": false})
+			var what: String = {"configMap": tr("ConfigMap %s: configuration files"), "secret": tr("Secret %s: keys and passwords (contents never shown)"),
+				"pvc": tr("PersistentVolumeClaim %s: data that outlives the pod"), "emptyDir": tr("emptyDir: scratch space, deleted with the pod%s"),
+				"projected": tr("projected: the ServiceAccount token to talk to the API%s"), "hostPath": tr("hostPath %s: a folder of the node")}.get(str(v.type), str(v.type) + " %s")
+			_pod_labels.append({"pos": at + Vector3(0, 2.0, 0), "text": tr("VOLUME %s") % v.name,
+				"sub": what % ([str(v.get("source", ""))] if what.contains("%s") else []), "color": Vox.PEACH if v.type != "secret" else Vox.RED, "big": false})
 			for i in ctrs.size():
 				var mounts: Array = ctrs[i].get("mounts", []) if ctrs[i].get("mounts") != null else []
 				for mt in mounts:
 					if mt.volume == v.name:
 						_pipe_on_sand(cpos.call(i) + Vector3(1.5, 0, 1.0 + (vols.find(v) % 3) * 0.3), at, Vox.PEACH if v.type != "secret" else Vox.RED)
 		_pod_labels.append({"pos": Vector3(c.x, TANK_TOP + 1.2, fl.end.y), "text": tr("POD %s") % pod_key().get_slice("/", 1),
-			"sub": tr("IP %s · node %s · QoS %s · the water is its network: containers reach each other on localhost") % [d.get("ip", "?"), d.get("node", "?"), d.get("qos", "?")],
+			"sub": tr("IP %s · node %s · QoS %s") % [d.get("ip", "?"), d.get("node", "?"), d.get("qos", "?")],
 			"color": Vox.ns_color(ns), "big": true})
 	# Containers (entities: refreshed with every detail update).
 	var seen := {}
@@ -1745,6 +1749,8 @@ func labels(player_pos: Vector3) -> Array:
 	if swim_level:
 		for cap in capsules.values():
 			out.append({"pos": cap.anchor(), "text": cap.label_text(), "sub": _hint(cap, cap.label_sub()), "color": cap.label_color(), "big": true, "entity": cap})
+			for co in cap.callouts():
+				out.append({"pos": co.pos, "text": co.text, "sub": "", "color": co.color, "big": false, "small": true})
 		out.append_array(_pod_labels)
 		for b in _bubbles:
 			if b.text != "":
@@ -1753,7 +1759,7 @@ func labels(player_pos: Vector3) -> Array:
 		for i in mini(evs.size(), 3):
 			var e: Dictionary = evs[i]
 			out.append({"pos": Vector3(-6.0 + i * 6.0, TANK_TOP - 1.0 + sin(_t + i) * 0.2, 5.0),
-				"text": "%s %s x%d" % ["⚠" if e.type == "Warning" else "✉", e.reason, int(e.get("count", 1))],
+				"text": tr("EVENT %s x%d") % [e.reason, int(e.get("count", 1))] + ("  ⚠" if e.type == "Warning" else ""),
 				"sub": str(e.message).left(90), "color": Vox.RED if e.type == "Warning" else Vox.SILVER, "big": false})
 	if home and is_instance_valid(home):
 		out.append({"pos": home.anchor(), "text": home.label_text(), "sub": _hint(home, home.label_sub()), "color": home.label_color(), "big": false, "entity": home})

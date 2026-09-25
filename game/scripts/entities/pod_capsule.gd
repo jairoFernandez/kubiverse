@@ -161,7 +161,29 @@ func top() -> Vector3:
 
 
 func label_text() -> String:
-	return ("init: " if init and not data.get("sidecar", false) else ("sidecar: " if data.get("sidecar", false) else "")) + str(data.get("name", ""))
+	var what := tr("INIT CONTAINER") if init and not data.get("sidecar", false) else (tr("SIDECAR") if data.get("sidecar", false) else tr("CONTAINER"))
+	return "%s  %s" % [what, data.get("name", "")]
+
+
+## Small signs on each part of the capsule, so you can tell what is what.
+func callouts() -> Array:
+	var out := []
+	var s := scale.x
+	var p := global_position
+	var st := state()
+	if _prop and st != "done":
+		out.append({"pos": p + Vector3(1.9, (1.3 + H) * s, 0), "text": tr("CPU %s") % Vox.fmt_cores(float(data.get("cpu_use_m", 0))), "color": Vox.SILVER})
+	if st != "done":
+		var cap := float(data.get("mem_lim", 0))
+		var mem := tr("MEM %s") % Vox.fmt_mib(float(data.get("mem_use", 0)))
+		if cap > 0.0:
+			mem += " / " + Vox.fmt_mib(cap)
+		out.append({"pos": p + Vector3(-2.0, (0.9 + H * 0.3) * s, 0), "text": mem, "color": _level.material_override.albedo_color if _level and _level.material_override else Vox.GREEN})
+	if _ring and _ring.visible:
+		out.append({"pos": p + Vector3(2.1, (0.75 + H * 0.5) * s, 0), "text": tr("probes OK") if data.get("ready", false) else tr("probes FAILING"), "color": Vox.GREEN if data.get("ready", false) else Vox.RED})
+	if int(data.get("restarts", 0)) > 0:
+		out.append({"pos": p + Vector3(-2.0, 0.4 * s, 1.2), "text": tr("%d restarts") % int(data.restarts), "color": Vox.RED})
+	return out
 
 
 func label_sub() -> String:
