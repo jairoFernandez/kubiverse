@@ -53,6 +53,10 @@ var workshop := {}
 const FINISHED_SHOWN := 8
 var _archive: Node3D                # finished pods drawn per hall (the rest are archived)
 var internet: InternetCity             # plant: the Internet city (Ingress, LoadBalancers)
+var home: LocalHut                     # plant: "your PC", where port-forward tubes start
+var tunnels := {}                      # forward id -> PortTunnel
+var forwards: Array = []               # K8s.forwards (port-forwards open on the bridge)
+var _home_pos := Vector3.ZERO
 var districts: Array = []                 # plant: [{district, rect, title, sub, color, ground}]
 var gate: IngressGate                     # hall: row of pods without a line {pos, count, done, owners}
 
@@ -121,6 +125,9 @@ func all_entities() -> Array:
 	out.append_array(lines.values())
 	if gate and is_instance_valid(gate):
 		out.append(gate)
+	if home and is_instance_valid(home):
+		out.append(home)
+	out.append_array(tunnels.values())
 	for p in pods.values():
 		if not p.dying:
 			out.append(p)
@@ -130,6 +137,8 @@ func all_entities() -> Array:
 func find_entity(kind: String, key: String) -> Entity:
 	match kind:
 		"gate": return gate if gate and is_instance_valid(gate) else null
+		"home": return home if home and is_instance_valid(home) else null
+		"forward": return tunnels.get(key)
 		"namespace": return buildings.get(key)
 		"node": return islands.get(key)
 		"pod": return pods.get(key)
@@ -150,6 +159,8 @@ func set_level(l: String) -> void:
 		internet.queue_free()
 		internet = null
 	gate = null
+	home = null
+	tunnels.clear()
 	buildings.clear()
 	lines.clear()
 	services.clear()
@@ -170,6 +181,7 @@ func apply_state(s: Dictionary) -> void:
 		_apply_power(s)
 	else:
 		_apply_hall(s, current_ns())
+	_apply_tunnels()
 	if selected and not is_instance_valid(selected):
 		selected = null
 
@@ -432,13 +444,74 @@ func _apply_plant(s: Dictionary) -> void:
 		var home: Dictionary = blocks[center_i] if not blocks.is_empty() else {"x0": 0.0, "cols": 0, "rows": 1}
 		var sx: float = home.x0 + roundi(home.cols * 0.5) * cell_w
 		spawn = Vector3(sx, 0, -grid_d - 4.0 + home.rows * cell_d * 0.5)
+	# Your PC, in the south-east corner: port-forward tubes start on its roof.
+	_home_pos = Vector3(ground.end.x - 4.5, 0, ground.end.y - 7.0)
+	if home == null:
+		home = LocalHut.new()
+		home.world = self
+		_entities.add_child(home)
+	home.position = _home_pos
+	home.data["forwards"] = forwards
 	blockers.clear()
 	for b in buildings.values():
 		blockers.append(b.footprint())
 		blocker_heights[b.footprint()] = b.h + 0.2  # flat roof
+	blockers.append(home.footprint())
+	blocker_heights[home.footprint()] = 2.6
 	fly_ceiling = 16.0
 	# The city is centred on the gate (x = 0): make it as wide as the plant.
 	_apply_internet(s, cell_w, 2.0 * maxf(absf(grid_l), absf(grid_r)), grid_d)
+
+
+## Port-forwards changed (or their traffic counters).
+func set_forwards(list: Array) -> void:
+	forwards = list
+	if home and is_instance_valid(home):
+		home.data["forwards"] = list
+	_apply_tunnels()
+
+
+## One glass tube per port-forward. Plant: from your PC to the hall of its
+## namespace (it lands on the roof). Inside that hall: down from the ceiling
+## to the pod or loading dock it reaches. Other levels: none.
+func _apply_tunnels() -> void:
+	var seen := {}
+	var i := 0
+	for f in forwards:
+		var a := Vector3.ZERO
+		var b := Vector3.ZERO
+		var lift := 0.0
+		if level == "plant" and home:
+			var bld: FactoryBuilding = buildings.get(str(f.ns))
+			if bld == null:
+				continue
+			a = home.port()
+			b = bld.target + Vector3(0, bld.h + 0.4, 0)
+			lift = 7.0 + i * 1.6
+		elif level == "ns:" + str(f.ns):
+			var e: Entity = services.get("%s/%s" % [f.ns, f.name]) if f.kind == "service" else pods.get("%s/%s" % [f.ns, f.get("pod", f.name)])
+			if e == null:
+				continue
+			b = e.target + Vector3(0, 2.4 if f.kind == "service" else 2.0, 0)
+			# It comes up through a floor hatch next to its target.
+			a = Vector3(b.x - 4.5 - i * 1.4, 0.05, b.z + 3.0)
+			lift = 3.5
+		else:
+			continue
+		var id := str(f.id)
+		seen[id] = true
+		var t: PortTunnel = tunnels.get(id)
+		if t == null:
+			t = PortTunnel.new()
+			t.world = self
+			_entities.add_child(t)
+			tunnels[id] = t
+		t.setup(f, a, b, lift)
+		i += 1
+	for id in tunnels.keys():
+		if not seen.has(id):
+			tunnels[id].queue_free()
+			tunnels.erase(id)
 
 
 ## The world outside: domains (Ingress) and LoadBalancers, as a city north
@@ -1456,6 +1529,10 @@ func labels(player_pos: Vector3) -> Array:
 		out.append({"pos": l.anchor(), "text": l.label_text(), "sub": _hint(l, l.label_sub()), "color": l.label_color(), "big": true, "entity": l})
 	for dk in services.values():
 		out.append({"pos": dk.anchor(), "text": dk.label_text(), "sub": _hint(dk, dk.label_sub()), "color": dk.label_color(), "big": false, "entity": dk})
+	for t in tunnels.values():
+		out.append({"pos": t.anchor(), "text": t.label_text(), "sub": _hint(t, t.label_sub()), "color": t.label_color(), "big": false, "entity": t})
+	if home and is_instance_valid(home):
+		out.append({"pos": home.anchor(), "text": home.label_text(), "sub": _hint(home, home.label_sub()), "color": home.label_color(), "big": false, "entity": home})
 	var near := []
 	for e in pods.values():
 		if e.dying or e == hovered or e == selected:

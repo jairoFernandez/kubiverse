@@ -212,6 +212,7 @@ func _ready() -> void:
 		_start_intro.call_deferred())
 	hud.goto_requested.connect(_goto)
 
+	K8s.forwards_updated.connect(world.set_forwards)
 	missions = Missions.new()
 	add_child(missions)
 	hud.missions = missions
@@ -301,6 +302,17 @@ func _ready() -> void:
 
 
 func _screenshot_and_quit(path: String) -> void:
+	if "--pf-demo" in OS.get_cmdline_user_args():
+		# Two port-forward tubes with simulated traffic.
+		await get_tree().create_timer(1.5).timeout
+		for sv in K8s.state.get("services", []).slice(0, 12):
+			if sv.ns == "shop":
+				K8s.port_forward("service", sv.ns, sv.name, 80)
+				break
+		for p in K8s.state.get("pods", []):
+			if p.ns == "payments" and p.get("phase", "") == "Running":
+				K8s.port_forward("pod", p.ns, p.name, 9000)
+				break
 	await get_tree().create_timer(4.0).timeout
 	if "--debug-connect" in OS.get_cmdline_user_args():
 		print("CONNECT root ", hud._connect_root.size, " v ", hud._connect_v.custom_minimum_size, " vis ", hud._connect_root.visible, " cols ", hud._connect_grid.columns)
@@ -310,6 +322,18 @@ func _screenshot_and_quit(path: String) -> void:
 		if arg.begins_with("--level="):
 			_go_level(arg.substr(8))
 			await get_tree().create_timer(2.5).timeout
+	if "--pf-demo" in OS.get_cmdline_user_args():
+		# Frame the tubes: panels away, stand where they are visible.
+		hud._terminal.visible = false
+		hud._mission_panel.visible = false
+		var t: PortTunnel = world.tunnels.values()[0] if not world.tunnels.is_empty() else null
+		if t:
+			var at: Vector3 = t._at(0.5) if world.level == "plant" else t._at(1.0)
+			player.teleport(at * Vector3(1, 0, 1) + Vector3(2, 0, 3))
+			_pan = Vector3.ZERO
+		if "--inspect-home" in OS.get_cmdline_user_args() and world.home:
+			hud.inspect(world.home)
+		await get_tree().create_timer(1.5).timeout
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--near="):
 			var b: FactoryBuilding = world.buildings.get(arg.substr(7))

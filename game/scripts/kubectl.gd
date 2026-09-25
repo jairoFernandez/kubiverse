@@ -38,6 +38,13 @@ static func for_action(req: Dictionary) -> String:
 	return "# unknown action"
 
 
+## port 0 = <port>, local 0 = same as the port (what kubectl does).
+static func port_forward(kind: String, ns: String, name: String, port: int, local: int) -> String:
+	var p := "<port>" if port <= 0 else str(port)
+	var l := "" if local <= 0 else str(local) + ":"
+	return "kubectl -n %s port-forward %s/%s %s%s" % [ns, "svc" if kind == "service" else "pod", name, l, p]
+
+
 static func logs(ns: String, pod: String, container: String, previous: bool, follow: bool) -> String:
 	var c := "kubectl %slogs %s" % [_ns(ns), pod]
 	if container != "":
@@ -98,6 +105,20 @@ static func for_view(kind: String, d: Dictionary) -> Array:
 				["its pods", "kubectl -n %s get pods -o wide" % n],
 				["what happened lately", "kubectl -n %s get events --sort-by=.lastTimestamp" % n],
 			]
+		"home":
+			var out := []
+			for f in d.get("forwards", []):
+				out.append([TranslationServer.translate("the tunnel to %s/%s") % [f.ns, f.name], port_forward(f.kind, f.ns, f.name, int(f.port), int(f.local))])
+			if out.is_empty():
+				out.append(["open one yourself", "kubectl -n <namespace> port-forward svc/<name> 8080:80"])
+			return out
+		"forward":
+			var out := [["the same tunnel with kubectl", port_forward(d.get("kind", "pod"), ns, n, int(d.get("port", 0)), int(d.get("local", 0)))]]
+			var pod: String = d.get("pod", "")
+			if pod != "":
+				out.append(["the pod behind it", "kubectl %sget pod %s -o wide" % [_ns(ns), pod]])
+				out.append(["what your requests do there", "kubectl %slogs %s --tail=50" % [_ns(ns), pod]])
+			return out
 		"node":
 			return [
 				["see it", "kubectl get node %s -o wide" % n],

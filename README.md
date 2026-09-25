@@ -176,7 +176,16 @@ Each mission explains the concept (**WHY?**) and the equivalent `kubectl` comman
 
 The TERMINAL panel (`/` to type) runs **real kubectl** on the bridge host, against the same context, with history (↑/↓) and `clear`. Clicking any command in the game pastes it into the terminal. Commands that change things (scale, delete pod, rollout restart, cordon, create deployment...) also count toward missions. Demo mode has a kubectl emulator.
 
-Safety limits: no shell is used (`;`, `|`, `&`, `$`, backticks and redirections are rejected). Also not allowed: interactive or never-ending commands (`exec`, `edit`, `port-forward`, `-w`, `logs -f`), switching cluster or credentials (`--context`, `--kubeconfig`, `--token`...), reading local files (`-f`, `-k`, `cp`) and `config`. With `--readonly` only read verbs are accepted.
+Safety limits: no shell is used (`;`, `|`, `&`, `$`, backticks and redirections are rejected). Also not allowed: interactive or never-ending commands (`exec`, `edit`, `-w`, `logs -f`; `port-forward` becomes a glass tube kept by the bridge, see above), switching cluster or credentials (`--context`, `--kubeconfig`, `--token`...), reading local files (`-f`, `-k`, `cp`) and `config`. With `--readonly` only read verbs are accepted.
+
+## Port-forward: glass tubes
+
+A port-forward is a private tunnel from your machine straight to a pod or a Service, skipping the Ingress. In Kubiverse it's a **pneumatic glass tube**: it starts on the roof of **YOUR PC** (a cabin in the south-east corner of the plant, 127.0.0.1) and lands on the hall of its namespace; inside that hall it comes up through a floor hatch next to the pod or loading dock. **Glowing packets move with the real traffic**: cyan = answers coming to you, yellow = your requests going in. Its sign shows `localhost:8080 → shop/frontend:80` and the bytes and connections; the glass turns red if it loses its pod.
+
+- Open one: click a pod or a loading dock → **PORT-FORWARD** (pick the port), or type `port-forward svc/frontend 8080:80 -n shop` in the terminal.
+- Click the tube: **OPEN IN BROWSER**, **COPY URL**, **CLOSE TUNNEL**.
+- The bridge keeps them open (client-go, like `kubectl port-forward`), always on `127.0.0.1` of the bridge machine. Ports below 1024 map to 8000+port (80 → 8080); if the port is taken it picks a free one. A Service's tunnel moves to another ready pod when its pod goes away.
+- They don't change the cluster, so they work on production and with `--readonly` (RBAC still needs `create pods/portforward`). In demo mode they are simulated.
 
 ## Chaos mode and weapons (C, 1-6, F)
 
@@ -392,6 +401,7 @@ The game performs **real** actions with your kubeconfig's credentials.
 | GET | `/api/logs?ns=&pod=&container=&tail=&previous=1` | container logs |
 | POST | `/api/kubectl` | `{"line": "get pods -A"}` → `{"ok", "exit_code", "output"}` (real kubectl with the restrictions above) |
 | POST | `/api/scenario` | `{"name": "complex", "remove": false}`: applies (or deletes) a bundled sample scenario with kubectl |
+| GET · POST · DELETE | `/api/portforward` | list · open `{"kind": "pod"\|"service", "ns", "name", "port", "local_port"}` · close `?id=`. Traffic counters arrive on the WebSocket as `{"type":"forwards"}` every second |
 | POST | `/api/action` | `{"action": "delete_pod" \| "scale" \| "restart" \| "cordon" \| "uncordon" \| "create_deployment" \| "delete_workload", "kind", "ns", "name", "replicas", "image", "service"}` |
 
 ## Layout

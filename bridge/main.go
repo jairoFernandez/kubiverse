@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	appslisters "k8s.io/client-go/listers/apps/v1"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	networkinglisters "k8s.io/client-go/listers/networking/v1"
@@ -46,6 +47,8 @@ type Bridge struct {
 	kubeconfigPath string             // explicit --kubeconfig, passed on to kubectl
 	stop           context.CancelFunc // stops this cluster's informers
 	metrics        Metrics
+	restCfg        *rest.Config // for port-forwards (SPDY)
+	fw             forwards
 
 	nodeLister corelisters.NodeLister
 	nsLister   corelisters.NamespaceLister
@@ -124,6 +127,7 @@ func main() {
 	mux.HandleFunc("POST /api/action", hub.cluster((*Bridge).handleAction))
 	mux.HandleFunc("POST /api/kubectl", hub.cluster((*Bridge).handleKubectl))
 	mux.HandleFunc("POST /api/scenario", hub.cluster((*Bridge).handleScenario))
+	mux.HandleFunc("/api/portforward", hub.cluster((*Bridge).handleForwards))
 	mux.HandleFunc("GET /api/manifest", hub.cluster((*Bridge).handleManifestGet))
 	mux.HandleFunc("POST /api/manifest", hub.cluster((*Bridge).handleManifestPut))
 	mux.HandleFunc("GET /api/assistant", hub.auth(hub.handleAIStatus))
@@ -189,7 +193,7 @@ func startBridge(root context.Context, cc clientcmd.ClientConfig, ctxName, kubec
 		return nil, fmt.Errorf("clientset: %w", err)
 	}
 	b := &Bridge{
-		cs: cs, contextName: ctxName, server: cfg.Host, readOnly: readOnly,
+		cs: cs, restCfg: cfg, contextName: ctxName, server: cfg.Host, readOnly: readOnly,
 		clients: map[*client]struct{}{}, kubeconfigPath: kubeconfigPath,
 	}
 	ctx, cancel := context.WithCancel(root)
@@ -384,6 +388,10 @@ func (b *Bridge) handleWS(w http.ResponseWriter, r *http.Request) {
 		if wm := b.watchMessage(true); wm != nil {
 			b.broadcast(wm)
 		}
+	}
+	select {
+	case c.send <- b.forwardsMessage():
+	default:
 	}
 	ping := time.NewTicker(20 * time.Second)
 	defer ping.Stop()

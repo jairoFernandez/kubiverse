@@ -115,6 +115,13 @@ var _kc_text: TextEdit
 var _game_root: Control
 var _ctx_label: Label
 var _kind_btn: Button            # PRODUCTION / SANDBOX badge in the top bar
+var _pf_panel: PanelContainer    # port-forward: pick the ports
+var _pf_title: Label
+var _pf_ports: HFlowContainer
+var _pf_remote: LineEdit
+var _pf_local: LineEdit
+var _pf_req := {}
+var _insp_cmds_hdr: Label
 var _kind_panel: PanelContainer  # asks which kind a new cluster is
 var _confirm_prod: Label         # red "PRODUCTION CLUSTER" line in the confirm dialog
 var _mission_track: HFlowContainer
@@ -998,7 +1005,8 @@ func _build_game_ui() -> void:
 	_insp_preview = _label("hover an action to see its kubectl command", 22, Vox.SLATE)
 	_insp_preview.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
 	_insp_box.add_child(_insp_preview)
-	_insp_box.add_child(_section("SAME THING WITH KUBECTL  (click to copy)"))
+	_insp_cmds_hdr = _section("SAME THING WITH KUBECTL  (click to copy)")
+	_insp_box.add_child(_insp_cmds_hdr)
 	_insp_cmds = _rich(22)
 	_insp_cmds.meta_clicked.connect(func(m): _copy(str(m)))
 	_insp_cmds.meta_underlined = false
@@ -1577,7 +1585,7 @@ func close_top() -> bool:
 
 
 func _anything_to_close() -> bool:
-	for p in [_confirm_panel, _build_panel, _guide_panel, _map_panel, _logs_panel, _view_panel, _vol_panel, _alarm_panel,
+	for p in [_confirm_panel, _pf_panel, _build_panel, _guide_panel, _map_panel, _logs_panel, _view_panel, _vol_panel, _alarm_panel,
 			_legend, kubi, watch, _menu_panel, stats, _mission_panel, _inspector]:
 		if p.visible:
 			return true
@@ -1982,6 +1990,9 @@ func _term_edit(line: String) -> void:
 ## that attaches it to Kubi's chat. cb(entry: {id, cmd, out, ok}) optional.
 func term_run(line: String, cb := Callable()) -> void:
 	line = line.strip_edges().trim_prefix("kubectl ").strip_edges()
+	if line.begins_with("port-forward ") or line.begins_with("-n ") and line.contains(" port-forward "):
+		_term_port_forward(line)
+		return
 	if K8s.is_prod() and not K8s.prod_ok and K8s.mode == K8s.Mode.BRIDGE and not Diagnose.is_read_only("kubectl " + line):
 		confirm(tr("This changes a PRODUCTION cluster:"), func(): term_run(line, cb), "kubectl " + line)
 		return
@@ -2002,6 +2013,51 @@ func term_run(line: String, cb := Callable()) -> void:
 			missions.notify("kubectl", line, ok)
 		if cb.is_valid():
 			cb.call(entry))
+
+
+## `port-forward svc/web 8080:80 -n shop` in the terminal: the bridge keeps
+## it open (kubectl itself would never return) and the world shows the tube.
+func _term_port_forward(line: String) -> void:
+	_term_text.append_text("[color=#ffec27]$[/color] [color=#fff1e8]kubectl %s[/color]\n" % _esc(line))
+	var words := Array(line.split(" ", false))
+	var ns := "default"
+	var target := ""
+	var ports := ""
+	var i := 0
+	while i < words.size():
+		var w: String = words[i]
+		if w in ["-n", "--namespace"] and i + 1 < words.size():
+			ns = words[i + 1]
+			i += 1
+		elif w.begins_with("--namespace="):
+			ns = w.get_slice("=", 1)
+		elif w == "port-forward" or w.begins_with("--address"):
+			pass
+		elif target == "":
+			target = w
+		elif ports == "":
+			ports = w
+		i += 1
+	var kind := "pod"
+	var name := target
+	if target.contains("/"):
+		var k := target.get_slice("/", 0).to_lower()
+		name = target.get_slice("/", 1)
+		if k in ["svc", "service", "services"]:
+			kind = "service"
+		elif not k in ["pod", "pods", "po"]:
+			_term_text.append_text("[color=#ff4d6d]%s[/color]\n" % tr("port-forward here works on pod/<name> or svc/<name>"))
+			return
+	var remote := int(ports.get_slice(":", 1)) if ports.contains(":") else int(ports)
+	var local := int(ports.get_slice(":", 0)) if ports.contains(":") else 0
+	if name == "" or remote <= 0:
+		_term_text.append_text("[color=#ff4d6d]%s[/color]\n" % tr("usage: port-forward svc/<name> [local:]<port> -n <namespace>"))
+		return
+	K8s.port_forward(kind, ns, name, remote, local, func(ok: bool, f):
+		if ok:
+			_term_text.append_text("[color=#00e436]%s[/color]\n" % (tr("Forwarding from %s -> %s/%s:%d (a glass tube in the world; close it from its inspector)") % [f.url, ns, name, remote]))
+		else:
+			_term_text.append_text("[color=#ff4d6d]%s[/color]\n" % _esc(str(f))))
 
 
 ## "-> Kubi" link in the terminal: attach that output to Kubi's chat.
@@ -2130,6 +2186,8 @@ func _refresh_inspector() -> void:
 			for i in usage.size():
 				lines.insert(3 + i, usage[i])
 			buttons.append(["LOGS [L]", func(): open_logs(d), "", false, Kubectl.logs(d.ns, d.name, "", false, true)])
+			if d.get("phase", "") == "Running":
+				buttons.append(["PORT-FORWARD", func(): open_port_forward("pod", d), "", false, Kubectl.port_forward("pod", d.ns, d.name, 0, 0)])
 			buttons.append(["EDIT YAML", func(): open_editor("Pod", d.ns, d.name), "", false, "kubectl -n %s edit pod %s" % [d.ns, d.name]])
 			var del := {"action": "delete_pod", "ns": d.ns, "name": d.name}
 			buttons.append(["DELETE POD", func(): _delete_pod(d), "DangerButton", ro, Kubectl.for_action(del)])
@@ -2167,6 +2225,7 @@ func _refresh_inspector() -> void:
 			for pn in backs.slice(0, 8):
 				lines.append("             - " + pn)
 			buttons.append(["EDIT YAML", func(): open_editor("Service", d.ns, d.name), "", false, "kubectl -n %s edit service %s" % [d.ns, d.name]])
+			buttons.append(["PORT-FORWARD", func(): open_port_forward("service", d), "", false, Kubectl.port_forward("service", d.ns, d.name, 0, 0)])
 		"namespace":
 			var st: Dictionary = _insp_target.stats
 			if _insp_target.is_power:
@@ -2184,6 +2243,34 @@ func _refresh_inspector() -> void:
 				lines.append("[color=#83769c]%s[/color]" % tr("windows = pods (green ok, red failing)"))
 				lines.append("[color=#83769c]%s[/color]" % tr("roof light = worst status inside"))
 				buttons.append(["ENTER HALL [E]", func(): level_requested.emit("ns:" + d.name), "GoButton", false, "kubectl -n %s get all" % d.name])
+		"home":
+			_insp_title.text = tr("YOUR PC  127.0.0.1")
+			lines.append("[color=#83769c]%s[/color]" % tr("The machine where the bridge runs. Port-forwards are glass tubes from here straight to a pod or Service: private doors that skip the Ingress. To open one: click a pod or a loading dock and PORT-FORWARD (or type 'port-forward svc/<name> 8080:80 -n <ns>' in the terminal)."))
+			if world.forwards.is_empty():
+				lines.append("[color=#ffec27]%s[/color]" % tr("No tunnels open."))
+			for f in world.forwards:
+				lines.append("[color=#a8e6ff]%s[/color]  ->  %s/%s:%d  %s" % [f.url, f.ns, f.name, int(f.port), _fw_status(f)])
+				var fid := str(f.id)
+				buttons.append([tr("CLOSE :%d") % int(f.local), func(): K8s.close_forward(fid), "DangerButton", false,
+					Kubectl.port_forward(f.kind, f.ns, f.name, int(f.port), int(f.local))])
+			if world.forwards.size() > 1:
+				buttons.append(["CLOSE ALL TUNNELS", func():
+					for f in world.forwards.duplicate():
+						K8s.close_forward(str(f.id)), "DangerButton", false, ""])
+		"forward":
+			_insp_title.text = tr("PORT-FORWARD %s") % d.get("url", "")
+			lines.append("[color=#83769c]%s[/color]" % tr("A private tunnel from your PC to the cluster. Cyan packets: answers coming to you. Yellow: your requests going in."))
+			lines.append(_kv("to", "%s %s/%s:%d" % [d.kind, d.ns, d.name, int(d.port)]))
+			lines.append(_kv("pod", "%s:%d" % [d.get("pod", ""), int(d.get("target", 0))]))
+			lines.append(_kv("status", "%s %s" % [_fw_status(d), str(d.get("error", "")).replace("[", "(")]))
+			lines.append(_kv("traffic", tr("%s in, %s out, %d connections (%d open)") % [PortTunnel._bytes(float(d.bytes_in)), PortTunnel._bytes(float(d.bytes_out)), int(d.total), int(d.conns)]))
+			if d.get("demo", false):
+				lines.append("[color=#ffec27]%s[/color]" % tr("Demo mode: the tunnel and its traffic are simulated."))
+			buttons.append(["OPEN IN BROWSER", func(): OS.shell_open(str(d.url)), "GoButton", d.get("demo", false), "open " + str(d.url)])
+			buttons.append(["COPY URL", func(): _copy(str(d.url)), "", false, ""])
+			buttons.append(["CLOSE TUNNEL", func():
+				K8s.close_forward(str(d.id))
+				_close_inspector(), "DangerButton", false, "kill the kubectl port-forward"])
 		"gate":
 			_insp_title.text = tr("INGRESS - THE DOOR TO THE INTERNET")
 			lines.append("[color=#83769c]%s[/color]" % tr("Requests from the Internet arrive by domain (host) and path; the Ingress controller sends each one to a Service inside a namespace. Cars = requests; they stop at the gate (503) when the Service is missing or has no ready pods."))
@@ -2228,6 +2315,7 @@ func _refresh_inspector() -> void:
 		for c in Kubectl.for_view(_insp_kind, d):
 			cmds.append("[color=#83769c]# %s[/color]\n[color=#ffec27]$[/color] [url=%s]%s[/url]" % [tr(c[0]), c[1], c[1]])
 		_insp_cmds.text = "\n".join(cmds)
+		_insp_cmds_hdr.visible = not cmds.is_empty()
 
 
 ## CPU/memory of a set of pods: live usage from metrics-server (if any)
@@ -2523,6 +2611,44 @@ func _build_modals() -> void:
 		row.add_child(d)
 		kv.add_child(row)
 
+	# Port-forward: which port, and on which local port.
+	_pf_panel = _modal(-1)
+	var pv := VBoxContainer.new()
+	pv.add_theme_constant_override("separation", 10)
+	pv.custom_minimum_size = Vector2(520, 0)
+	_pf_panel.add_child(pv)
+	pv.add_child(_label("PORT-FORWARD", 30, Color("a8e6ff")))
+	_pf_title = _label("", 24, Vox.PEACH)
+	_pf_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	pv.add_child(_pf_title)
+	var pn := _label("Opens a private glass tube from your PC (127.0.0.1 on the bridge machine) straight to it, skipping the Ingress. Only this machine can use it.", 21, Vox.SILVER)
+	pn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	pv.add_child(pn)
+	_pf_ports = HFlowContainer.new()
+	_pf_ports.add_theme_constant_override("h_separation", 6)
+	pv.add_child(_pf_ports)
+	var pg := GridContainer.new()
+	pg.columns = 2
+	pg.add_theme_constant_override("h_separation", 10)
+	pg.add_theme_constant_override("v_separation", 8)
+	pv.add_child(pg)
+	pg.add_child(_label("Remote port", 22, Vox.SILVER))
+	_pf_remote = LineEdit.new()
+	_pf_remote.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_pf_remote.text_submitted.connect(func(_t): _pf_open())
+	pg.add_child(_pf_remote)
+	pg.add_child(_label("Local port", 22, Vox.SILVER))
+	_pf_local = LineEdit.new()
+	_pf_local.placeholder_text = tr("auto (8080 for 80, same port above 1024)")
+	_pf_local.text_submitted.connect(func(_t): _pf_open())
+	pg.add_child(_pf_local)
+	var pb := HBoxContainer.new()
+	pb.alignment = BoxContainer.ALIGNMENT_END
+	pb.add_theme_constant_override("separation", 12)
+	pb.add_child(_button("CANCEL [ESC]", func(): _pf_panel.visible = false))
+	pb.add_child(_button("OPEN TUNNEL", _pf_open, "GoButton"))
+	pv.add_child(pb)
+
 	# Control-plane guide
 	_guide_panel = _modal(60)
 	_guide_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -2642,6 +2768,61 @@ func close_modals() -> bool:
 			_sync_view()
 			return true
 	return false
+
+
+## Port-forward a pod or a Service: pick the port, then the tube opens.
+func open_port_forward(kind: String, d: Dictionary) -> void:
+	_pf_req = {"kind": kind, "ns": d.ns, "name": d.name}
+	_pf_title.text = "%s %s/%s" % [tr("SERVICE") if kind == "service" else tr("POD"), d.ns, d.name]
+	for c in _pf_ports.get_children():
+		c.queue_free()
+	var ports := []
+	if kind == "service":
+		for pt in (d.get("ports", []) if d.get("ports") != null else []):
+			# "80/TCP" or "9100:32433/TCP" (port:nodePort)
+			var n := int(str(pt).get_slice("/", 0).get_slice(":", 0))
+			if n > 0 and not str(pt).ends_with("UDP"):
+				ports.append(n)
+	else:
+		# A pod doesn't list its ports here: offer the ones its Services target.
+		for sv in K8s.state.get("services", []):
+			if sv.ns == d.ns and sv.get("pods") != null and d.name in sv.pods:
+				for pt in (sv.get("ports", []) if sv.get("ports") != null else []):
+					var n := int(str(pt).get_slice("/", 0).get_slice(":", 0))
+					if n > 0 and not n in ports:
+						ports.append(n)
+	for n in ports:
+		_pf_ports.add_child(_button(str(n), func(): _pf_remote.text = str(n)))
+	_pf_remote.text = str(ports[0]) if not ports.is_empty() else "8080"
+	_pf_local.text = ""
+	_pf_panel.visible = true
+	_pf_panel.move_to_front()
+
+
+func _pf_open() -> void:
+	var port := int(_pf_remote.text)
+	if port < 1 or port > 65535:
+		toast(tr("Pick a port between 1 and 65535"), false)
+		return
+	_pf_panel.visible = false
+	var r := _pf_req
+	toast(tr("Opening the tunnel to %s/%s:%d...") % [r.ns, r.name, port], true)
+	_term_cmd(Kubectl.port_forward(r.kind, r.ns, r.name, port, int(_pf_local.text)))
+	K8s.port_forward(r.kind, r.ns, r.name, port, int(_pf_local.text), func(ok: bool, f):
+		if ok:
+			Sfx.play("jingle")
+			toast(tr("Tunnel open: %s -> %s/%s:%d") % [f.url, r.ns, r.name, port], true)
+		else:
+			Sfx.play("error")
+			toast(tr("Port-forward failed: %s") % str(f), false))
+
+
+## "● open" in green, "connecting" in yellow, "lost" in red.
+func _fw_status(f: Dictionary) -> String:
+	match str(f.get("status", "")):
+		"open": return "[color=#00e436]● %s[/color]" % tr("open")
+		"connecting": return "[color=#ffec27]● %s[/color]" % tr("connecting")
+	return "[color=#ff004d]● %s[/color]" % tr("lost")
 
 
 ## Prod or sandbox? (first connection to a cluster, or the top-bar badge)
@@ -2780,7 +2961,7 @@ func _load_logs() -> void:
 ## Keeps side panels within the (UI-unit) screen size.
 func _layout_modals() -> void:
 	var full := _modal_layer.size
-	for p in [_confirm_panel, _build_panel, _kind_panel]:
+	for p in [_confirm_panel, _build_panel, _kind_panel, _pf_panel]:
 		if p.visible:
 			var ps: Vector2 = p.get_combined_minimum_size().min(full - Vector2(20, 20))
 			p.size = ps
@@ -2889,7 +3070,7 @@ func _layout() -> void:
 	watch.position = Vector2(sz.x - pw - (8.0 if compact else 10.0), top)
 	# Centered dialogs: size to content, center, keep on screen.
 	var full := _modal_layer.size
-	for p in [_confirm_panel, _build_panel, _kind_panel]:
+	for p in [_confirm_panel, _build_panel, _kind_panel, _pf_panel]:
 		if p.visible:
 			var ps: Vector2 = p.get_combined_minimum_size().min(full - Vector2(20, 20))
 			p.size = ps

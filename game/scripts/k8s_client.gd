@@ -11,6 +11,7 @@ signal watch_updated(data: Dictionary)   # WATCHTOWER: visitors + recent actions
 signal cluster_kind_needed               # a cluster seen for the first time: ask prod or sandbox
 signal cluster_kind_changed(kind: String)
 signal prod_confirm_requested(req: Dictionary)  # a change on a production cluster needs a yes
+signal forwards_updated(list: Array)    # port-forwards open on the bridge (with traffic counters)
 
 enum Mode { OFFLINE, BRIDGE, DEMO }
 
@@ -27,6 +28,11 @@ var cluster_kind := ""
 var _kind_key := ""
 ## Set while a confirmed change runs, so the production guard lets it through.
 var prod_ok := false
+
+## Port-forwards: [{id, kind, ns, name, port, pod, target, local, url,
+## bytes_in, bytes_out, conns, total, status, error}]
+var forwards: Array = []
+var _demo_fw_t := 0.0
 
 var _ws: WebSocketPeer
 var _ws_last_state := -1
@@ -168,6 +174,8 @@ func disconnect_all() -> void:
 	state = {}
 	_kind_key = ""
 	cluster_kind = ""
+	forwards = []
+	forwards_updated.emit(forwards)
 
 
 func is_readonly() -> bool:
@@ -190,6 +198,8 @@ func _open_ws() -> void:
 
 
 func _process(delta: float) -> void:
+	if mode == Mode.DEMO and not forwards.is_empty():
+		_demo_traffic(delta)
 	if mode != Mode.BRIDGE:
 		return
 	if _ws == null:
@@ -218,6 +228,9 @@ func _process(delta: float) -> void:
 					_on_state(msg["data"])
 				"event":
 					cluster_event.emit(msg["data"])
+				"forwards":
+					forwards = msg["data"] if msg["data"] != null else []
+					forwards_updated.emit(forwards)
 				"watch":
 					var w: Dictionary = msg["data"]
 					for k in ["visitors", "actions"]:
@@ -397,6 +410,59 @@ func scenario(remove: bool, cb: Callable) -> void:
 			cb.call(false, str(data))
 		else:
 			cb.call(bool(data.get("ok", false)), str(data.get("output", data.get("error", "")))))
+
+
+## Opens a port-forward on the bridge host: 127.0.0.1:<local> -> a pod's port
+## or a Service's port. local 0 = the same port (8000+port below 1024).
+## cb(ok, forward_or_error)
+func port_forward(kind: String, ns: String, name: String, port: int, local := 0, cb := Callable()) -> void:
+	var done := func(ok: bool, r):
+		if cb.is_valid():
+			cb.call(ok, r)
+	if mode == Mode.DEMO:
+		var f := {"id": str(Time.get_ticks_msec()), "kind": kind, "ns": ns, "name": name, "port": port,
+			"pod": name if kind == "pod" else "%s-demo" % name, "target": port, "local": local if local > 0 else (port + 8000 if port < 1024 else port),
+			"bytes_in": 0, "bytes_out": 0, "conns": 0, "total": 0, "status": "open", "error": "", "demo": true}
+		f.url = "http://127.0.0.1:%d" % f.local
+		forwards.append(f)
+		forwards_updated.emit(forwards)
+		done.call(true, f)
+		return
+	if mode != Mode.BRIDGE:
+		done.call(false, "not connected")
+		return
+	var body := JSON.stringify({"kind": kind, "ns": ns, "name": name, "port": port, "local_port": local})
+	_http(HTTPClient.METHOD_POST, "/api/portforward" + _q(), body, func(ok: bool, data):
+		if not ok:
+			done.call(false, str(data))
+		elif not data.get("ok", false):
+			done.call(false, str(data.get("error", "")))
+		else:
+			done.call(true, data.get("forward", {})))
+
+
+func close_forward(id: String) -> void:
+	if mode == Mode.DEMO:
+		forwards = forwards.filter(func(f): return f.id != id)
+		forwards_updated.emit(forwards)
+		return
+	_http(HTTPClient.METHOD_DELETE, "/api/portforward" + _q() + ("&" if _q() != "" else "?") + "id=" + id.uri_encode(), "", func(_ok, _d): pass)
+
+
+## Demo: fake requests through the tunnels so the packets move.
+func _demo_traffic(delta: float) -> void:
+	_demo_fw_t += delta
+	if _demo_fw_t < 1.0:
+		return
+	_demo_fw_t = 0.0
+	for f in forwards:
+		if randf() < 0.6:
+			var n := randi_range(1, 4)
+			f.total = int(f.total) + n
+			f.bytes_out = int(f.bytes_out) + n * randi_range(200, 600)
+			f.bytes_in = int(f.bytes_in) + n * randi_range(800, 40000)
+		f.conns = randi_range(0, 2)
+	forwards_updated.emit(forwards)
 
 
 ## cb(ok: bool, text: String)
