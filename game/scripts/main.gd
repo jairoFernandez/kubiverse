@@ -323,6 +323,22 @@ func _screenshot_and_quit(path: String) -> void:
 		if arg.begins_with("--level="):
 			_go_level(arg.substr(8))
 			await get_tree().create_timer(2.5).timeout
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--enter-pod="):
+			# The running pod with the most containers in that namespace.
+			var best := {}
+			for p in K8s.state.pods:
+				if p.ns == arg.substr(12) and p.get("phase", "") == "Running" and (best.is_empty() or p.containers.size() > best.containers.size()):
+					best = p
+			if not best.is_empty():
+				_go_level("pod:%s/%s" % [best.ns, best.name])
+				await get_tree().create_timer(7.0).timeout
+				hud._terminal.visible = false
+				hud._mission_panel.visible = false
+				var caps := world.capsules.values()
+				if "--inspect-container" in OS.get_cmdline_user_args() and not caps.is_empty():
+					hud.inspect(caps[0])
+				await get_tree().create_timer(1.0).timeout
 	if "--kubi-test" in OS.get_cmdline_user_args():
 		missions.set_level("kubi")
 		await get_tree().create_timer(3.0).timeout
@@ -1081,14 +1097,69 @@ func _on_level_changed(l: String) -> void:
 		var b: FactoryBuilding = world.buildings.get(key)
 		if b:
 			player.teleport(_standable_near(b.door_position() + Vector3(0, 0, 1.8)))
+	# Out of a pod: back next to its robot in the hall.
+	if l.begins_with("ns:") and _prev_level.begins_with("pod:"):
+		var bot: PodBot = world.pods.get(_prev_level.substr(4))
+		if bot:
+			player.teleport(_standable_near(bot.target + Vector3(1.2, 0, 1.6)))
+	if l.begins_with("pod:"):
+		if player.flying:
+			player.set_flying(false)
+		_pod_t = 99.0
+		_pod_logs = {}
+		hud.banner(tr("INSIDE POD %s") % l.substr(4).get_slice("/", 1),
+			tr("You are swimming in the pod: the water is its network, shared by all its containers (they reach each other on localhost). Capsules are containers, valves are ports, chests and barrels are volumes. Bubbles carry its live logs. SPACE swims up, CTRL down; the yellow hatch takes you back."))
 	_prev_level = l
 	_door_armed = false
 	_zone = ""
 	_fyaw = deg_to_rad(_yaw)
 	_pan = Vector3.ZERO
-	_zoom_target = LEVEL_ZOOM.get(l, 26.0)
+	_zoom_target = 30.0 if l.begins_with("pod:") else LEVEL_ZOOM.get(l, 26.0)
 	hud.set_level_title(world.level_title())
 	missions.notify("level", l)
+
+
+## Inside a pod: refresh its detail every 5 s and turn new log lines into
+## bubbles every 3 s (the last few lines of each running container).
+func _pod_tick(delta: float) -> void:
+	var key := world.pod_key()
+	var ns := key.get_slice("/", 0)
+	var pod := key.get_slice("/", 1)
+	_pod_t += delta
+	if _pod_t > 5.0:
+		_pod_t = 0.0
+		K8s.get_pod(ns, pod, func(ok: bool, d):
+			if world.pod_key() != key:
+				return
+			if ok:
+				world.set_pod_detail(d)
+			else:
+				hud.toast(tr("This pod is gone: back to the hall."), false)
+				_go_level("ns:" + ns))
+	_pod_log_t += delta
+	if _pod_log_t < 3.0:
+		return
+	_pod_log_t = 0.0
+	for cn in world.capsules:
+		var cap: PodCapsule = world.capsules[cn]
+		if cap.init or cap.state() == "done":
+			continue
+		K8s.fetch_logs(ns, pod, str(cap.data.name), false, func(ok: bool, text: String):
+			if not ok or world.pod_key() != key or not is_instance_valid(cap):
+				return
+			var lines := Array(text.strip_edges().split("\n", false)).slice(-5)
+			var last: String = _pod_logs.get(cn, "")
+			var start := lines.find(last) + 1 if last != "" and lines.has(last) else maxi(0, lines.size() - 2)
+			for i in range(start, lines.size()):
+				var line: String = str(lines[i]).strip_edges()
+				# Drop a leading RFC3339 timestamp: the bubble has little room.
+				if line.length() > 20 and line[4] == "-" and line[10] == "T":
+					line = line.substr(line.find(" ") + 1)
+				world.bubble(cap.top() + Vector3(randf_range(-0.3, 0.3), 0.2 * (i - start), 0), line.left(70))
+			if start >= lines.size() and K8s.is_demo() and not lines.is_empty():
+				world.bubble(cap.top(), str(lines.pick_random()).substr(20).left(70))  # the demo's logs don't grow
+			if not lines.is_empty():
+				_pod_logs[cn] = lines[-1], 5)
 
 
 ## Jump to any object in the cluster: switch level, walk next to it, inspect.
@@ -1146,6 +1217,8 @@ func _add_stars() -> void:
 
 func _process(delta: float) -> void:
 	_cooldown = maxf(0.0, _cooldown - delta)
+	if world.swim_level:
+		_pod_tick(delta)
 	# Dragged to another monitor (Retina <-> 1x): its density changes the scale.
 	var screen := DisplayServer.window_get_current_screen()
 	if screen != _screen:
@@ -1690,6 +1763,8 @@ func _update_zone() -> void:
 				body = tr("A machine that runs your workloads. Its kubelet starts the containers the scheduler assigns here and reports their health to the control-plane. %d pods here.") % here
 			if isl.data.get("unschedulable", false):
 				body += " " + tr("It is CORDONED: no new pods will be scheduled here.")
+	elif world.level.begins_with("pod:"):
+		zone = world.level
 	elif world.level.begins_with("ns:"):
 		var ns := world.current_ns()
 		title = tr("NAMESPACE: %s") % ns
@@ -1764,10 +1839,16 @@ func _interact() -> void:
 	if e is FactoryBuilding:
 		_go_level("power" if e.is_power else "ns:" + e.key)
 		return
+	if e is PodBot and not world.swim_level:
+		_go_level("pod:" + e.key)
+		return
 	hud.inspect(_nearest(3.5, ""))
 
 
 var _weapon := 0
+var _pod_t := 0.0          # inside a pod: seconds since the last detail refresh
+var _pod_log_t := 0.0
+var _pod_logs := {}        # container -> last log line seen (new ones become bubbles)
 var _cooldown := 0.0
 var _shake := 0.0
 

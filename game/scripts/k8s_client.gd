@@ -465,13 +465,31 @@ func _demo_traffic(delta: float) -> void:
 	forwards_updated.emit(forwards)
 
 
+## Everything inside a pod (containers, probes, volumes, events). cb(ok, detail_or_error)
+func get_pod(ns: String, name: String, cb: Callable) -> void:
+	if mode == Mode.DEMO:
+		var d: Dictionary = _mock.pod_detail(ns, name)
+		cb.call(not d.is_empty(), d if not d.is_empty() else "pod not found")
+		return
+	if mode != Mode.BRIDGE:
+		cb.call(false, "not connected")
+		return
+	_http(HTTPClient.METHOD_GET, "/api/pod?ns=%s&name=%s" % [ns.uri_encode(), name.uri_encode()] + _q(false), "", func(ok: bool, data):
+		if not ok:
+			cb.call(false, str(data))
+		elif data.get("ok", false):
+			cb.call(true, data.get("pod", {}))
+		else:
+			cb.call(false, str(data.get("error", ""))))
+
+
 ## cb(ok: bool, text: String)
-func fetch_logs(ns: String, pod: String, container: String, previous: bool, cb: Callable) -> void:
+func fetch_logs(ns: String, pod: String, container: String, previous: bool, cb: Callable, tail := 200) -> void:
 	if mode == Mode.DEMO:
 		cb.call(true, _mock.logs(ns, pod, container, previous))
 		return
-	var path := "/api/logs?ns=%s&pod=%s&container=%s&tail=200%s" % [
-		ns.uri_encode(), pod.uri_encode(), container.uri_encode(), "&previous=1" if previous else ""] + _q(false)
+	var path := "/api/logs?ns=%s&pod=%s&container=%s&tail=%d%s" % [
+		ns.uri_encode(), pod.uri_encode(), container.uri_encode(), tail, "&previous=1" if previous else ""] + _q(false)
 	_http(HTTPClient.METHOD_GET, path, "", func(ok: bool, data):
 		if not ok:
 			cb.call(false, str(data))

@@ -13,6 +13,10 @@ const FLY_SPEED := 8.0
 const FLY_RUN_SPEED := 13.0
 const FLY_UP := 6.5
 const FLY_DOWN := 7.5
+const SWIM_SPEED := 3.6
+const SWIM_RUN := 6.0
+const SWIM_UP := 3.2
+var _bubble_t := 0.0
 
 var cam_yaw := 0.0
 var input_enabled := true
@@ -186,6 +190,8 @@ func _sfx(name: String) -> void:
 
 
 func jump() -> void:
+	if world and world.swim_level:
+		return  # SPACE swims up (read in _swim)
 	if not input_enabled:
 		return
 	# Double-tap SPACE toggles the jetpack (like creative-mode flying).
@@ -242,6 +248,9 @@ func _process(delta: float) -> void:
 	var speed := RUN_SPEED if running else WALK_SPEED
 	if flying and not _grounded:
 		speed = FLY_RUN_SPEED if running else FLY_SPEED
+	var swim: bool = world != null and world.swim_level
+	if swim:
+		speed = SWIM_RUN if running else SWIM_SPEED
 	var step := dir * speed * delta
 	var feet := position.y
 	position = world.move_player(position, step, feet) if world else position + step
@@ -252,7 +261,9 @@ func _process(delta: float) -> void:
 	_ground = world.ground_below(Vector2(position.x, position.z), feet + World.STEP) if world else 0.0
 	if world and world.walk_rects.is_empty():
 		_ground = 0.0  # level not loaded yet: don't fall through nothing
-	if flying:
+	if swim:
+		_swim(delta)
+	elif flying:
 		_fly(delta)
 	elif _vy > 0.0 or feet > _ground + 0.02 or _ground == -INF:
 		_vy -= GRAVITY * delta
@@ -327,6 +338,33 @@ func _process(delta: float) -> void:
 		_shadow.global_position.y = gy + 0.02
 		var sh := clampf(1.0 - hgt * 0.25, 0.35, 1.0)
 		_shadow.scale = Vector3(sh, 1, sh)
+
+
+## Inside a pod: water. SPACE swims up, CTRL down; let go and you sink
+## slowly back to the sand. Bubbles now and then.
+func _swim(delta: float) -> void:
+	var up := input_enabled and (Input.is_physical_key_pressed(KEY_SPACE) or touch_up)
+	var down := input_enabled and (Input.is_physical_key_pressed(KEY_CTRL) or Input.is_physical_key_pressed(KEY_META) or touch_down)
+	var target := -0.9
+	if up:
+		target = SWIM_UP
+	elif down:
+		target = -SWIM_UP
+	_vy = move_toward(_vy, target, delta * 9.0)
+	position.y += _vy * delta
+	var ceiling: float = world.fly_ceiling if world else 8.0
+	if position.y > ceiling:
+		position.y = ceiling
+		_vy = minf(_vy, 0.0)
+	_grounded = false
+	if _ground != -INF and position.y <= _ground:
+		position.y = _ground
+		_vy = maxf(_vy, 0.0)
+		_grounded = true
+	_bubble_t += delta
+	if world and _bubble_t > (0.35 if moving or up else 1.2):
+		_bubble_t = 0.0
+		world.bubble(global_position + Vector3(0, 1.6, 0))
 
 
 ## Jetpack vertical control: hold SPACE to climb, CTRL to descend, nothing

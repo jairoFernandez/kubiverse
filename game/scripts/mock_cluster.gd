@@ -367,6 +367,48 @@ func action(req: Dictionary) -> Dictionary:
 	return {"ok": false, "error": "unknown action"}
 
 
+## What the game draws inside a pod (same shape as the bridge's /api/pod).
+func pod_detail(ns: String, pod: String) -> Dictionary:
+	var p = pods.get(ns + "/" + pod)
+	if p == null:
+		return {}
+	var wl: Dictionary = workloads.get(p._wl, {})
+	var beh: String = wl.get("behaviour", "ok")
+	var ports := []
+	for sv in services.values():
+		if sv.ns == ns and sv.app == p.owner_name:
+			for pt in sv.ports:
+				ports.append({"name": "http" if int(str(pt).get_slice("/", 0)) in [80, 8080] else "", "port": int(str(pt).get_slice("/", 0).get_slice(":", 0)), "protocol": "TCP"})
+	var ctrs := []
+	var names: Array = p.containers
+	for i in names.size():
+		var c: String = names[i]
+		var state := "running" if p.status == "Running" else ("terminated" if p.status in ["Error", "OOMKilled", "Completed"] else "waiting")
+		ctrs.append({"name": c, "image": p.images[i] if i < p.images.size() else wl.get("image", ""), "state": state,
+			"reason": "" if state == "running" else str(p.status), "message": str(p.get("message", "")), "exit_code": 137 if p.status == "OOMKilled" else (1 if p.status == "Error" else 0),
+			"ready": state == "running" and int(p.ready) > i, "started": int(Time.get_unix_time_from_system() - float(p.age)), "restarts": int(p.restarts),
+			"last_reason": "Error" if beh == "crash" and int(p.restarts) > 0 else "", "last_exit": 1 if beh == "crash" else 0, "sidecar": false,
+			"cpu_req_m": int(p.cpu_req_m) / names.size(), "cpu_lim_m": 500, "mem_req": int(p.mem_req) / names.size(), "mem_lim": 256 * 1024 * 1024,
+			"cpu_use_m": randi_range(3, 90) if state == "running" else 0, "mem_use": randi_range(20, 200) * 1024 * 1024 if state == "running" else 0,
+			"ports": ports if i == 0 else [],
+			"probes": [{"kind": "readiness", "handler": "http GET :%d/ready" % (ports[0].port if not ports.is_empty() else 8080), "period": 10, "failure": 3, "delay": 5},
+				{"kind": "liveness", "handler": "http GET :%d/healthz" % (ports[0].port if not ports.is_empty() else 8080), "period": 10, "failure": 3, "delay": 15}] if i == 0 else [],
+			"mounts": [{"volume": "config", "path": "/etc/%s" % wl.get("name", c), "read_only": true}, {"volume": "cache", "path": "/tmp", "read_only": false}],
+			"env_from": ["configmap/%s-config" % wl.get("name", c)] + (["secret/%s-db" % wl.get("name", c)] if ns in ["shop", "payments"] else []),
+			"env": 6})
+	var init := [{"name": "wait-for-db", "image": "busybox:1.36", "state": "terminated", "reason": "Completed", "message": "", "exit_code": 0,
+		"ready": false, "started": 0, "restarts": 0, "last_reason": "", "last_exit": 0, "sidecar": false, "cpu_req_m": 10, "cpu_lim_m": 0,
+		"mem_req": 16 * 1024 * 1024, "mem_lim": 0, "cpu_use_m": 0, "mem_use": 0, "ports": [], "probes": [], "mounts": [], "env_from": [], "env": 1}] if ns in ["shop", "payments"] else []
+	var evs := []
+	if p.status != "Running":
+		evs.append({"type": "Warning", "reason": "BackOff" if beh != "unschedulable" else "FailedScheduling", "message": str(p.get("message", p.status)), "count": 3 + int(p.restarts), "age": 20})
+	evs.append({"type": "Normal", "reason": "Started", "message": "Started container %s" % names[0], "count": 1, "age": int(p.age)})
+	return {"ns": ns, "name": pod, "node": p.node, "ip": p.ip, "phase": p.phase, "qos": "Burstable", "service_account": "default",
+		"age": int(p.age), "conditions": [{"type": "Ready", "status": int(p.ready) >= int(p.total)}], "init": init, "containers": ctrs,
+		"volumes": [{"name": "config", "type": "configMap", "source": "%s-config" % wl.get("name", pod)}, {"name": "cache", "type": "emptyDir", "source": ""}],
+		"events": evs, "metrics": true}
+
+
 func logs(ns: String, pod: String, container: String, previous: bool) -> String:
 	var p = pods.get(ns + "/" + pod)
 	if p == null:

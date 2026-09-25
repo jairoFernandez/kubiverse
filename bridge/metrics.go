@@ -30,6 +30,7 @@ type metricsList struct {
 		} `json:"metadata"`
 		Usage      map[string]string `json:"usage"`
 		Containers []struct {
+			Name  string            `json:"name"`
 			Usage map[string]string `json:"usage"`
 		} `json:"containers"`
 	} `json:"items"`
@@ -64,6 +65,7 @@ func (b *Bridge) pollMetrics(ctx context.Context) {
 func (b *Bridge) fetchMetrics(ctx context.Context) {
 	rc := b.cs.Discovery().RESTClient()
 	m := Metrics{Nodes: map[string]Usage{}, Pods: map[string]Usage{}}
+	perCtr := map[string]map[string]Usage{} // "ns/pod" -> container -> usage (for /api/pod)
 	c, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	raw, err := rc.Get().AbsPath("/apis/metrics.k8s.io/v1beta1/nodes").DoRaw(c)
@@ -80,18 +82,22 @@ func (b *Bridge) fetchMetrics(ctx context.Context) {
 			if json.Unmarshal(raw, &pl) == nil {
 				for _, it := range pl.Items {
 					var sum Usage
+					key := it.Metadata.Namespace + "/" + it.Metadata.Name
+					perCtr[key] = map[string]Usage{}
 					for _, ct := range it.Containers {
 						u := parseUsage(ct.Usage)
 						sum.CPUm += u.CPUm
 						sum.MemBytes += u.MemBytes
+						perCtr[key][ct.Name] = u
 					}
-					m.Pods[it.Metadata.Namespace+"/"+it.Metadata.Name] = sum
+					m.Pods[key] = sum
 				}
 			}
 		}
 	}
 	b.mu.Lock()
 	b.metrics = m
+	b.ctrUsage = perCtr
 	b.mu.Unlock()
 	b.markDirty()
 }

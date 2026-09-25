@@ -2354,6 +2354,8 @@ func _refresh_inspector() -> void:
 			var usage := _usage_lines([d], true)
 			for i in usage.size():
 				lines.insert(3 + i, usage[i])
+			if not world.swim_level:
+				buttons.append(["ENTER POD [E]", func(): level_requested.emit("pod:%s/%s" % [d.ns, d.name]), "GoButton", false, "kubectl -n %s describe pod %s" % [d.ns, d.name]])
 			buttons.append(["LOGS [L]", func(): open_logs(d), "", false, Kubectl.logs(d.ns, d.name, "", false, true)])
 			if d.get("phase", "") == "Running":
 				buttons.append(["PORT-FORWARD", func(): open_port_forward("pod", d), "", false, Kubectl.port_forward("pod", d.ns, d.name, 0, 0)])
@@ -2412,6 +2414,33 @@ func _refresh_inspector() -> void:
 				lines.append("[color=#83769c]%s[/color]" % tr("windows = pods (green ok, red failing)"))
 				lines.append("[color=#83769c]%s[/color]" % tr("roof light = worst status inside"))
 				buttons.append(["ENTER HALL [E]", func(): level_requested.emit("ns:" + d.name), "GoButton", false, "kubectl -n %s get all" % d.name])
+		"container":
+			var c: Dictionary = d
+			_insp_title.text = (tr("INIT CONTAINER %s") if c.get("init", false) else tr("CONTAINER %s")) % c.name
+			lines.append(_kv("pod", "%s/%s" % [c.ns, c.pod]))
+			lines.append(_kv("image", "[color=#83769c]%s[/color]" % c.get("image", "")))
+			lines.append(_kv("status", "[color=#%s]%s[/color] %s" % [_insp_target.label_color().to_html(false), c.get("state", ""), str(c.get("reason", ""))]))
+			if str(c.get("message", "")) != "":
+				lines.append(_kv("why", "[color=#ffec27]%s[/color]" % str(c.message).replace("[", "(")))
+			lines.append(_kv("ready", "%s   %s" % [tr("yes") if c.get("ready", false) else tr("no"), tr("%d restarts") % int(c.get("restarts", 0))]))
+			if str(c.get("last_reason", "")) != "":
+				lines.append(_kv("last run", tr("ended with %s (exit %d)") % [c.last_reason, int(c.get("last_exit", 0))]))
+			lines.append(_kv("cpu", tr("uses %s · requests %s · limit %s") % [Vox.fmt_cores(float(c.get("cpu_use_m", 0))), Vox.fmt_cores(float(c.get("cpu_req_m", 0))),
+				Vox.fmt_cores(float(c.cpu_lim_m)) if float(c.get("cpu_lim_m", 0)) > 0 else tr("none")]))
+			lines.append(_kv("memory", tr("uses %s · requests %s · limit %s") % [Vox.fmt_mib(float(c.get("mem_use", 0))), Vox.fmt_mib(float(c.get("mem_req", 0))),
+				Vox.fmt_mib(float(c.mem_lim)) if float(c.get("mem_lim", 0)) > 0 else tr("none")]))
+			for pt in (c.get("ports", []) if c.get("ports") != null else []):
+				lines.append(_kv("port", "%d/%s %s" % [int(pt.port), pt.get("protocol", "TCP"), pt.get("name", "")]))
+			for pr in (c.get("probes", []) if c.get("probes") != null else []):
+				lines.append(_kv(str(pr.kind), "%s  [color=#83769c]%s[/color]" % [pr.handler, tr("every %ds, %d failures, after %ds") % [int(pr.get("period", 10)), int(pr.get("failure", 3)), int(pr.get("delay", 0))]]))
+			for mt in (c.get("mounts", []) if c.get("mounts") != null else []):
+				lines.append(_kv("mount", "%s -> %s%s" % [mt.volume, mt.path, " (ro)" if mt.get("read_only", false) else ""]))
+			var ef: Array = c.get("env_from", []) if c.get("env_from") != null else []
+			lines.append(_kv("env", tr("%d variables") % int(c.get("env", 0)) + ("  +  " + ", ".join(ef) if not ef.is_empty() else "")))
+			var pod_d := {"ns": c.ns, "name": c.pod, "containers": [c.name], "status": c.get("reason", "")}
+			buttons.append(["LOGS [L]", func():
+				open_logs(pod_d), "", false, "kubectl -n %s logs %s -c %s --tail=200" % [c.ns, c.pod, c.name]])
+			buttons.append(["EDIT POD YAML", func(): open_editor("Pod", c.ns, c.pod), "", false, "kubectl -n %s edit pod %s" % [c.ns, c.pod]])
 		"home":
 			_insp_title.text = tr("YOUR PC  127.0.0.1")
 			lines.append("[color=#83769c]%s[/color]" % tr("The machine where the bridge runs. Port-forwards are glass tubes from here straight to a pod or Service: private doors that skip the Ingress. To open one: click a pod or a loading dock and PORT-FORWARD (or type 'port-forward svc/<name> 8080:80 -n <ns>' in the terminal)."))

@@ -178,6 +178,17 @@ The TERMINAL panel (`/` to type) runs **real kubectl** on the bridge host, again
 
 Safety limits: no shell is used (`;`, `|`, `&`, `$`, backticks and redirections are rejected). Also not allowed: interactive or never-ending commands (`exec`, `edit`, `-w`, `logs -f`; `port-forward` becomes a glass tube kept by the bridge, see above), switching cluster or credentials (`--context`, `--kubeconfig`, `--token`...), reading local files (`-f`, `-k`, `cp`) and `config`. With `--readonly` only read verbs are accepted.
 
+## Inside a pod: the fish tank
+
+Click a robot and **ENTER POD [E]** to swim inside it. The pod is a **fish tank**: the water is its network, shared by all its containers (they reach each other on `localhost`). SPACE swims up, CTRL down; let go and you sink back to the sand. The yellow hatch takes you back to the hall, next to the pod.
+
+- **Containers** are glass capsules: the inner column is the app (coloured by its image), the **water level inside is its memory** against the limit, the **propeller spins with its CPU**, the lamp is its state (green running and ready, yellow waiting / not ready, red crashing), a **ring pulses at its probe period** (red when not ready) and there's one red chip per restart. **Init containers** are small sealed capsules at the back; sidecars are full size.
+- **Ports** are valves on the back glass, **volumes** sit along the right side (ConfigMap scrolls, Secret chests that never show their contents, PVC barrels, emptyDir jars) with pipes on the sand to the containers that mount them.
+- **Bubbles carry the live logs** of each running container (the last lines, every 3 s); busy containers breathe out more bubbles. The pod's recent **events** float near the surface.
+- Click a capsule: image, state and last exit reason, CPU and memory use against requests and limits, ports, probes, mounts, env (counts and sources only), and its logs.
+
+The bridge serves it at `GET /api/pod?ns=&name=` (per-container usage comes from metrics-server when installed).
+
 ## Port-forward: glass tubes
 
 A port-forward is a private tunnel from your machine straight to a pod or a Service, skipping the Ingress. In Kubiverse it's a **pneumatic glass tube**: it starts on the roof of **YOUR PC** (a cabin in the south-east corner of the plant, 127.0.0.1) and lands on the hall of its namespace; inside that hall it comes up through a floor hatch next to the pod or loading dock. **Glowing packets move with the real traffic**: cyan = answers coming to you, yellow = your requests going in. Its sign shows `localhost:8080 → shop/frontend:80` and the bytes and connections; the glass turns red if it loses its pod.
@@ -401,6 +412,7 @@ The game performs **real** actions with your kubeconfig's credentials.
 | GET | `/api/logs?ns=&pod=&container=&tail=&previous=1` | container logs |
 | POST | `/api/kubectl` | `{"line": "get pods -A"}` → `{"ok", "exit_code", "output"}` (real kubectl with the restrictions above) |
 | POST | `/api/scenario` | `{"name": "complex", "remove": false}`: applies (or deletes) a bundled sample scenario with kubectl |
+| GET | `/api/pod?ns=&name=` | everything inside a pod: containers and init containers (state, resources, usage, probes, ports, mounts), volumes and recent events |
 | GET · POST · DELETE | `/api/portforward` | list · open `{"kind": "pod"\|"service", "ns", "name", "port", "local_port"}` · close `?id=`. Traffic counters arrive on the WebSocket as `{"type":"forwards"}` every second |
 | POST | `/api/action` | `{"action": "delete_pod" \| "scale" \| "restart" \| "cordon" \| "uncordon" \| "create_deployment" \| "delete_workload", "kind", "ns", "name", "replicas", "image", "service"}` |
 

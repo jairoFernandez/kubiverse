@@ -57,6 +57,12 @@ var home: LocalHut                     # plant: "your PC", where port-forward tu
 var tunnels := {}                      # forward id -> PortTunnel
 var forwards: Array = []               # K8s.forwards (port-forwards open on the bridge)
 var _home_pos := Vector3.ZERO
+var swim_level := false                   # inside a pod: you swim (no gravity, slow)
+var pod_detail := {}                      # K8s.get_pod() of the pod we are in
+var capsules := {}                        # container name -> PodCapsule
+var _pod_labels: Array = []               # static labels inside the tank (ports, volumes, IP)
+var _bubbles: Array = []                  # [{node, vy, life, text?}] rising bubbles (log lines too)
+var _bubble_t := 0.0
 var districts: Array = []                 # plant: [{district, rect, title, sub, color, ground}]
 var gate: IngressGate                     # hall: row of pods without a line {pos, count, done, owners}
 
@@ -106,7 +112,14 @@ func ns_visible(ns: String) -> bool:
 
 
 func current_ns() -> String:
+	if level.begins_with("pod:"):
+		return level.substr(4).get_slice("/", 0)
 	return level.substr(3) if level.begins_with("ns:") else ""
+
+
+## "ns/name" of the pod we are inside ("" elsewhere).
+func pod_key() -> String:
+	return level.substr(4) if level.begins_with("pod:") else ""
 
 
 func level_title() -> String:
@@ -114,6 +127,8 @@ func level_title() -> String:
 		return tr("PLANT")
 	if level == "power":
 		return tr("ENERGY ROOM (nodes)")
+	if level.begins_with("pod:"):
+		return tr("HALL %s") % current_ns() + "  >  " + tr("POD %s") % pod_key().get_slice("/", 1)
 	return tr("HALL %s") % current_ns()
 
 
@@ -128,6 +143,7 @@ func all_entities() -> Array:
 	if home and is_instance_valid(home):
 		out.append(home)
 	out.append_array(tunnels.values())
+	out.append_array(capsules.values())
 	for p in pods.values():
 		if not p.dying:
 			out.append(p)
@@ -139,6 +155,7 @@ func find_entity(kind: String, key: String) -> Entity:
 		"gate": return gate if gate and is_instance_valid(gate) else null
 		"home": return home if home and is_instance_valid(home) else null
 		"forward": return tunnels.get(key)
+		"container": return capsules.get(key.get_slice("/", 2))
 		"namespace": return buildings.get(key)
 		"node": return islands.get(key)
 		"pod": return pods.get(key)
@@ -161,6 +178,12 @@ func set_level(l: String) -> void:
 	gate = null
 	home = null
 	tunnels.clear()
+	capsules.clear()
+	for b in _bubbles:
+		b.node.queue_free()
+	_bubbles.clear()
+	if not l.begins_with("pod:"):
+		pod_detail = {}
 	buildings.clear()
 	lines.clear()
 	services.clear()
@@ -175,10 +198,13 @@ func set_level(l: String) -> void:
 
 func apply_state(s: Dictionary) -> void:
 	state = s
+	swim_level = level.begins_with("pod:")
 	if level == "plant":
 		_apply_plant(s)
 	elif level == "power":
 		_apply_power(s)
+	elif level.begins_with("pod:"):
+		_apply_pod()
 	else:
 		_apply_hall(s, current_ns())
 	_apply_tunnels()
@@ -461,6 +487,189 @@ func _apply_plant(s: Dictionary) -> void:
 	fly_ceiling = 16.0
 	# The city is centred on the gate (x = 0): make it as wide as the plant.
 	_apply_internet(s, cell_w, 2.0 * maxf(absf(grid_l), absf(grid_r)), grid_d)
+
+
+## Inside a pod: its detail arrived (or was refreshed).
+func set_pod_detail(d: Dictionary) -> void:
+	pod_detail = d
+	if level.begins_with("pod:"):
+		_apply_pod()
+
+
+const TANK_TOP := 8.8
+
+## The pod as a fish tank. The water is the pod's shared network (every
+## container talks to the others on localhost); capsules are containers,
+## valves on the back glass are ports, chests and barrels are volumes.
+func _apply_pod() -> void:
+	var ns := current_ns()
+	var d := pod_detail
+	var ctrs: Array = d.get("containers", []) if d.get("containers") != null else []
+	var inits: Array = d.get("init", []) if d.get("init") != null else []
+	var vols: Array = d.get("volumes", []) if d.get("volumes") != null else []
+	var n := maxi(1, ctrs.size())
+	var width := maxf(22.0, n * 6.5 + 10.0)
+	var fl := Rect2(-width * 0.5, -10.0, width, 17.0)
+	var cpos := func(i: int) -> Vector3: return Vector3((i - (n - 1) * 0.5) * 6.5, 0, -2.5)
+	var ipos := func(i: int) -> Vector3: return Vector3(fl.position.x + 3.0 + i * 3.4, 0, -7.5)
+	var vpos := {}
+	for i in vols.size():
+		vpos[vols[i].name] = Vector3(fl.end.x - 3.0, 0, -7.5 + i * 3.2)
+	if _begin_static("pod|%s|%s|%s|%s" % [pod_key(), ctrs.map(func(c): return c.name), inits.size(), vols.map(func(v): return v.name)]):
+		_pod_labels.clear()
+		_add_walk(fl)
+		var c := fl.get_center()
+		# Sand, pebbles and swaying weed.
+		Vox.box(_static, Vector3(fl.size.x, 0.5, fl.size.y), Vector3(c.x, -0.25, c.y), Color("c9ad7c"))
+		var rng := Vox.rng_for(pod_key())
+		for i in int(fl.size.x * 0.8):
+			var q := Vector3(rng.randf_range(fl.position.x + 1, fl.end.x - 1), 0.05, rng.randf_range(fl.position.y + 1, fl.end.y - 1))
+			Vox.box(_static, Vector3(0.4, 0.15, 0.4), q, [Color("a88b5c"), Color("8f9aa8"), Color("d8c49a")][i % 3], 0.0, false)
+		for i in 10:
+			var q := Vector3(rng.randf_range(fl.position.x + 1, fl.end.x - 1), 0, fl.position.y + rng.randf_range(0.5, 2.5))
+			for k in rng.randi_range(3, 6):
+				Vox.box(_static, Vector3(0.25, 0.7, 0.25), q + Vector3(sin(k * 0.9) * 0.2, 0.35 + k * 0.7, 0), Vox.FOREST.lightened(k * 0.05), 0.0, false)
+		# Glass walls (back and left, low-alpha) with a silver frame, and the water.
+		var glass := StandardMaterial3D.new()
+		glass.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		glass.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		glass.albedo_color = Color(0.6, 0.85, 1.0, 0.16)
+		glass.cull_mode = BaseMaterial3D.CULL_DISABLED
+		for w in [[Vector3(fl.size.x, TANK_TOP, 0.2), Vector3(c.x, TANK_TOP * 0.5, fl.position.y)], [Vector3(0.2, TANK_TOP, fl.size.y), Vector3(fl.position.x, TANK_TOP * 0.5, c.y)]]:
+			var m := Vox.box(_static, w[0], w[1], Color.WHITE, 0.0, false)
+			m.material_override = glass
+		for x in [fl.position.x, fl.end.x]:
+			for z in [fl.position.y, fl.end.y]:
+				Vox.box(_static, Vector3(0.4, TANK_TOP + 0.4, 0.4), Vector3(x, TANK_TOP * 0.5, z), Vox.SILVER)
+		for z in [fl.position.y, fl.end.y]:
+			Vox.box(_static, Vector3(fl.size.x + 0.4, 0.35, 0.4), Vector3(c.x, TANK_TOP + 0.2, z), Vox.SILVER)
+		var water := StandardMaterial3D.new()
+		water.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		water.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		water.albedo_color = Color(0.16, 0.5, 0.9, 0.2)
+		water.cull_mode = BaseMaterial3D.CULL_DISABLED
+		var wv := Vox.box(_static, Vector3(fl.size.x, TANK_TOP, fl.size.y), Vector3(c.x, TANK_TOP * 0.5, c.y), Color.WHITE, 0.0, false)
+		wv.material_override = water
+		wv.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var surf := Vox.box(_static, Vector3(fl.size.x, 0.1, fl.size.y), Vector3(c.x, TANK_TOP, c.y), Color.WHITE, 0.0, false)
+		var sm := water.duplicate() as StandardMaterial3D
+		sm.albedo_color = Color(0.55, 0.85, 1.0, 0.3)
+		surf.material_override = sm
+		# The way out: a hatch in the sand back to the hall.
+		var exit_pos := Vector3(fl.position.x + 2.5, 0, fl.end.y - 2.2)
+		_add_door(exit_pos, "ns:" + ns, "swim out to hall %s|" + ns, Vox.YELLOW)
+		Vox.box(_static, Vector3(2.2, 0.2, 2.2), exit_pos + Vector3(0, 0.1, 0), Vox.SLATE)
+		Vox.box(_static, Vector3(1.6, 0.22, 1.6), exit_pos + Vector3(0, 0.12, 0), Vox.YELLOW.darkened(0.4), 0.8, false)
+		spawn = Vector3(c.x + 1.5, 0, c.y + 3.0)  # in the middle, in front of the capsules
+		# Ports: valves on the back glass, above the container that opens them.
+		for i in ctrs.size():
+			var ports: Array = ctrs[i].get("ports", []) if ctrs[i].get("ports") != null else []
+			for k in ports.size():
+				var at: Vector3 = cpos.call(i) + Vector3(-1.2 + k * 1.2, 5.6 + k * 0.1, 0)
+				at.z = fl.position.y + 0.35
+				Vox.box(_static, Vector3(0.9, 0.9, 0.5), at, Vox.BLUE, 1.2)
+				Vox.box(_static, Vector3(0.4, 0.4, 0.8), at + Vector3(0, 0, 0.5), Vox.SILVER)
+				var pt: Dictionary = ports[k]
+				_pod_labels.append({"pos": at + Vector3(0, 1.0, 0), "text": "%d/%s" % [int(pt.port), pt.get("protocol", "TCP")],
+					"sub": tr("port %s of %s") % [pt.get("name", "") if str(pt.get("name", "")) != "" else "-", ctrs[i].name], "color": Vox.BLUE, "big": false})
+		# Volumes along the right side; pipes on the sand to the containers that mount them.
+		for v in vols:
+			var at: Vector3 = vpos[v.name]
+			match str(v.type):
+				"secret":
+					Vox.box(_static, Vector3(1.6, 1.0, 1.1), at + Vector3(0, 0.5, 0), Vox.BROWN)
+					Vox.box(_static, Vector3(1.7, 0.2, 1.2), at + Vector3(0, 1.0, 0), Vox.YELLOW, 0.5)
+					Vox.box(_static, Vector3(0.35, 0.4, 0.1), at + Vector3(0, 0.65, 0.58), Vox.RED, 1.5, false)
+				"configMap":
+					Vox.box(_static, Vector3(1.4, 0.6, 0.6), at + Vector3(0, 0.3, 0), Vox.PEACH)
+					for x in [-0.8, 0.8]:
+						Vox.box(_static, Vector3(0.2, 0.8, 0.8), at + Vector3(x, 0.4, 0), Vox.BROWN)
+				"pvc":
+					Vox.box(_static, Vector3(1.2, 1.6, 1.2), at + Vector3(0, 0.8, 0), Vox.BLUE.darkened(0.3))
+					for y in [0.4, 1.2]:
+						Vox.box(_static, Vector3(1.3, 0.15, 1.3), at + Vector3(0, y, 0), Vox.SLATE)
+				_:
+					Vox.box(_static, Vector3(1.0, 1.1, 1.0), at + Vector3(0, 0.55, 0), Color("a8e6ff"), 0.6, false)
+			var vt: String = {"configMap": "ConfigMap", "secret": "Secret", "pvc": "PVC", "emptyDir": "emptyDir", "projected": "projected", "hostPath": "hostPath"}.get(str(v.type), str(v.type))
+			_pod_labels.append({"pos": at + Vector3(0, 2.0, 0), "text": "%s %s" % [vt, v.name],
+				"sub": str(v.get("source", "")) + ("  " + tr("(contents never shown)") if v.type == "secret" else ""), "color": Vox.PEACH if v.type != "secret" else Vox.RED, "big": false})
+			for i in ctrs.size():
+				var mounts: Array = ctrs[i].get("mounts", []) if ctrs[i].get("mounts") != null else []
+				for mt in mounts:
+					if mt.volume == v.name:
+						_pipe_on_sand(cpos.call(i) + Vector3(1.5, 0, 1.0 + (vols.find(v) % 3) * 0.3), at, Vox.PEACH if v.type != "secret" else Vox.RED)
+		_pod_labels.append({"pos": Vector3(c.x, TANK_TOP + 1.2, fl.end.y), "text": tr("POD %s") % pod_key().get_slice("/", 1),
+			"sub": tr("IP %s · node %s · QoS %s · the water is its network: containers reach each other on localhost") % [d.get("ip", "?"), d.get("node", "?"), d.get("qos", "?")],
+			"color": Vox.ns_color(ns), "big": true})
+	# Containers (entities: refreshed with every detail update).
+	var seen := {}
+	for list in [[ctrs, false], [inits, true]]:
+		for i in list[0].size():
+			var cd: Dictionary = list[0][i]
+			var cn: String = ("init:" if list[1] else "") + cd.name
+			seen[cn] = true
+			var cap: PodCapsule = capsules.get(cn)
+			if cap == null:
+				cap = PodCapsule.new()
+				cap.world = self
+				_entities.add_child(cap)
+				capsules[cn] = cap
+			cap.position = ipos.call(i) if list[1] else cpos.call(i)
+			cap.target = cap.position
+			cap.setup(cd, ns, pod_key().get_slice("/", 1), list[1])
+	for k in capsules.keys():
+		if not seen.has(k):
+			capsules[k].queue_free()
+			capsules.erase(k)
+	blockers.clear()
+	for cap in capsules.values():
+		var r: float = 1.5 * cap.scale.x
+		var fr := Rect2(cap.position.x - r, cap.position.z - r, r * 2.0, r * 2.0)
+		blockers.append(fr)
+		blocker_heights[fr] = (1.6 + PodCapsule.H) * cap.scale.x  # swim over the lids
+	block_h = 5.0
+	fly_ceiling = TANK_TOP - 1.4
+
+
+func _pipe_on_sand(a: Vector3, b: Vector3, col: Color) -> void:
+	var mid := Vector3(b.x, 0, a.z)
+	for seg in [[a, mid], [mid, b]]:
+		var p: Vector3 = seg[0]
+		var q: Vector3 = seg[1]
+		var len := p.distance_to(q)
+		if len < 0.1:
+			continue
+		var size := Vector3(len, 0.22, 0.22) if absf(q.x - p.x) > absf(q.z - p.z) else Vector3(0.22, 0.22, len)
+		Vox.box(_static, size, (p + q) * 0.5 + Vector3(0, 0.12, 0), col.darkened(0.2), 0.3)
+
+
+## A bubble rising from a container; with text it is a log line.
+func bubble(from: Vector3, text := "") -> void:
+	if _bubbles.size() > 60:
+		return
+	var sz := 0.55 if text != "" else randf_range(0.14, 0.3)
+	var b := Vox.box(_fx_root, Vector3.ONE * sz, from, Color(0.85, 0.97, 1.0), 1.5 if text != "" else 0.8, false)
+	_bubbles.append({"node": b, "vy": randf_range(1.2, 1.8) if text == "" else 0.9, "life": 0.0, "text": text, "x0": from.x})
+
+
+func _swim_fx(delta: float) -> void:
+	_bubble_t += delta
+	for i in range(_bubbles.size() - 1, -1, -1):
+		var b: Dictionary = _bubbles[i]
+		b.life += delta
+		var n: Node3D = b.node
+		n.position.y += b.vy * delta
+		n.position.x = b.x0 + sin(b.life * 3.0) * 0.25
+		if n.position.y > TANK_TOP - 0.2 or b.life > 9.0:
+			n.queue_free()
+			_bubbles.remove_at(i)
+	if _bubble_t > 0.25:
+		_bubble_t = 0.0
+		for cap in capsules.values():
+			# Busy containers breathe out more bubbles.
+			var busy: float = clampf(float(cap.data.get("cpu_use_m", 0)) / 200.0, 0.05, 1.0) if cap.state() != "done" else 0.0
+			if randf() < busy * 0.6:
+				bubble(cap.top() + Vector3(randf_range(-0.4, 0.4), 0, randf_range(-0.4, 0.4)))
 
 
 ## Port-forwards changed (or their traffic counters).
@@ -1374,6 +1583,8 @@ func zap(from: Vector3, to: Vector3) -> void:
 
 func _process(delta: float) -> void:
 	_t += delta
+	if swim_level:
+		_swim_fx(delta)
 	for m in movers:
 		var y: float = m.base + sin(_t * m.speed) * m.amp
 		walk_heights[m.idx] = y
@@ -1531,6 +1742,19 @@ func labels(player_pos: Vector3) -> Array:
 		out.append({"pos": dk.anchor(), "text": dk.label_text(), "sub": _hint(dk, dk.label_sub()), "color": dk.label_color(), "big": false, "entity": dk})
 	for t in tunnels.values():
 		out.append({"pos": t.anchor(), "text": t.label_text(), "sub": _hint(t, t.label_sub()), "color": t.label_color(), "big": false, "entity": t})
+	if swim_level:
+		for cap in capsules.values():
+			out.append({"pos": cap.anchor(), "text": cap.label_text(), "sub": _hint(cap, cap.label_sub()), "color": cap.label_color(), "big": true, "entity": cap})
+		out.append_array(_pod_labels)
+		for b in _bubbles:
+			if b.text != "":
+				out.append({"pos": b.node.position + Vector3(0, 0.6, 0), "text": b.text, "sub": "", "color": Color("c8f0ff"), "big": false, "small": true})
+		var evs: Array = pod_detail.get("events", []) if pod_detail.get("events") != null else []
+		for i in mini(evs.size(), 3):
+			var e: Dictionary = evs[i]
+			out.append({"pos": Vector3(-6.0 + i * 6.0, TANK_TOP - 1.0 + sin(_t + i) * 0.2, 5.0),
+				"text": "%s %s x%d" % ["⚠" if e.type == "Warning" else "✉", e.reason, int(e.get("count", 1))],
+				"sub": str(e.message).left(90), "color": Vox.RED if e.type == "Warning" else Vox.SILVER, "big": false})
 	if home and is_instance_valid(home):
 		out.append({"pos": home.anchor(), "text": home.label_text(), "sub": _hint(home, home.label_sub()), "color": home.label_color(), "big": false, "entity": home})
 	var near := []

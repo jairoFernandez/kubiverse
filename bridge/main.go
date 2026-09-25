@@ -47,6 +47,7 @@ type Bridge struct {
 	kubeconfigPath string             // explicit --kubeconfig, passed on to kubectl
 	stop           context.CancelFunc // stops this cluster's informers
 	metrics        Metrics
+	ctrUsage       map[string]map[string]Usage // "ns/pod" -> container -> usage
 	restCfg        *rest.Config // for port-forwards (SPDY)
 	fw             forwards
 
@@ -128,6 +129,7 @@ func main() {
 	mux.HandleFunc("POST /api/kubectl", hub.cluster((*Bridge).handleKubectl))
 	mux.HandleFunc("POST /api/scenario", hub.cluster((*Bridge).handleScenario))
 	mux.HandleFunc("/api/portforward", hub.cluster((*Bridge).handleForwards))
+	mux.HandleFunc("GET /api/pod", hub.cluster((*Bridge).handlePod))
 	mux.HandleFunc("GET /api/manifest", hub.cluster((*Bridge).handleManifestGet))
 	mux.HandleFunc("POST /api/manifest", hub.cluster((*Bridge).handleManifestPut))
 	mux.HandleFunc("GET /api/assistant", hub.auth(hub.handleAIStatus))

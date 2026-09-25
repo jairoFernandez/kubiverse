@@ -105,6 +105,13 @@ static func for_view(kind: String, d: Dictionary) -> Array:
 				["its pods", "kubectl -n %s get pods -o wide" % n],
 				["what happened lately", "kubectl -n %s get events --sort-by=.lastTimestamp" % n],
 			]
+		"container":
+			return [
+				["this container's logs", "kubectl %slogs %s -c %s --tail=200" % [_ns(ns), d.get("pod", ""), n]],
+				["its previous run", "kubectl %slogs %s -c %s --previous" % [_ns(ns), d.get("pod", ""), n]],
+				["state, probes and events", "kubectl %sdescribe pod %s" % [_ns(ns), d.get("pod", "")]],
+				["a shell inside it", "kubectl %sexec -it %s -c %s -- sh" % [_ns(ns), d.get("pod", ""), n]],
+			]
 		"home":
 			var out := []
 			for f in d.get("forwards", []):
