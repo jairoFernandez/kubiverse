@@ -51,7 +51,17 @@ var _tops_frame := -1
 var limbo_center := Vector3.ZERO
 var workshop := {}
 const FINISHED_SHOWN := 8
+# Big clusters: animated robots cost frames. Past these, the rest of the
+# pods (the healthy ones; broken pods are always drawn first) become a
+# crowd: a pile with "+N pods" on it. Search/goto pins a pod to show it.
+const BOTS_PER_NODE := 40
+const BOTS_PER_LINE := 24
+const BOTS_LOOSE := 30
+const BOTS_LIMBO := 36
+const CROWD_ORDER := {"crash": 0, "pull": 0, "failed": 1, "pending": 2, "warn": 2, "term": 3, "ok": 4, "done": 5}
 var _archive: Node3D                # finished pods drawn per hall (the rest are archived)
+var _crowds: Array = []              # {node, pos, text, color}: pods not drawn one by one
+var pinned := {}                     # "ns/name" of pods to always draw (the player looked for them)
 var internet: InternetCity             # plant: the Internet city (Ingress, LoadBalancers)
 var home: LocalHut                     # plant: "your PC", where port-forward tubes start
 var tunnels := {}                      # forward id -> PortTunnel
@@ -114,8 +124,27 @@ func _ready() -> void:
 	add_child(_rim)
 
 
+## Big clusters: only these namespaces are drawn (globs: "team-*"); empty = all.
+var ns_filter := PackedStringArray()
+
 func ns_visible(ns: String) -> bool:
-	return not (hide_system and ns in SYSTEM_NS)
+	if hide_system and ns in SYSTEM_NS:
+		return false
+	if ns_filter.is_empty():
+		return true
+	for pat in ns_filter:
+		# "team-*" is a glob; a plain word matches any namespace containing it.
+		if (ns.match(pat) if ("*" in pat or "?" in pat) else ns.contains(pat)):
+			return true
+	return false
+
+
+## "team-*, shop" -> the filter (blank = every namespace).
+static func parse_ns_filter(text: String) -> PackedStringArray:
+	var out := PackedStringArray()
+	for part in text.replace(" ", ",").split(",", false):
+		out.append(part.strip_edges().to_lower())
+	return out
 
 
 func current_ns() -> String:
@@ -184,6 +213,7 @@ func set_level(l: String) -> void:
 	level = l
 	selected = null
 	hovered = null
+	_crowds.clear()
 	for c in _entities.get_children():
 		c.queue_free()
 	if internet:
@@ -1087,6 +1117,15 @@ func _apply_hall(s: Dictionary, ns: String) -> void:
 			owned[k].append(p)
 		else:
 			loose.append(p)
+	_clear_crowds()
+	var crowd_lines := {}   # line key -> pods not drawn one by one
+	for k in owned:
+		var pick := _crowd_pick(owned[k], BOTS_PER_LINE)
+		owned[k] = pick[0]
+		if pick[1] > 0:
+			crowd_lines[k] = pick[1]
+	var loose_pick := _crowd_pick(loose, BOTS_LOOSE)
+	loose = loose_pick[0]
 	var seen := {}
 	var max_len := 8.0
 	for i in wls.size():
@@ -1099,7 +1138,7 @@ func _apply_hall(s: Dictionary, ns: String) -> void:
 			line.world = self
 			_entities.add_child(line)
 			lines[k] = line
-		line.update_data(w, owned.get(k, []).size())
+		line.update_data(w, owned.get(k, []).size() + (1 if crowd_lines.has(k) else 0))
 		line.target = Vector3(0, 0, -i * LINE_GAP)
 		if line.position == Vector3.ZERO:
 			line.position = line.target
@@ -1149,8 +1188,12 @@ func _apply_hall(s: Dictionary, ns: String) -> void:
 		list.sort_custom(func(a, b): return a.name < b.name)
 		for i in list.size():
 			_place_pod(list[i], lines[k].station_position(i), pseen)
+	for k in crowd_lines:
+		_add_crowd(lines[k].station_position(owned[k].size()), crowd_lines[k])
 	for i in loose.size():
 		_place_pod(loose[i], Vector3(2.0 + i * 1.8, 0, loose_z + 1.2), pseen)
+	if loose_pick[1] > 0:
+		_add_crowd(Vector3(2.0 + loose.size() * 1.8, 0, loose_z + 2.6), loose_pick[1])
 	# The archive: a pile of boxes standing for the finished pods not drawn.
 	if _archive and is_instance_valid(_archive):
 		_archive.queue_free()
@@ -1239,21 +1282,30 @@ func _apply_power(s: Dictionary) -> void:
 	var req := {}   # node -> [cpu_m, mem] requested by every pod on it
 	var show_all := _show_finished()
 	var finished_seen := {}
+	var by_node := {}   # node ("" = not scheduled) -> the pods to draw there
 	for p in s.pods:
-		if p.get("node", "") == "":
-			continue
 		if ns_visible(p.ns):
-			# Size the island for the robots actually drawn: hidden finished
-			# pods (all but 2 per node) must not reserve room.
 			var hidden := false
 			if not show_all and PodBot.categorize(p) == "done":
 				finished_seen[p.node] = finished_seen.get(p.node, 0) + 1
 				hidden = finished_seen[p.node] > 2
 			if not hidden:
-				per_node[p.node] = per_node.get(p.node, 0) + 1
+				by_node.get_or_add(str(p.get("node", "")), []).append(p)
+		if p.get("node", "") == "":
+			continue
 		if not p.get("deleting", false) and PodBot.categorize(p) != "done":
 			var r: Array = req.get(p.node, [0.0, 0.0])
 			req[p.node] = [r[0] + float(p.get("cpu_req_m", 0)), r[1] + float(p.get("mem_req", 0))]
+	# Size the islands for the robots actually drawn (and the crowd, if any).
+	var crowd_of := {}   # node -> pods not drawn one by one
+	for nn in by_node:
+		var pick := _crowd_pick(by_node[nn], BOTS_LIMBO if nn == "" else BOTS_PER_NODE)
+		by_node[nn] = pick[0]
+		if pick[1] > 0:
+			crowd_of[nn] = pick[1]
+		if nn != "":
+			per_node[nn] = pick[0].size() + (4 if pick[1] > 0 else 0)
+	_clear_crowds()
 	var seen := {}
 	for n in s.nodes:
 		seen[n.name] = true
@@ -1383,15 +1435,16 @@ func _apply_power(s: Dictionary) -> void:
 			var sz := Vector3(cr.randf_range(2.0, 3.4), cr.randf_range(0.6, 1.0), cr.randf_range(1.6, 2.6))
 			Vox.box(cloud, sz, limbo_center + Vector3(-4.0 + i * 1.0, -0.4 - cr.randf() * 0.3, cr.randf_range(-1.0, 1.0)), Vox.WHITE, 0.3, false)
 	var pseen := {}
-	var finished_per_node := {}
-	for d in s.pods:
-		if not ns_visible(d.ns):
-			continue
-		if not show_all and PodBot.categorize(d) == "done":
-			var c: int = finished_per_node.get(d.node, 0)
-			if c >= 2:
-				continue
-			finished_per_node[d.node] = c + 1
+	var drawn: Array = []
+	for nn in by_node:
+		drawn.append_array(by_node[nn])
+	for nn in crowd_of:
+		if nn == "":
+			_add_crowd(limbo_center + Vector3(-5.5, 0, 0), crowd_of[nn])
+		elif islands.has(nn):
+			var isl: NodeIsland = islands[nn]
+			_add_crowd(isl.target + Vector3(isl.size * 0.3, 0, isl.size * 0.3), crowd_of[nn])
+	for d in drawn:
 		var k: String = d.ns + "/" + d.name
 		var prev: PodBot = pods.get(k)
 		var old := prev.node_name if prev else ""
@@ -1968,8 +2021,49 @@ func _hint(e: Entity, sub: String) -> String:
 
 
 ## Label candidates for the 2D overlay: [{pos, text, sub, color, big, small?}]
+## The pods to draw one by one (pinned, then broken, then by name) and how
+## many are left for the crowd.
+func _crowd_pick(list: Array, cap: int) -> Array:
+	if list.size() <= cap:
+		return [list, 0]
+	# Buckets instead of a sort: the list already comes in name order.
+	var buckets: Array = [[], [], [], [], [], [], []]
+	for p in list:
+		if pinned.has(p.ns + "/" + p.name):
+			buckets[0].append(p)
+		else:
+			buckets[1 + int(CROWD_ORDER.get(PodBot.categorize(p), 4))].append(p)
+	var out: Array = []
+	for bk in buckets:
+		out.append_array(bk)
+		if out.size() >= cap:
+			break
+	return [out.slice(0, cap), list.size() - cap]
+
+
+func _clear_crowds() -> void:
+	for c in _crowds:
+		if is_instance_valid(c.node):
+			c.node.queue_free()
+	_crowds.clear()
+
+
+## A pile of little pod boxes standing for n healthy pods not drawn.
+func _add_crowd(pos: Vector3, n: int) -> void:
+	var node := Node3D.new()
+	_entities.add_child(node)
+	node.position = pos
+	var boxes := clampi(ceili(log(float(n) + 1.0) / log(2.0)), 1, 10)
+	for i in boxes:
+		var b := Vox.box(node, Vector3(0.55, 0.55, 0.55), Vector3((i % 3) * 0.6 - 0.6, 0.28 + (i / 3) * 0.56, ((i / 3) % 2) * 0.25), Vox.GREEN.darkened(0.35 + (i % 2) * 0.1))
+		b.rotation.y = i * 0.41
+	_crowds.append({"node": node, "pos": pos + Vector3(0, 0.9 + ceilf(boxes / 3.0) * 0.56, 0), "text": "+%d pods" % n, "color": Vox.GREEN})
+
+
 func labels(player_pos: Vector3) -> Array:
 	var out := []
+	for c in _crowds:
+		out.append({"pos": c.pos, "text": c.text, "sub": "", "color": c.color, "big": false, "small": true})
 	for b in buildings.values():
 		out.append({"pos": b.anchor(), "text": b.label_text(), "sub": _hint(b, b.label_sub()), "color": b.label_color(), "big": true, "entity": b})
 	for isl in islands.values():

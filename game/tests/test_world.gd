@@ -23,6 +23,21 @@ func _init() -> void:
 		sc.feed(SecretCode.token(k))
 	assert(sc.armed() and sc.typed() == "ST", sc.typed())
 	assert(not sc.feed(SecretCode.token(KEY_X)) and sc.pos == 0, "a wrong letter resets it")
+	# Global search: words, filters and "bad"; an ingress host goes to its service.
+	var cs_state := {"namespaces": [{"name": "shop"}, {"name": "payments"}],
+		"nodes": [{"name": "worker-a", "ready": true, "roles": []}],
+		"pods": [{"ns": "shop", "name": "api-1", "status": "Running", "ready": 1, "total": 1, "ip": "10.244.1.7", "node": "worker-a", "images": ["shop/api:2"]},
+			{"ns": "payments", "name": "ledger-1", "status": "CrashLoopBackOff", "ready": 0, "total": 1, "ip": "10.244.2.9", "node": "worker-a", "images": ["redis:7"]}],
+		"workloads": [], "services": [{"ns": "shop", "name": "api", "type": "ClusterIP", "cluster_ip": "10.96.0.12", "ports": ["80/TCP"], "ready": 1, "selector": {"app": "api"}}],
+		"ingresses": [{"ns": "shop", "name": "web", "rules": [{"host": "shop.example.com", "path": "/", "service": "api", "port": "80"}]}]}
+	var found := ClusterSearch.find(cs_state, "api")
+	assert(found.size() >= 2 and found[0].title == "shop/api" and found[0].kind == "service", str(found))
+	assert(ClusterSearch.find(cs_state, "10.244.2")[0].key == "payments/ledger-1", "by IP")
+	assert(ClusterSearch.find(cs_state, "bad").size() == 1, "only what's broken")
+	assert(ClusterSearch.find(cs_state, "image:redis kind:pod").size() == 1, "filters")
+	var host: Dictionary = ClusterSearch.find(cs_state, "shop.example")[0]
+	assert(host.kind == "service" and host.key == "shop/api", "host -> its service")
+	assert(ClusterSearch.find(cs_state, "ns:shop nothing-here").is_empty(), "all words must match")
 	# Kubi's dynamic missions: a hot node gives a bottleneck mission with the
 	# biggest pod named, and its VERIFY step passes once the node cools down.
 	var hs := {"nodes": [{"name": "n1", "cpu_m": 1000, "mem_bytes": 1 << 30}, {"name": "n2", "cpu_m": 1000, "mem_bytes": 1 << 30}],

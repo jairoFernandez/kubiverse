@@ -65,7 +65,8 @@ type Bridge struct {
 
 	mu      sync.Mutex
 	dirty   bool
-	last    []byte // last encoded snapshot message
+	last    []byte    // last encoded snapshot message (full)
+	diff    stateDiff // what the games have, to send them only the changes
 	clients map[*client]struct{}
 	watch   *watchState
 }
@@ -77,6 +78,10 @@ type client struct {
 	ip    string
 	agent string
 	since time.Time
+	// Big clusters: this game applies patches (it asked with ?patch=1);
+	// needFull when it missed one and must start again from a full state.
+	patches  bool
+	needFull bool
 }
 
 func main() {
@@ -345,11 +350,30 @@ func (b *Bridge) publishLoop(ctx context.Context) {
 			log.Printf("snapshot: %v", err)
 			continue
 		}
-		msg, _ := json.Marshal(map[string]any{"type": "state", "data": snap})
+		full, patch := b.diff.next(snap)
 		b.mu.Lock()
-		b.last = msg
+		b.last = full
 		b.mu.Unlock()
-		b.broadcast(msg)
+		b.broadcastState(full, patch)
+	}
+}
+
+// broadcastState: the changes to games that apply patches, the full state to
+// the rest (and to any game that missed a patch).
+func (b *Bridge) broadcastState(full, patch []byte) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for c := range b.clients {
+		msg := full
+		if c.patches && !c.needFull && patch != nil {
+			msg = patch
+		}
+		select {
+		case c.send <- msg:
+			c.needFull = false
+		default: // slow client: it misses this one and gets the whole state next time
+			c.needFull = true
+		}
 	}
 }
 
@@ -374,16 +398,27 @@ func (b *Bridge) handleState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Bridge) handleWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true} /* origin checked in guard */)
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		InsecureSkipVerify: true, // origin checked in guard
+		// Browsers negotiate permessage-deflate: snapshots are JSON and
+		// shrink ~10x. Native Godot doesn't ask, and gets them as they are.
+		CompressionMode:      websocket.CompressionContextTakeover,
+		CompressionThreshold: 512,
+	})
 	if err != nil {
 		return
 	}
 	conn.SetReadLimit(1 << 20)
 	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-	c := &client{send: make(chan []byte, 16), addr: r.RemoteAddr, ip: ip, agent: shortAgent(r.UserAgent()), since: time.Now(), user: identityFrom(r.Context()).User}
+	c := &client{send: make(chan []byte, 16), addr: r.RemoteAddr, ip: ip, agent: shortAgent(r.UserAgent()), since: time.Now(), user: identityFrom(r.Context()).User,
+		patches: r.URL.Query().Get("patch") == "1"}
 	b.mu.Lock()
 	b.clients[c] = struct{}{}
-	last := b.last
+	if b.last != nil {
+		// Queued under the lock: no patch can get in before the state it
+		// applies to.
+		c.send <- b.last
+	}
 	b.mu.Unlock()
 	defer func() {
 		b.mu.Lock()
@@ -398,9 +433,6 @@ func (b *Bridge) handleWS(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	ctx := conn.CloseRead(r.Context())
-	if last != nil {
-		c.send <- last
-	}
 	if b.watch != nil {
 		if wm := b.watchMessage(true); wm != nil {
 			b.broadcast(wm)

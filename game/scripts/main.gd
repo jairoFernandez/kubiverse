@@ -41,6 +41,8 @@ var _kubi: Kubi
 var _kubi_sig := ""           # problem list signature (refresh the panel on change)
 var _kubi_count := 0
 var _kubi_t := 0.0
+var _kubi_dirty := false     # a new state for Kubi to diagnose (at most every 2 s: big clusters)
+var _kubi_diag_t := 0.0
 var _kubi_seen: Entity        # last inspected entity Kubi commented on
 var _ghosts := {}             # visitor key -> VisitorGhost
 # Click-to-move
@@ -264,7 +266,7 @@ func _ready() -> void:
 			if Settings.intro and not "--shot" in " ".join(OS.get_cmdline_user_args()) or "--intro" in OS.get_cmdline_user_args():
 				_start_intro.call_deferred()
 		missions.notify("state")
-		_kubi_state(s))
+		_kubi_dirty = true)
 	K8s.watch_updated.connect(func(w):
 		hud.watch.update(w)
 		_update_ghosts(w.get("actions", [])))
@@ -311,6 +313,10 @@ func _ready() -> void:
 				ctx = arg.substr(10)
 		K8s.connect_bridge(url, K8s.web_query_param("token"), ctx)
 
+	# Dev: --start-level=power (profiling a connected cluster with --print-fps)
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--start-level="):
+			get_tree().create_timer(4.0).timeout.connect(func(): _go_level(arg.substr(14)))
 	# Dev helper: `godot --path game -- --demo --shot=/tmp/x.png [--inspect]`
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--shot="):
@@ -1309,10 +1315,27 @@ func _pod_tick(delta: float) -> void:
 
 ## Jump to any object in the cluster: switch level, walk next to it, inspect.
 func _goto(kind: String, key: String, ns: String) -> void:
+	if kind == "namespace":
+		# Namespaces are the halls of the plant: to its door.
+		if world.level != "plant":
+			_go_level("plant")
+		var bl := world.find_entity("namespace", key) as FactoryBuilding
+		if bl == null:
+			hud.toast(tr("Not visible here (maybe filtered)"), false)
+			return
+		player.teleport(_standable_near(bl.door_position() + Vector3(0, 0, 0.8)))
+		_pan = Vector3.ZERO
+		hud.inspect(bl)
+		return
 	var l := "power" if kind == "node" else "ns:" + ns
 	if world.level != l:
 		_go_level(l)
 	var e := world.find_entity(kind, key)
+	if e == null and kind == "pod":
+		# In a crowd (big clusters draw the healthy pods as a pile): pin it.
+		world.pinned[key] = true
+		world.apply_state(K8s.state)
+		e = world.find_entity(kind, key)
 	if e == null:
 		hud.toast(tr("Not visible here (maybe filtered)"), false)
 		return
@@ -2311,8 +2334,15 @@ func _workload_of(pod: Dictionary) -> Dictionary:
 # ------------------------------------------------------------ Kubi
 
 ## New snapshot: count problems, refresh the panel, speak up when it gets worse.
+var _kubi_probs: Array = []      # the last diagnosis (Kubi points at the closest one)
+var _kubi_pod_node := {}         # "ns/name" -> node, for those problems
+
 func _kubi_state(s: Dictionary) -> void:
 	var probs := Diagnose.problems(s).filter(func(d): return d.sev > 0)  # housekeeping isn't an alarm
+	_kubi_probs = probs
+	_kubi_pod_node.clear()
+	for p in s.get("pods", []):
+		_kubi_pod_node[p.ns + "/" + p.name] = p.get("node", "")
 	var sig := ",".join(probs.map(func(d): return "%s/%s/%s/%s" % [d.kind, d.ns, d.name, d.title]))
 	if sig != _kubi_sig:
 		_kubi_sig = sig
@@ -2330,6 +2360,11 @@ func _kubi_state(s: Dictionary) -> void:
 
 func _kubi_tick(delta: float) -> void:
 	_kubi.visible = not hud.is_connect_visible()
+	_kubi_diag_t -= delta
+	if _kubi_dirty and _kubi_diag_t <= 0.0:
+		_kubi_dirty = false
+		_kubi_diag_t = 2.0
+		_kubi_state(K8s.state)
 	_kubi_t -= delta
 	if _kubi_t > 0.0:
 		return
@@ -2338,11 +2373,11 @@ func _kubi_tick(delta: float) -> void:
 	var best := Vector3.INF
 	var best_d := 1e9
 	var me := player.global_position
-	for d in Diagnose.problems(K8s.state).filter(func(x): return x.sev > 0):
+	for d in _kubi_probs:
 		var e: Entity = null
 		match world.level:
 			"plant": e = world.buildings.get(d.ns) if d.ns != "" else null
-			"power": e = world.islands.get(d.name) if d.kind == "Node" else world.islands.get(_pod_node(d))
+			"power": e = world.islands.get(d.name) if d.kind == "Node" else world.islands.get(_kubi_pod_node.get(d.ns + "/" + d.name, ""))
 			_: e = world.pods.get(d.ns + "/" + d.name) if d.kind == "Pod" else null
 		if e == null or not is_instance_valid(e):
 			continue

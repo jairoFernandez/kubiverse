@@ -202,6 +202,8 @@ func is_readonly() -> bool:
 
 func _open_ws() -> void:
 	var ws_url := ("ws" + base_url.substr(4)) + "/api/ws" + _q()
+	# Big clusters: the full state once, then only what changed.
+	ws_url += ("&" if "?" in ws_url else "?") + "patch=1"
 	_ws = WebSocketPeer.new()
 	_ws.inbound_buffer_size = 1 << 24 # snapshots of big clusters can be several MB
 	_ws.max_queued_packets = 64
@@ -243,7 +245,10 @@ func _process(delta: float) -> void:
 				continue
 			match msg.get("type", ""):
 				"state":
+					_seq = int(msg.get("seq", -1))
 					_on_state(msg["data"])
+				"patch":
+					_on_patch(msg["data"])
 				"event":
 					cluster_event.emit(msg["data"])
 				"forwards":
@@ -258,6 +263,78 @@ func _process(delta: float) -> void:
 	elif st == WebSocketPeer.STATE_CLOSED:
 		_ws = null
 		_reconnect_in = 2.0
+
+
+const COLLECTIONS := ["nodes", "namespaces", "pods", "workloads", "services", "ingresses"]
+var _seq := -1   # the bridge's number for the state we have (patches build on it)
+
+
+## What changed since the last state (see bridge/delta.go). Ages aren't sent:
+## they move on with the clock. A gap (a patch on a state we don't have)
+## reconnects, which starts again from a full state.
+func _on_patch(p: Dictionary) -> void:
+	if state.is_empty() or int(p.get("base", -2)) != _seq:
+		_seq = -1
+		if _ws:
+			_ws.close()
+		return
+	_seq = int(p.seq)
+	var dt := float(p.time) - float(state.get("time", p.time))
+	for k in ["context", "server", "readonly", "time"]:
+		state[k] = p[k]
+	if dt != 0.0:
+		for coll in ["nodes", "pods"]:
+			for it in state[coll]:
+				it["age"] = float(it.get("age", 0)) + dt
+	if p.get("metrics") != null:
+		state["metrics"] = p.metrics
+	var sets: Dictionary = p.get("set") if p.get("set") != null else {}
+	var dels: Dictionary = p.get("del") if p.get("del") != null else {}
+	for coll in COLLECTIONS:
+		var add: Array = sets.get(coll, []) if sets.get(coll) != null else []
+		var del: Array = dels.get(coll, []) if dels.get(coll) != null else []
+		if add.is_empty() and del.is_empty():
+			continue
+		var list: Array = state[coll]
+		var at := {}
+		for i in list.size():
+			at[item_key(coll, list[i])] = i
+		var moved := not del.is_empty()
+		for it in add:
+			var key := item_key(coll, it)
+			if at.has(key):
+				list[at[key]] = it
+			else:
+				list.append(it)
+				moved = true
+		if not del.is_empty():
+			var gone := {}
+			for k in del:
+				gone[k] = true
+			list = list.filter(func(x): return not gone.has(item_key(coll, x)))
+		if moved:
+			# The bridge's order, as if the whole state had come.
+			list.sort_custom(func(a, b): return _sort_key(coll, a) < _sort_key(coll, b))
+		state[coll] = list
+	_resolve_kind()
+	state_updated.emit(state)
+
+
+## How the bridge names an item of a collection (bridge/delta.go).
+static func item_key(coll: String, it: Dictionary) -> String:
+	match coll:
+		"nodes", "namespaces":
+			return str(it.name)
+		"workloads":
+			return "%s/%s/%s" % [it.ns, it.kind, it.name]
+	return "%s/%s" % [it.ns, it.name]
+
+
+static func _sort_key(coll: String, it: Dictionary) -> String:
+	if coll == "pods":
+		# namespace first, then name (a "/" would sort "app/x" after "app-2/y")
+		return str(it.ns) + char(1) + str(it.name)
+	return item_key(coll, it)
 
 
 func _on_state(s: Dictionary) -> void:

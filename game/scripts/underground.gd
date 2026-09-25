@@ -292,7 +292,8 @@ func _click(p: Vector2) -> void:
 
 
 func _alarms() -> Array:
-	return alarms.call() if alarms.is_valid() else []
+	# The first ones (the worst): the HUD only writes the text of those.
+	return (alarms.call() as Array).slice(0, 20) if alarms.is_valid() else []
 
 
 # --- drawing -----------------------------------------------------------------
@@ -363,13 +364,13 @@ func _paint_system_bar() -> void:
 		v.draw_rect(Rect2(ar.position.x + 2, -8, 4, 4), GREEN)
 		text(tr("cluster OK: no alarms"), Vector2(ar.position.x + 10, -3), 6, GREEN)
 		return
-	var bad := list.filter(func(a): return int(a.sev) >= 3).size()
+	var bad := int(list[0].sev) >= 3
 	_alarm_i = int(Time.get_ticks_msec() / 3000.0)
 	var a: Dictionary = list[_alarm_i % list.size()]
 	var c := RED if int(a.sev) >= 3 else GOLD
-	var blink := bad > 0 and fmod(Time.get_ticks_msec() / 1000.0, 1.0) < 0.5
+	var blink := bad and fmod(Time.get_ticks_msec() / 1000.0, 1.0) < 0.5
 	v.draw_rect(Rect2(ar.position.x + 1, -BAR + 1, 50, BAR - 2), Color(c, 0.35 if blink else 0.2))
-	text(tr("ALARMS %d") % list.size(), Vector2(ar.position.x + 26, -3), 6, c, true)
+	text(tr("ALARMS %d") % (alarms.call() as Array).size(), Vector2(ar.position.x + 26, -3), 6, c, true)
 	var msg := str(a.text)
 	if msg.length() > 46:
 		msg = msg.substr(0, 43) + "..."

@@ -360,6 +360,13 @@ English and Spanish (the system language is detected; change it on the start scr
 - **Minimap** at the bottom left: follows you and shows the current level (halls, lines, docks, islands, pods by status, doors and your arrow). Clicking it opens the full map.
 - **Full map (M)**: the whole level with names. Click a hall, line, dock, pod or spot on the ground to travel there, respecting physical limits.
 
+## Search and big clusters
+
+- **Search (Ctrl/Cmd+F or SEARCH)**: the whole cluster at once, namespaces, workloads, services, pods, nodes and ingress hosts, by name, IP, image, status or node. All the words must match, and filters narrow it down: `ns:shop`, `node:worker-a`, `status:crash`, `kind:svc` (pod, deploy, node, ns, ing), `image:redis`, `ip:10.244.`, and `bad` for only what's broken. Enter takes you to the first result (arrows choose another): the game goes to the right level, walks you there and opens the inspector.
+- **Thousands of pods**: each node island draws up to 40 robots and each production line up to 24, broken pods first; the healthy rest become a pile marked `+N pods`. Searching for a pod in the pile pulls it out.
+- **Hundreds of namespaces**: VIEW → "Only these namespaces" (per cluster): `shop, team-*`, or a word they contain.
+- **Less traffic**: the bridge sends the full state once and then only what changed (tested: 10 MB → 127 KB over 20 s with 1,000 pods rolling), and browsers get it compressed (permessage-deflate, a 384 KB state goes as 16 KB).
+
 ## Quick start
 
 Requirements: Go (version in `bridge/go.mod`), Godot 4.7 (`brew install --cask godot`), a working kubeconfig.
@@ -456,7 +463,7 @@ The defaults expect oauth2-proxy answering `/oauth2/*` on the same host (see [va
 
 | Method | Route | Description |
 |---|---|---|
-| GET | `/api/ws` | WebSocket: `{"type":"state","data":Snapshot}` (≤3/s, coalesced), `{"type":"event","data":{...}}` and `{"type":"watch","data":{audit, visitors, actions}}` (watchtower) |
+| GET | `/api/ws` | WebSocket: `{"type":"state","seq","data":Snapshot}` (≤3/s, coalesced), `{"type":"event","data":{...}}` and `{"type":"watch","data":{audit, visitors, actions}}` (watchtower). With `?patch=1`: one full state, then `{"type":"patch","data":{seq, base, time, set:{pods:[...]}, del:{pods:["ns/name"]}, metrics?}}` (ages aren't sent: add the time that passed; a `base` you don't have means reconnect) |
 | GET · POST | `/api/assistant` | engine status, models, catalog and downloads · `{"question","kind","ns","name","lang","diagnosis","history"}` → `{"ok","answer","model"}` |
 | POST | `/api/assistant/config` · `/api/assistant/download` | Kubi settings · download `{"kind":"llamacpp"\|"gguf"\|"ollama","id"}` |
 | DELETE | `/api/assistant/model?id=` | delete a downloaded GGUF model |

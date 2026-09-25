@@ -29,6 +29,14 @@ const TOP := 88.0  # UI units below the two top strips
 
 var _level_label: Label
 var _alarm_btn: Button
+var _search_panel: PanelContainer   # global search (Ctrl/Cmd+F)
+var _search_input: LineEdit
+var _search_list: VBoxContainer
+var _search_hits: Array = []
+var _search_sel := 0
+var _search_rows: Array = []       # ClusterSearch.index of the state (rebuilt when it changes)
+var _search_stale := true
+var _search_timer: Timer           # waits for a pause in the typing
 var _alarm_panel: PanelContainer
 var _alarm_list: VBoxContainer
 var _alarms: Array = []
@@ -147,6 +155,7 @@ var _chaos_btn: Button
 
 var _view_panel: PanelContainer
 var _view_sys: CheckBox
+var _view_nsf: LineEdit    # which namespaces to draw (big clusters)
 var _view_lines: CheckBox
 var _view_term: CheckBox
 var _view_legend: CheckBox
@@ -916,6 +925,15 @@ func _build_game_ui() -> void:
 	vv.add_child(_section("VIEW"))
 	_view_sys = _check("System namespaces  [H]", toggle_system)
 	vv.add_child(_view_sys)
+	vv.add_child(_label("Only these namespaces (this cluster; e.g. shop, team-*, or a word they contain):", 20, Vox.SILVER))
+	_view_nsf = LineEdit.new()
+	_view_nsf.placeholder_text = tr("all of them")
+	_view_nsf.add_theme_font_size_override("font_size", 22)
+	_view_nsf.text_submitted.connect(func(t: String):
+		set_ns_filter(t)
+		_view_nsf.release_focus())
+	_view_nsf.focus_exited.connect(func(): set_ns_filter(_view_nsf.text))
+	vv.add_child(_view_nsf)
 	_view_lines = _check("All service lines  [K]", toggle_lines)
 	vv.add_child(_view_lines)
 	_view_term = _check("Terminal panel  [T]", toggle_terminal)
@@ -1207,8 +1225,12 @@ func _build_level_strip() -> void:
 	for b in [_button("F3 STATS", toggle_stats), _button("M MAP", toggle_map), _button("J MISSIONS", toggle_missions, "GoButton")]:
 		h.add_child(b)
 		_strip_extra.append(b)
+	var sb := _button("SEARCH", toggle_search)
+	sb.tooltip_text = tr("Find a pod, namespace, service, node, IP, image or host (Ctrl/Cmd+F)")
+	h.add_child(sb)
 	_alarm_btn = _button("ALARMS 0", toggle_alarms)
 	h.add_child(_alarm_btn)
+	_build_search()
 	# Alarm dropdown
 	_alarm_panel = PanelContainer.new()
 	_alarm_panel.anchor_left = 1.0
@@ -1232,6 +1254,113 @@ func set_level_title(t: String) -> void:
 	_level_title_raw = t
 
 
+## Global search: type, pick, and the game takes you there.
+func _build_search() -> void:
+	_search_panel = PanelContainer.new()
+	_search_panel.anchor_left = 0.5
+	_search_panel.anchor_right = 0.5
+	_search_panel.offset_left = -430
+	_search_panel.offset_right = 430
+	_search_panel.offset_top = TOP
+	_search_panel.visible = false
+	_search_panel.add_theme_stylebox_override("panel", _flat(Color(0.06, 0.06, 0.12, 0.96), Vox.BLUE.darkened(0.2), 3, 14))
+	_game_root.add_child(_search_panel)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 6)
+	_search_panel.add_child(v)
+	var sec := _section("SEARCH - the whole cluster (Enter goes to the first, arrows to choose)")
+	sec.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(sec)
+	_search_input = LineEdit.new()
+	_search_input.placeholder_text = tr("name, IP, image...  filters: ns:shop node:w1 status:crash kind:svc image:redis ip:10.1 bad")
+	_search_input.add_theme_font_size_override("font_size", 24)
+	_search_timer = Timer.new()
+	_search_timer.one_shot = true
+	_search_timer.wait_time = 0.12
+	_search_timer.timeout.connect(_fill_search)
+	add_child(_search_timer)
+	K8s.state_updated.connect(func(_s): _search_stale = true)
+	_search_input.text_changed.connect(func(_t): _search_timer.start())
+	_search_input.text_submitted.connect(func(_t):
+		if not _search_timer.is_stopped():
+			_search_timer.stop()
+			_fill_search()
+		_search_go(_search_sel))
+	_search_input.gui_input.connect(func(e: InputEvent):
+		if e is InputEventKey and e.pressed and e.keycode in [KEY_UP, KEY_DOWN] and not _search_hits.is_empty():
+			_search_sel = clampi(_search_sel + (1 if e.keycode == KEY_DOWN else -1), 0, _search_hits.size() - 1)
+			_mark_search()
+			_search_input.accept_event())
+	v.add_child(_search_input)
+	_search_list = VBoxContainer.new()
+	_search_list.add_theme_constant_override("separation", 3)
+	v.add_child(_search_list)
+
+
+func toggle_search() -> void:
+	_search_panel.visible = not _search_panel.visible
+	if _search_panel.visible:
+		# As wide as fits: 860 on a big screen, the window minus margins on a small one.
+		var half := minf(430.0, _game_root.size.x / 2.0 - 16.0)
+		_search_panel.offset_left = -half
+		_search_panel.offset_right = half
+		_search_panel.move_to_front()
+		_alarm_panel.visible = false
+		_view_panel.visible = false
+		_search_input.grab_focus()
+		_search_input.select_all()
+		_fill_search()
+	else:
+		_search_input.release_focus()
+
+
+const SEARCH_COLORS := {"namespace": Vox.BLUE, "workload": Vox.GREEN, "service": Vox.PEACH, "pod": Vox.WHITE, "node": Vox.YELLOW}
+
+func _fill_search() -> void:
+	for c in _search_list.get_children():
+		c.queue_free()
+	if _search_stale:
+		_search_rows = ClusterSearch.index(K8s.state)
+		_search_stale = false
+	_search_hits = ClusterSearch.find_in(_search_rows, _search_input.text, 12)
+	_search_sel = 0
+	if _search_input.text.strip_edges() == "":
+		var ex := _label(tr("Examples: api  ·  10.244.1.7  ·  status:crash  ·  ns:payments bad  ·  image:redis"), 20, Vox.SILVER)
+		ex.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_search_list.add_child(ex)
+		return
+	if _search_hits.is_empty():
+		_search_list.add_child(_label(tr("Nothing matches."), 22, Vox.SILVER))
+		return
+	for i in _search_hits.size():
+		var r: Dictionary = _search_hits[i]
+		var b := _button("%s   %s" % [r.title, r.detail], func(): _search_go(i), "DangerButton" if r.bad else "")
+		b.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		b.clip_text = true
+		if not r.bad:
+			b.add_theme_color_override("font_color", SEARCH_COLORS.get(r.kind, Vox.WHITE))
+		_search_list.add_child(b)
+	_mark_search()
+
+
+func _mark_search() -> void:
+	var rows := _search_list.get_children()
+	for i in rows.size():
+		if rows[i] is Button:
+			rows[i].modulate = Color(1.25, 1.25, 1.25) if i == _search_sel else Color(0.85, 0.85, 0.85)
+
+
+func _search_go(i: int) -> void:
+	if i < 0 or i >= _search_hits.size():
+		return
+	var r: Dictionary = _search_hits[i]
+	_search_panel.visible = false
+	_search_input.release_focus()
+	goto_requested.emit(r.kind, r.key, r.ns)
+
+
 func toggle_alarms() -> void:
 	_alarm_panel.visible = not _alarm_panel.visible
 	if _alarm_panel.visible:
@@ -1239,23 +1368,58 @@ func toggle_alarms() -> void:
 		_fill_alarms()
 
 
+const ALARM_TEXTS := 60   # alarms with their text built (the lists show the first ones)
+var _pod_counts := [0, 0, 0]   # running, pending, bad: counted with the alarms
+
 func _compute_alarms(s: Dictionary) -> Array:
-	var out := []
+	# One pass over the pods (big clusters: thousands), texts only for the
+	# alarms that can be shown; the rest just count.
+	var by_sev: Array = [[], [], [], []]
+	var running := 0
+	var pending := 0
+	var bad := 0
 	for n in s.get("nodes", []):
 		if not n.ready:
-			out.append({"sev": 3, "text": tr("node %s is NotReady") % n.name, "kind": "node", "key": n.name, "ns": ""})
+			by_sev[3].append(["node", n])
 		elif n.unschedulable:
-			out.append({"sev": 1, "text": tr("node %s is cordoned") % n.name, "kind": "node", "key": n.name, "ns": ""})
+			by_sev[1].append(["cordon", n])
 	for p in s.get("pods", []):
-		var cat := PodBot.categorize(p)
-		if cat in ["crash", "pull", "failed"]:
-			out.append({"sev": 3, "text": tr("%s/%s  %s (restarts %d)") % [p.ns, p.name, p.status, int(p.restarts)], "kind": "pod", "key": p.ns + "/" + p.name, "ns": p.ns})
-		elif cat == "pending" and int(p.get("age", 0)) > 60:
-			out.append({"sev": 2, "text": tr("%s/%s  stuck in %s") % [p.ns, p.name, p.status], "kind": "pod", "key": p.ns + "/" + p.name, "ns": p.ns})
+		match PodBot.categorize(p):
+			"ok":
+				running += 1
+			"crash", "pull", "failed":
+				bad += 1
+				by_sev[3].append(["pod", p])
+			"pending":
+				pending += 1
+				if int(p.get("age", 0)) > 60:
+					by_sev[2].append(["stuck", p])
+			"warn":
+				pending += 1
 	for w in s.get("workloads", []):
 		if int(w.ready) < int(w.desired):
-			out.append({"sev": 1, "text": tr("%s %s/%s  %d/%d ready") % [str(w.kind).to_lower(), w.ns, w.name, int(w.ready), int(w.desired)], "kind": "workload", "key": "%s/%s/%s" % [w.ns, w.kind, w.name], "ns": w.ns})
-	out.sort_custom(func(a, b): return a.sev > b.sev)
+			by_sev[1].append(["workload", w])
+	_pod_counts = [running, pending, bad]
+	var out := []
+	for sev in [3, 2, 1]:
+		for e in by_sev[sev]:
+			var d: Dictionary = e[1]
+			var a := {"sev": sev, "text": ""}
+			match e[0]:
+				"node", "cordon":
+					a.merge({"kind": "node", "key": d.name, "ns": ""})
+				"workload":
+					a.merge({"kind": "workload", "key": "%s/%s/%s" % [d.ns, d.kind, d.name], "ns": d.ns})
+				_:
+					a.merge({"kind": "pod", "key": d.ns + "/" + d.name, "ns": d.ns})
+			if out.size() < ALARM_TEXTS:
+				match e[0]:
+					"node": a.text = tr("node %s is NotReady") % d.name
+					"cordon": a.text = tr("node %s is cordoned") % d.name
+					"pod": a.text = tr("%s/%s  %s (restarts %d)") % [d.ns, d.name, d.status, int(d.restarts)]
+					"stuck": a.text = tr("%s/%s  stuck in %s") % [d.ns, d.name, d.status]
+					"workload": a.text = tr("%s %s/%s  %d/%d ready") % [str(d.kind).to_lower(), d.ns, d.name, int(d.ready), int(d.desired)]
+			out.append(a)
 	return out
 
 
@@ -1910,6 +2074,28 @@ func _toggle_terminal_setting() -> void:
 	Settings.save()
 
 
+## Draw only some namespaces (a big cluster: hundreds of halls). Per cluster.
+func set_ns_filter(text: String, save := true) -> void:
+	var f := World.parse_ns_filter(text)
+	if f == world.ns_filter and not save:
+		return
+	var changed := f != world.ns_filter
+	world.ns_filter = f
+	if _view_nsf and _view_nsf.text != text:
+		_view_nsf.text = text
+	if save:
+		if text.strip_edges() == "":
+			Settings.ns_filters.erase(K8s.kind_key())
+		else:
+			Settings.ns_filters[K8s.kind_key()] = text.strip_edges()
+		Settings.save()
+	if changed:
+		if not K8s.state.is_empty():
+			world.apply_state(K8s.state)
+		if not f.is_empty():
+			toast(tr("Showing only namespaces: %s (VIEW to change)") % ", ".join(f), true)
+
+
 func toggle_system() -> void:
 	world.hide_system = not world.hide_system
 	if not K8s.state.is_empty():
@@ -1988,21 +2174,20 @@ func _on_connection(status: String, detail: String) -> void:
 
 func _on_state(s: Dictionary) -> void:
 	_ctx_label.text = "%s%s" % [s.get("context", "?"), tr(" (read-only)") if s.get("readonly", false) else ""]
-	var running := 0
-	var pending := 0
-	var bad := 0
-	for p in s.pods:
-		match PodBot.categorize(p):
-			"ok": running += 1
-			"pending", "warn": pending += 1
-			"crash", "pull", "failed": bad += 1
 	_alarms = _compute_alarms(s)
-	var failing := _alarms.filter(func(a): return a.sev >= 3).size()
+	var running: int = _pod_counts[0]
+	var pending: int = _pod_counts[1]
+	var bad: int = _pod_counts[2]
+	var failing := 0
+	for a in _alarms:
+		if a.sev < 3:
+			break
+		failing += 1
 	if failing > _last_bad and _last_bad >= 0:
 		Sfx.play("alarm", null, 0.0)
 	_last_bad = failing
 	_alarm_btn.text = tr("ALARMS %d") % _alarms.size()
-	_alarm_btn.theme_type_variation = "DangerButton" if _alarms.any(func(a): return a.sev >= 3) else ""
+	_alarm_btn.theme_type_variation = "DangerButton" if failing > 0 else ""
 	if _alarm_panel.visible:
 		_fill_alarms()
 	var ready_nodes: int = s.nodes.filter(func(n): return n.ready).size()
@@ -3170,7 +3355,7 @@ func close_modals() -> bool:
 	if editor.visible:
 		editor.request_close()
 		return true
-	for p in [_confirm_panel, _build_panel, _guide_panel, _map_panel, _logs_panel, _view_panel, _vol_panel, _alarm_panel, _legend, kubi, watch]:
+	for p in [_confirm_panel, _build_panel, _guide_panel, _map_panel, _logs_panel, _view_panel, _vol_panel, _alarm_panel, _search_panel, _legend, kubi, watch]:
 		if p.visible:
 			p.visible = false
 			_sync_view()
@@ -3308,6 +3493,7 @@ func _update_look_btn() -> void:
 func _on_kind_changed(kind: String) -> void:
 	# A cluster connected (or switched): put on the look saved for it.
 	set_look(str(Settings.cluster_looks.get(K8s.kind_key(), "factory")), false)
+	set_ns_filter(str(Settings.ns_filters.get(K8s.kind_key(), "")), false)
 	_update_kind_btn()
 	if kind == "prod" and chaos:
 		chaos = false
@@ -3343,6 +3529,9 @@ func _input(event: InputEvent) -> void:
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return
 	if event.keycode == KEY_ESCAPE and close_modals():
+		get_viewport().set_input_as_handled()
+	elif event.keycode in [KEY_F, KEY_K] and (event.ctrl_pressed or event.meta_pressed):
+		toggle_search()
 		get_viewport().set_input_as_handled()
 	elif event.keycode in [KEY_ENTER, KEY_KP_ENTER] and _confirm_panel.visible:
 		_confirm_yes()

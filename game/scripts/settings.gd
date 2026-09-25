@@ -22,6 +22,7 @@ var kubi_active := ""         # id of the dynamic mission being played
 var kubi_steps := {}          # dynamic mission id -> current step
 var cluster_kinds := {}       # "bridge url|context" -> "prod" | "sandbox"
 var cluster_looks := {}       # "bridge url|context" (or "demo") -> Look id (farm, space...)
+var ns_filters := {}          # same key -> "team-*, shop" (only these namespaces are drawn)
 var lang := ""
 var always_run := false
 var minimap := true
@@ -58,6 +59,7 @@ func _ready() -> void:
 		kubi_steps = cf.get_value("missions", "kubi_steps", kubi_steps)
 		cluster_kinds = cf.get_value("clusters", "kinds", cluster_kinds)
 		cluster_looks = cf.get_value("clusters", "looks", cluster_looks)
+		ns_filters = cf.get_value("clusters", "ns_filters", ns_filters)
 		lang = cf.get_value("ui", "lang", lang)
 		always_run = cf.get_value("ui", "always_run", always_run)
 		minimap = cf.get_value("ui", "minimap", minimap)
@@ -119,6 +121,7 @@ func save() -> void:
 	cf.set_value("missions", "kubi_steps", kubi_steps)
 	cf.set_value("clusters", "kinds", cluster_kinds)
 	cf.set_value("clusters", "looks", cluster_looks)
+	cf.set_value("clusters", "ns_filters", ns_filters)
 	cf.set_value("ui", "lang", lang)
 	cf.set_value("ui", "always_run", always_run)
 	cf.set_value("ui", "minimap", minimap)

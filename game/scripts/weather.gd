@@ -52,6 +52,9 @@ func _particles(col: Color, size: Vector3, n: int, grav: Vector3, life: float) -
 
 
 ## Called every frame with the camera focus; returns nothing, updates state.
+var _since_count := 99.0
+
+
 func tick(delta: float, focus: Vector3, state: Dictionary, is_outdoors: bool) -> void:
 	outdoors = is_outdoors
 	match Settings.weather:
@@ -64,7 +67,11 @@ func tick(delta: float, focus: Vector3, state: Dictionary, is_outdoors: bool) ->
 			else:
 				_set_w(_real.kind, _real.amount, "%s %d°C" % [Settings.weather_city, int(_real.temp)])
 		_:
-			_cluster(state)
+			# Counting every pod each frame hurts on big clusters: twice a second.
+			_since_count += delta
+			if _since_count >= 0.5 or kind == "":
+				_since_count = 0.0
+				_cluster(state)
 	global_position = Vector3(focus.x, 0, focus.z)
 	var want := 900 if kind == "storm" else int(250 + 650 * clampf(amount, 0.0, 1.0))
 	if kind in ["rain", "storm"] and absi(_rain.amount - want) > 120:
