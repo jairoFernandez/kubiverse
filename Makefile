@@ -2,7 +2,7 @@ GODOT  ?= godot
 BRIDGE := bridge/bin/k8s-bridge
 ADDR   ?= 127.0.0.1:8088
 
-.PHONY: test metrics-server cluster cluster-delete cluster-ha cluster-ha-delete scenario scenario-delete play-kind serve-web-kind all bridge bridge-all game-import web macos linux windows native run-bridge play play-demo serve-web demo-apply demo-delete clean
+.PHONY: serve-lan test metrics-server cluster cluster-delete cluster-ha cluster-ha-delete scenario scenario-delete play-kind serve-web-kind all bridge bridge-all game-import web macos linux windows native run-bridge play play-demo serve-web demo-apply demo-delete clean
 
 all: bridge web
 
@@ -46,6 +46,10 @@ play-demo:
 ## Bridge serves the web build on the same origin: open http://$(ADDR)
 serve-web: bridge web
 	$(BRIDGE) --addr $(ADDR) --web build/web
+
+## Phones/tablets on the same Wi-Fi: random token, prints the URLs to open.
+serve-lan: bridge web
+	$(BRIDGE) --lan --web build/web
 
 ## --- tests ------------------------------------------------------------------
 test:

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -54,5 +55,45 @@ func TestCleanAndRestoreLastApplied(t *testing.T) {
 	json.Unmarshal(out, &obj)
 	if obj["metadata"].(map[string]any)["annotations"].(map[string]any)[lastApplied] != "{orig}" {
 		t.Fatalf("not restored: %s", out)
+	}
+}
+
+func TestLanSetup(t *testing.T) {
+	addr, token, origins := "127.0.0.1:9000", "", "https://example.com"
+	urls := lanSetup(&addr, &token, &origins)
+	if addr != "0.0.0.0:9000" {
+		t.Fatalf("addr %s", addr)
+	}
+	if len(token) != 24 {
+		t.Fatalf("a random token is required, got %q", token)
+	}
+	if !strings.Contains(origins, "https://example.com") {
+		t.Fatalf("user origins lost: %s", origins)
+	}
+	for _, u := range urls {
+		if !strings.Contains(u, "?token="+token) || !strings.HasPrefix(u, "https://") {
+			t.Fatalf("bad url %s", u)
+		}
+	}
+	if !exposed("0.0.0.0:8088") || exposed("127.0.0.1:8088") || exposed("localhost:8088") {
+		t.Fatal("exposed()")
+	}
+}
+
+func TestLanCert(t *testing.T) {
+	dir := t.TempDir()
+	c1, k1, err := lanCert(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, _ := os.Stat(k1)
+	if st.Mode().Perm() != 0o600 {
+		t.Fatalf("key permissions %v", st.Mode().Perm())
+	}
+	raw1, _ := os.ReadFile(c1)
+	c2, _, _ := lanCert(dir) // reused, not regenerated
+	raw2, _ := os.ReadFile(c2)
+	if string(raw1) != string(raw2) {
+		t.Fatal("certificate regenerated although it still covers the IPs")
 	}
 }

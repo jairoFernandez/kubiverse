@@ -277,7 +277,8 @@ func _ready() -> void:
 	if K8s.web_query_param("demo") == "1" or "--demo" in OS.get_cmdline_user_args():
 		K8s.start_demo()
 		hud.show_connect(false)
-	elif K8s.web_query_param("bridge") != "" or "--connect" in OS.get_cmdline_user_args():
+	elif K8s.web_query_param("bridge") != "" or K8s.web_query_param("token") != "" or "--connect" in OS.get_cmdline_user_args():
+		# ?token=... comes from `k8s-bridge --lan` (the link printed for phones).
 		var url := K8s.default_bridge_url()
 		var ctx := K8s.web_query_param("context")
 		for arg in OS.get_cmdline_user_args():
@@ -617,6 +618,25 @@ func _screenshot_and_quit(path: String) -> void:
 			await get_tree().process_frame
 		await get_tree().process_frame
 		print("KUBI panel visible=", hud.kubi.visible)
+	if "--door-test" in OS.get_cmdline_user_args():
+		var changes := []
+		world.level_changed.connect(func(l): changes.append(l))
+		for key in ["shop", "@power"]:
+			if world.level != "plant":
+				_go_level("plant")
+				await get_tree().create_timer(0.8).timeout
+			changes.clear()
+			player.teleport(world.spawn)
+			await get_tree().create_timer(0.3).timeout
+			_click_move(Vector2.ZERO, world.buildings[key])
+			print("DOOR %s: path=%d" % [key, _path.size()])
+			for i in 1100:
+				await get_tree().process_frame
+				if i % 120 == 0 and not _path.is_empty():
+					print("    t=%d pos=%s next=%s goal=%s run=%s" % [i, player.global_position.round(), _path[0].round(), _path[-1].round(), player.running])
+			print("  level=%s changes=%s path_left=%d" % [world.level, changes, _path.size()])
+		get_tree().quit()
+		return
 	if "--menu-open" in OS.get_cmdline_user_args():
 		hud.toggle_menu()
 		await get_tree().create_timer(0.4).timeout
@@ -722,6 +742,7 @@ func _go_level(l: String) -> void:
 
 
 func _on_level_changed(l: String) -> void:
+	_cancel_path()  # the clicked target belonged to the previous level
 	var keep := [hud.kubi.visible, hud.watch.visible]
 	hud.close_modals()
 	hud.kubi.visible = keep[0]
@@ -1325,6 +1346,12 @@ func _auto_doors() -> void:
 			_door_armed = true
 		return
 	var to := str(near.to)
+	# Walking a clicked path: only the door you clicked counts, not the
+	# ones you brush past on the way.
+	if not _path.is_empty():
+		var goal: Vector3 = _path[-1]
+		if Vector2(goal.x - near.pos.x, goal.z - near.pos.z).length() > 1.5:
+			return
 	if _door_armed and not to.begins_with("warp:") and not to.begins_with("term:") and player.on_ground():
 		_door_armed = false
 		Sfx.play("door")
@@ -1851,7 +1878,9 @@ func _ground_point(mouse: Vector2) -> Vector3:
 
 func _click_move(mouse: Vector2, target: Entity) -> void:
 	var goal := Vector3.INF
-	if target != null and not target.is_area():
+	if target is FactoryBuilding:
+		goal = _standable_near(target.door_position())  # click a hall = go in through its door
+	elif target != null and not target.is_area():
 		goal = _standable_near(target.target + (player.global_position - target.target).normalized() * 1.2)
 	else:
 		goal = _ground_point(mouse)

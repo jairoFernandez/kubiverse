@@ -80,7 +80,15 @@ func main() {
 		llmModel   = flag.String("llm-model", llm.Model, "Ollama model for the in-game assistant (auto = best installed local model)")
 		audit      = flag.String("audit-dir", auditDir, "directory with API server audit logs (<dir>/<context>/**/audit.log) for WATCHTOWER mode")
 	)
+	lan := flag.Bool("lan", false, "serve on the local network (phones/tablets): listens on all interfaces, requires a token (random if not given) and prints the URLs to open")
 	flag.Parse()
+	var lanURLs []string
+	if *lan {
+		lanURLs = lanSetup(addr, token, origins)
+	}
+	if exposed(*addr) && *token == "" {
+		log.Fatalf("refusing to listen on %s without --token: anyone on the network could control your cluster (use --lan for a random token)", *addr)
+	}
 	llm.URL, llm.Model, auditDir = *llmURL, *llmModel, *audit
 	if u, err := url.Parse(llm.URL); llm.URL != "" && (err != nil || !isLoopback(u.Hostname())) {
 		log.Printf("WARNING: assistant LLM at %s is not on this machine: questions send cluster data (status, events, log lines) there", llm.URL)
@@ -133,8 +141,30 @@ func main() {
 		defer cancel()
 		srv.Shutdown(shutdown)
 	}()
-	log.Printf("k8s-bridge listening on http://%s (readonly=%v)", *addr, *readOnly)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	scheme := "http"
+	if *lan {
+		scheme = "https"
+	}
+	log.Printf("k8s-bridge listening on %s://%s (readonly=%v)", scheme, *addr, *readOnly)
+	if len(lanURLs) > 0 {
+		log.Printf("LAN mode (HTTPS): open one of these on your phone/tablet (same Wi-Fi). The browser warns once about the self-signed certificate: accept it. The token is in the URL: share it only with people you trust.")
+		for _, u := range lanURLs {
+			log.Printf("   %s", u)
+		}
+	}
+	var err error
+	if *lan {
+		// Browsers only run the Godot web build in a secure context: HTTPS
+		// with a self-signed certificate (accept it once on the phone).
+		cert, key, cerr := lanCert(filepath.Join(filepath.Dir(*dataDir), "tls"))
+		if cerr != nil {
+			log.Fatalf("LAN certificate: %v", cerr)
+		}
+		err = srv.ListenAndServeTLS(cert, key)
+	} else {
+		err = srv.ListenAndServe()
+	}
+	if err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }

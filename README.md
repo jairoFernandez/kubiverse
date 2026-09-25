@@ -158,6 +158,21 @@ En pantallas táctiles (o si la ventana es estrecha) el juego cambia a un **modo
   - **toca a Kubi** o su bocadillo para abrir su panel
 - La escala de la UI se ajusta al teléfono (unas 460 unidades en el lado corto). En VISTA > "Controles táctiles" se elige automático / sí / no.
 
+### Jugar desde el móvil (red local)
+
+Por seguridad el bridge solo escucha en `127.0.0.1`: controla tu cluster con tus credenciales. Para abrirlo desde el móvil o la tablet en la misma Wi-Fi:
+
+```bash
+make serve-lan      # = k8s-bridge --lan --web build/web
+```
+
+`--lan` escucha en todas las interfaces, genera un **token aleatorio** (o usa `--token`), permite los orígenes de tu red local e imprime las URLs a abrir, del tipo `https://192.168.1.20:8088/?token=...` (solo las IPs de interfaces reales, no las de Docker/OrbStack). El juego conecta solo con ese token.
+
+- Va por **HTTPS con un certificado autofirmado**, porque los navegadores solo ejecutan builds web de Godot en un contexto seguro. El móvil avisa una vez del certificado: acéptalo. Se guarda en `~/.kubecraft/tls` y se reutiliza mientras cubra tus IPs.
+- El token viaja en la URL: compártela solo con quien quieras. Para solo mirar, añade `--readonly`.
+- El bridge se niega a escuchar fuera de localhost sin token.
+- En macOS puede aparecer el aviso del firewall para aceptar conexiones entrantes.
+
 ## Sonido (VOL)
 
 El botón **VOL** de la barra superior abre volumen general, música y efectos, y **silenciar todo**. Se guarda en los ajustes.
@@ -270,6 +285,7 @@ Las *export templates* se instalan desde el editor (Editor → Manage Export Tem
 --llm-url URL        Ollama para Kubi (por defecto http://127.0.0.1:11434; "" lo desactiva; si no es local, avisa)
 --llm-model NAME     modelo de Ollama (auto = el mejor local instalado, nunca ":cloud")
 --audit-dir DIR      logs de auditoría para el vigía (por defecto ~/.kubecraft/audit)
+--lan                red local (móviles): HTTPS autofirmado + todas las interfaces + token aleatorio + imprime las URLs
 ```
 
 Parámetros URL del build web: `?bridge=http://host:8088`, `?token=...`, `?demo=1`.
