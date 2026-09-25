@@ -26,6 +26,7 @@ var level := "plant"
 var buildings := {}  # ns -> FactoryBuilding ("@power" for the energy plant)
 var lines := {}      # "ns/kind/name" -> ProductionLine
 var services := {}   # "ns/name" -> ServicePortal (dock)
+var volumes := {}    # "ns/name" -> StorageTank (PVC)
 var islands := {}    # node -> NodeIsland
 var pods := {}       # "ns/name" -> PodBot
 
@@ -175,6 +176,7 @@ func all_entities() -> Array:
 	out.append_array(buildings.values())
 	out.append_array(islands.values())
 	out.append_array(services.values())
+	out.append_array(volumes.values())
 	out.append_array(lines.values())
 	if gate and is_instance_valid(gate):
 		out.append(gate)
@@ -203,6 +205,7 @@ func find_entity(kind: String, key: String) -> Entity:
 		"node": return islands.get(key)
 		"pod": return pods.get(key)
 		"service": return services.get(key)
+		"volume": return volumes.get(key)
 		"workload": return lines.get(key)
 	return null
 
@@ -238,6 +241,7 @@ func set_level(l: String) -> void:
 	buildings.clear()
 	lines.clear()
 	services.clear()
+	volumes.clear()
 	islands.clear()
 	pods.clear()
 	_limbo_slots.clear()
@@ -1208,8 +1212,30 @@ func _apply_hall(s: Dictionary, ns: String) -> void:
 			bx.rotation.y = (i * 0.37)
 		workshop["archive_pos"] = Vector3(ax + 0.75, 0.6 + ceilf(n / 3.0) * 0.52, loose_z + 1.2)
 	_drop_missing_pods(pseen)
-	var depth := maxf(rows * LINE_GAP, svcs.size() * DOCK_GAP) + 6.0
-	var width := dock_x + 6.0
+	# Storage tanks (PVCs) in a column beyond the docks.
+	var pvcs: Array = s.get("volumes", []).filter(func(v): return v.ns == ns) if s.get("volumes") != null else []
+	var tank_x := dock_x + 4.0
+	var vseen := {}
+	for i in pvcs.size():
+		var v: Dictionary = pvcs[i]
+		var vk: String = v.ns + "/" + v.name
+		vseen[vk] = true
+		var tk: StorageTank = volumes.get(vk)
+		if tk == null:
+			tk = StorageTank.new()
+			tk.world = self
+			_entities.add_child(tk)
+			volumes[vk] = tk
+		tk.update_data(v)
+		tk.target = Vector3(tank_x, 0, 1.0 - i * 2.6)
+		if tk.position == Vector3.ZERO:
+			tk.position = tk.target
+	for vk in volumes.keys():
+		if not vseen.has(vk):
+			volumes[vk].queue_free()
+			volumes.erase(vk)
+	var depth := maxf(maxf(rows * LINE_GAP, svcs.size() * DOCK_GAP), pvcs.size() * 2.6) + 6.0
+	var width := tank_x + 3.0 if not pvcs.is_empty() else dock_x + 6.0
 	var fl := Rect2(-3.0, -depth + 3.0, width, depth + 4.0)
 	if _begin_static("hall|%s|%s|%d|%s" % [ns, str(fl), loose.size(), Look.current]):
 		var nsc := Vox.ns_color(ns)
@@ -2072,6 +2098,8 @@ func labels(player_pos: Vector3) -> Array:
 		out.append({"pos": l.anchor(), "text": l.label_text(), "sub": _hint(l, l.label_sub()), "color": l.label_color(), "big": true, "entity": l})
 	for dk in services.values():
 		out.append({"pos": dk.anchor(), "text": dk.label_text(), "sub": _hint(dk, dk.label_sub()), "color": dk.label_color(), "big": false, "entity": dk})
+	for tk in volumes.values():
+		out.append({"pos": tk.anchor(), "text": tk.label_text(), "sub": _hint(tk, tk.label_sub()), "color": tk.label_color(), "big": false, "entity": tk})
 	for t in tunnels.values():
 		out.append({"pos": t.anchor(), "text": t.label_text(), "sub": _hint(t, t.label_sub()), "color": t.label_color(), "big": false, "entity": t})
 	for f in _floaters:

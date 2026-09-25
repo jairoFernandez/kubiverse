@@ -1347,7 +1347,7 @@ func toggle_search() -> void:
 		_search_input.release_focus()
 
 
-const SEARCH_COLORS := {"namespace": Vox.BLUE, "workload": Vox.GREEN, "service": Vox.PEACH, "pod": Vox.WHITE, "node": Vox.YELLOW}
+const SEARCH_COLORS := {"namespace": Vox.BLUE, "workload": Vox.GREEN, "service": Vox.PEACH, "pod": Vox.WHITE, "node": Vox.YELLOW, "volume": Vox.LAVENDER}
 
 func _fill_search() -> void:
 	for c in _search_list.get_children():
@@ -1432,6 +1432,31 @@ func _compute_alarms(s: Dictionary) -> Array:
 	for w in s.get("workloads", []):
 		if int(w.ready) < int(w.desired):
 			by_sev[1].append(["workload", w])
+	# Beyond workloads: node pressure, storage, quotas, GitOps, certificates.
+	for n in s.get("nodes", []):
+		for c in (n.get("conditions", []) if n.get("conditions") != null else []):
+			by_sev[3].append(["nodecond", {"name": n.name, "cond": c}])
+	for v in s.get("volumes", []):
+		if str(v.get("status", "")) == "Pending" and float(v.get("age", 0)) > 60:
+			by_sev[2].append(["pvc", v])
+		elif str(v.get("status", "")) == "Lost":
+			by_sev[3].append(["pvc", v])
+	for n in s.get("namespaces", []):
+		for q in (n.get("quota", []) if n.get("quota") != null else []):
+			if float(q.get("pct", 0)) >= 90.0:
+				by_sev[3 if float(q.pct) >= 100.0 else 2].append(["quota", {"ns": n.name, "q": q}])
+	for ap in s.get("apps", []):
+		var h := str(ap.get("health", ""))
+		if h == "Degraded":
+			by_sev[3].append(["app", ap])
+		elif h == "Missing" or str(ap.get("sync", "")) == "OutOfSync":
+			by_sev[2 if h == "Missing" else 1].append(["app", ap])
+	for c in s.get("certs", []):
+		var exp := float(c.get("expires_in", 0))
+		if not c.get("ready", false):
+			by_sev[2].append(["cert", c])
+		elif exp != 0.0 and exp < 14 * 86400:
+			by_sev[3 if exp < 3 * 86400 else 2].append(["cert", c])
 	# The team's own alerts (Alertmanager / Prometheus rules).
 	for al in s.get("alerts", []):
 		by_sev[{"critical": 3, "warning": 2}.get(str(al.get("severity", "")), 1)].append(["alert", al])
@@ -1449,6 +1474,17 @@ func _compute_alarms(s: Dictionary) -> Array:
 				"alert":
 					a.merge(alert_target(d))
 					a["alert"] = d
+				"nodecond":
+					a.merge({"kind": "node", "key": d.name, "ns": ""})
+				"pvc":
+					a.merge({"kind": "volume", "key": d.ns + "/" + d.name, "ns": d.ns})
+				"quota":
+					a.merge({"kind": "namespace", "key": d.ns, "ns": d.ns})
+				"app":
+					var dn := str(d.get("dest_ns", "")) if str(d.get("dest_ns", "")) != "" else str(d.ns)
+					a.merge({"kind": "namespace", "key": dn, "ns": dn})
+				"cert":
+					a.merge({"kind": "namespace", "key": d.ns, "ns": d.ns})
 				_:
 					a.merge({"kind": "pod", "key": d.ns + "/" + d.name, "ns": d.ns})
 			if out.size() < ALARM_TEXTS:
@@ -1458,6 +1494,11 @@ func _compute_alarms(s: Dictionary) -> Array:
 					"pod": a.text = tr("%s/%s  %s (restarts %d)") % [d.ns, d.name, d.status, int(d.restarts)]
 					"stuck": a.text = tr("%s/%s  stuck in %s") % [d.ns, d.name, d.status]
 					"workload": a.text = tr("%s %s/%s  %d/%d ready") % [str(d.kind).to_lower(), d.ns, d.name, int(d.ready), int(d.desired)]
+					"nodecond": a.text = tr("node %s: %s") % [d.name, d.cond]
+					"pvc": a.text = tr("%s/%s  volume %s (class %s)") % [d.ns, d.name, d.status, d.get("class", "")]
+					"quota": a.text = tr("%s: quota %s at %d%% (%s of %s)") % [d.ns, d.q.resource, int(d.q.pct), d.q.used, d.q.hard]
+					"app": a.text = tr("Argo CD app %s: %s, %s") % [d.name, d.get("sync", "?"), d.get("health", "?")]
+					"cert": a.text = (tr("certificate %s/%s not ready: %s") % [d.ns, d.name, d.get("message", "")]) if not d.get("ready", false) else tr("certificate %s/%s expires in %s") % [d.ns, d.name, _age(d.get("expires_in", 0))]
 					"alert": a.text = "ALERT %s: %s" % [d.name, d.get("summary", "") if str(d.get("summary", "")) != "" else "%s/%s" % [d.get("ns", ""), d.get("pod", "")]]
 			out.append(a)
 	return out
@@ -1475,6 +1516,127 @@ static func alert_target(al: Dictionary) -> Dictionary:
 	if ns != "":
 		return {"kind": "namespace", "key": ns, "ns": ns}
 	return {"kind": "", "key": "", "ns": ""}
+
+
+var _cani := {}   # ns -> {checks} (my permissions there), asked when a hall is inspected
+
+## What else the cluster says about the inspected object: taints and
+## pressure (nodes), network policies (pods), GitOps status (workloads), and
+## quotas, limits, policies, storage, apps, certificates and my permissions
+## (namespaces).
+func _resource_lines(kind: String, d: Dictionary) -> Array:
+	var out := []
+	var st := K8s.state
+	match kind:
+		"node":
+			var taints: Array = d.get("taints", []) if d.get("taints") != null else []
+			if not taints.is_empty():
+				out.append(_kv("taints", "[color=#ffa300]%s[/color]" % ", ".join(taints)))
+				out.append("[color=#83769c]  %s[/color]" % tr("only pods with a matching toleration are scheduled here"))
+			var conds: Array = d.get("conditions", []) if d.get("conditions") != null else []
+			if not conds.is_empty():
+				out.append(_kv("pressure", "[color=#ff004d]%s[/color]" % ", ".join(conds)))
+				out.append("[color=#83769c]  %s[/color]" % tr("the kubelet may evict pods to recover (lowest priority first)"))
+		"pod":
+			var nps: Array = d.get("netpols", []) if d.get("netpols") != null else []
+			out.append(_kv("network", tr("policies: %s") % ", ".join(nps) if not nps.is_empty() else "[color=#83769c]%s[/color]" % tr("no NetworkPolicy selects it: all traffic allowed")))
+		"workload":
+			var g = d.get("gitops")
+			if g != null and g.tool == "argocd":
+				for ap in st.get("apps", []):
+					if ap.name == g.name:
+						out.append(_kv("argo cd", _app_status(ap)))
+		"namespace":
+			var ns := str(d.get("name", ""))
+			if ns == "" or (is_instance_valid(_insp_target) and _insp_target is FactoryBuilding and _insp_target.is_power):
+				return out
+			var nd: Dictionary = {}
+			for n in st.get("namespaces", []):
+				if n.name == ns:
+					nd = n
+			for q in (nd.get("quota", []) if nd.get("quota") != null else []):
+				var pct := float(q.get("pct", 0))
+				out.append(_kv("quota", "%s %s %s / %s" % [StatsPanel.bar(pct / 100.0, 10), q.resource, q.used, q.hard]))
+			for l in (nd.get("limits", []) if nd.get("limits") != null else []):
+				out.append(_kv("limits", "[color=#83769c]%s[/color]" % l))
+			var nps: Array = nd.get("netpols", []) if nd.get("netpols") != null else []
+			for np in nps:
+				var deny := []
+				if np.get("deny_in", false):
+					deny.append(tr("no traffic IN"))
+				if np.get("deny_out", false):
+					deny.append(tr("no traffic OUT"))
+				out.append(_kv("netpol", "%s  [color=#83769c](%s)[/color]%s" % [np.name, np.selects, ("  [color=#ffa300]%s[/color]" % ", ".join(deny)) if not deny.is_empty() else ""]))
+				for r in (np.get("ingress", []) + np.get("egress", [])):
+					out.append("[color=#83769c]      %s[/color]" % r)
+			if nps.is_empty():
+				out.append(_kv("netpol", "[color=#83769c]%s[/color]" % tr("none: every pod can talk to every pod")))
+			var vols: Array = st.get("volumes", []).filter(func(v): return v.ns == ns)
+			if not vols.is_empty():
+				out.append(_kv("storage", ", ".join(vols.map(func(v): return "%s %s (%s)" % [v.name, v.get("capacity", v.get("request", "")), v.status]))))
+			for ap in st.get("apps", []):
+				if str(ap.get("dest_ns", "")) == ns:
+					out.append(_kv("argo cd", "%s: %s" % [ap.name, _app_status(ap)]))
+			for c in st.get("certs", []):
+				if c.ns == ns:
+					out.append(_kv("tls", "%s %s  [color=#83769c]%s[/color]" % [c.name, ("[color=#00e436]%s[/color]" % tr("ready")) if c.ready else ("[color=#ff004d]%s[/color]" % tr("NOT READY")),
+						(tr("expires in %s") % _age(c.expires_in)) if float(c.get("expires_in", 0)) > 0 else ""]))
+			# My permissions here (asked once per namespace).
+			if not _cani.has(ns):
+				_cani[ns] = {}
+				K8s.can_i(ns, func(ok: bool, data: Dictionary):
+					_cani[ns] = data if ok else {"error": str(data.get("error", "?"))}
+					_insp_sig = "")
+			var ci: Dictionary = _cani[ns]
+			if ci.has("checks"):
+				var yes := []
+				var no := []
+				for c in ci.checks:
+					(yes if c.ok else no).append(tr(c.what))
+				out.append("[color=#83769c]%s[/color]" % (tr("YOUR PERMISSIONS HERE (%s)") % (ci.user if str(ci.get("user", "")) != "" else tr("your kubeconfig"))))
+				if not yes.is_empty():
+					out.append("  [color=#00e436]%s[/color] %s" % [tr("can:"), ", ".join(yes)])
+				if not no.is_empty():
+					out.append("  [color=#ff004d]%s[/color] %s" % [tr("can't:"), ", ".join(no)])
+	return out
+
+
+func _app_status(ap: Dictionary) -> String:
+	var sc := "00e436" if ap.get("sync", "") == "Synced" else "ffa300"
+	var hc: String = {"Healthy": "00e436", "Progressing": "29adff", "Degraded": "ff004d", "Missing": "ffa300"}.get(str(ap.get("health", "")), "c2c3c7")
+	var auto := (" · " + tr("auto-sync") + (" + self-heal" if ap.get("self_heal", false) else "")) if ap.get("auto_sync", false) else ""
+	var msg := ("  [color=#83769c]%s[/color]" % _esc(str(ap.message))) if str(ap.get("message", "")) != "" else ""
+	return "[color=#%s]%s[/color], [color=#%s]%s[/color]%s%s" % [sc, ap.get("sync", "?"), hc, ap.get("health", "?"), auto, msg]
+
+
+func _volume_lines(d: Dictionary) -> Array:
+	var out := []
+	out.append(_kv("namespace", d.ns))
+	var st := str(d.get("status", ""))
+	out.append(_kv("status", "[color=#%s]%s[/color]" % [StorageTank.status_color(d).to_html(false), st]))
+	out.append(_kv("size", "%s  [color=#83769c](%s %s)[/color]" % [d.get("capacity", "-"), tr("asked"), d.get("request", "")]))
+	out.append(_kv("access", ", ".join(d.get("access", []))))
+	var cls := str(d.get("class", ""))
+	var sc: Dictionary = {}
+	for c in K8s.state.get("storage_classes", []):
+		if c.name == cls or (cls == "" and c.get("default", false)):
+			sc = c
+	out.append(_kv("class", cls if cls != "" else tr("(default)")))
+	if not sc.is_empty():
+		out.append("[color=#83769c]  %s[/color]" % (tr("provisioner %s, reclaim %s, binding %s%s") % [sc.provisioner, sc.reclaim, sc.binding, tr(", can grow") if sc.get("expand", false) else ""]))
+	if str(d.get("volume", "")) != "":
+		out.append(_kv("volume", str(d.volume)))
+	var users: Array = d.get("pods", []) if d.get("pods") != null else []
+	out.append(_kv("used by", ", ".join(users) if not users.is_empty() else tr("(no pod)")))
+	out.append(_kv("age", _age(d.get("age", 0))))
+	if st == "Pending":
+		if sc.is_empty() and cls != "":
+			out.append("[color=#ff004d]%s[/color]" % (tr("No StorageClass called '%s' exists: nothing will ever create this volume. Use one of: %s") % [cls, ", ".join(K8s.state.get("storage_classes", []).map(func(c): return c.name))]))
+		elif sc.get("binding", "") == "WaitForFirstConsumer" and users.is_empty():
+			out.append("[color=#ffec27]%s[/color]" % tr("WaitForFirstConsumer: the volume is created when a pod that uses it is scheduled."))
+		else:
+			out.append("[color=#ffec27]%s[/color]" % tr("Waiting for the provisioner: check its events (kubectl describe pvc)."))
+	return out
 
 
 ## The alerts about what the inspector shows.
@@ -2945,6 +3107,9 @@ func _refresh_inspector() -> void:
 					"missing": "[color=#ff004d]%s[/color]" % tr("503: Service not found")}.get(r.status, r.status)
 				lines.append("[color=#%s]%s%s[/color]%s  ->  %s/%s:%s  %s" % [InternetCity.host_color(r.host).to_html(false),
 					r.host if r.host != "" else "*", r.path, "  [HTTPS]" if r.tls else "", r.ns, r.service, r.port, st])
+		"volume":
+			_insp_title.text = tr("VOLUME CLAIM %s") % d.name
+			lines.append_array(_volume_lines(d))
 		"node":
 			_insp_title.text = tr("NODE %s") % d.name
 			lines.append(_kv("status", ("[color=#00e436]Ready[/color]" if d.ready else "[color=#ff004d]NotReady[/color]") + ("  [color=#ffec27]%s[/color]" % tr("cordoned") if d.unschedulable else "")))
@@ -2968,6 +3133,7 @@ func _refresh_inspector() -> void:
 			var dr := {"action": "drain", "name": d.name}
 			buttons.append(["DRAIN", func(): _drain(d), "DangerButton", ro, Kubectl.for_action(dr)])
 	if is_instance_valid(_insp_target) and "data" in _insp_target:
+		lines.append_array(_resource_lines(_insp_kind, _insp_target.data))
 		lines.append_array(_alert_lines(_insp_kind, _insp_target.data))
 	_insp_info.text = "\n".join(lines)
 	var sig := str(buttons.map(func(b): return [b[0], b[3], b[4]])) + _insp_key

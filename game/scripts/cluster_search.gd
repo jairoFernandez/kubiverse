@@ -15,8 +15,11 @@ const KINDS := {
 	"node": "node", "nodes": "node", "no": "node",
 	"ns": "namespace", "namespace": "namespace", "namespaces": "namespace",
 	"ing": "ingress", "ingress": "ingress", "host": "ingress",
+	"pvc": "volume", "volume": "volume", "storage": "volume",
+	"app": "app", "argo": "app", "application": "app",
+	"cert": "cert", "certificate": "cert", "tls": "cert",
 }
-const ORDER := {"namespace": 0, "workload": 1, "service": 2, "pod": 3, "node": 4, "ingress": 5}
+const ORDER := {"namespace": 0, "workload": 1, "service": 2, "pod": 3, "node": 4, "ingress": 5, "volume": 6, "app": 7, "cert": 8}
 # Row layout (arrays are much cheaper than dictionaries here).
 enum { KIND, NAME, HAY, NS, NODE, STATUS, IMAGE, IPS, BAD, SRC, RULE }
 
@@ -51,6 +54,16 @@ static func index(s: Dictionary) -> Array:
 		var status := str(p.get("status", ""))
 		rows.append(["pod", str(p.name).to_lower(), ("%s %s %s %s %s %s" % [p.ns, status, p.get("node", ""), p.get("ip", ""), p.get("owner_name", ""), img]).to_lower(),
 			str(p.ns).to_lower(), str(p.get("node", "")).to_lower(), status.to_lower(), img, [str(p.get("ip", ""))], _pod_bad(p), p, null])
+	for v in _list(s, "volumes"):
+		rows.append(["volume", str(v.name).to_lower(), ("%s %s %s %s" % [v.ns, v.get("status", ""), v.get("class", ""), " ".join(v.get("pods", []) if v.get("pods") != null else [])]).to_lower(),
+			str(v.ns).to_lower(), "", str(v.get("status", "")).to_lower(), "", [], str(v.get("status", "")) != "Bound", v, null])
+	for ap in _list(s, "apps"):
+		rows.append(["app", str(ap.name).to_lower(), ("%s %s %s %s %s" % [ap.ns, ap.get("dest_ns", ""), ap.get("repo", ""), ap.get("sync", ""), ap.get("health", "")]).to_lower(),
+			str(ap.get("dest_ns", ap.ns)).to_lower(), "", ("%s %s" % [ap.get("sync", ""), ap.get("health", "")]).to_lower(), "", [], str(ap.get("health", "")) in ["Degraded", "Missing"], ap, null])
+	for c in _list(s, "certs"):
+		var cdns: Array = c.dns if c.get("dns") != null else []
+		rows.append(["cert", str(c.name).to_lower(), ("%s %s %s" % [c.ns, " ".join(cdns), c.get("issuer", "")]).to_lower(),
+			str(c.ns).to_lower(), "", "ready" if c.get("ready", false) else "not ready", "", [], not c.get("ready", false), c, null])
 	for ing in _list(s, "ingresses"):
 		var rules: Array = ing.rules if ing.get("rules") != null else []
 		for r in rules:
@@ -131,6 +144,17 @@ static func _result(r: Array) -> Dictionary:
 			return {"kind": "pod", "key": "%s/%s" % [d.ns, d.name], "ns": d.ns, "title": "%s/%s" % [d.ns, d.name], "bad": r[BAD],
 				"detail": "pod · %s · %d/%d%s%s" % [d.get("status", ""), int(d.get("ready", 0)), int(d.get("total", 0)),
 					(" · " + str(d.ip)) if str(d.get("ip", "")) != "" else "", (" · " + str(d.node)) if str(d.get("node", "")) != "" else ""]}
+	if r[KIND] == "volume":
+		return {"kind": "volume", "key": "%s/%s" % [d.ns, d.name], "ns": d.ns, "title": "%s/%s" % [d.ns, d.name], "bad": r[BAD],
+			"detail": "pvc · %s · %s · %s" % [d.get("status", ""), d.get("capacity", d.get("request", "")), d.get("class", "")]}
+	if r[KIND] == "app":
+		var dn := str(d.get("dest_ns", "")) if str(d.get("dest_ns", "")) != "" else str(d.ns)
+		return {"kind": "namespace", "key": dn, "ns": dn, "title": "argocd/" + str(d.name), "bad": r[BAD],
+			"detail": "Argo CD app · %s, %s → %s" % [d.get("sync", "?"), d.get("health", "?"), dn]}
+	if r[KIND] == "cert":
+		var cdns: Array = d.dns if d.get("dns") != null else []
+		return {"kind": "namespace", "key": d.ns, "ns": d.ns, "title": "%s/%s" % [d.ns, d.name], "bad": r[BAD],
+			"detail": "certificate · %s · %s" % ["ready" if d.get("ready", false) else "NOT READY", ", ".join(cdns)]}
 	# ingress host: to the service behind it
 	var rule: Dictionary = r[RULE]
 	return {"kind": "service", "key": "%s/%s" % [d.ns, rule.get("service", "")], "ns": d.ns, "bad": false,

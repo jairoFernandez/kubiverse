@@ -26,6 +26,11 @@ type Snapshot struct {
 	Ingresses  []Ingress   `json:"ingresses"`
 	Metrics    Metrics     `json:"metrics"`
 	Alerts     []Alert     `json:"alerts"` // firing (Alertmanager / Prometheus rules)
+	// Beyond workloads (each empty when it can't be listed).
+	Volumes        []Volume       `json:"volumes"` // PersistentVolumeClaims
+	StorageClasses []StorageClass `json:"storage_classes"`
+	Apps           []ArgoApp      `json:"apps"`  // Argo CD Applications
+	Certs          []Cert         `json:"certs"` // cert-manager Certificates
 }
 
 type Node struct {
@@ -40,13 +45,18 @@ type Node struct {
 	OS            string   `json:"os"`
 	Arch          string   `json:"arch"`
 	Age           int64    `json:"age"`
-	CPUm          int64    `json:"cpu_m"`     // allocatable millicores
-	MemBytes      int64    `json:"mem_bytes"` // allocatable memory
+	CPUm          int64    `json:"cpu_m"`      // allocatable millicores
+	MemBytes      int64    `json:"mem_bytes"`  // allocatable memory
+	Taints        []string `json:"taints"`     // "key=value:Effect"
+	Conditions    []string `json:"conditions"` // abnormal ones: MemoryPressure, DiskPressure...
 }
 
 type Namespace struct {
-	Name  string `json:"name"`
-	Phase string `json:"phase"`
+	Name    string      `json:"name"`
+	Phase   string      `json:"phase"`
+	NetPols []NetPol    `json:"netpols,omitempty"`
+	Quota   []QuotaItem `json:"quota,omitempty"`
+	Limits  []string    `json:"limits,omitempty"` // LimitRanges in words
 }
 
 type Pod struct {
@@ -67,7 +77,8 @@ type Pod struct {
 	Deleting   bool     `json:"deleting"`
 	CPUReqm    int64    `json:"cpu_req_m"`
 	MemReq     int64    `json:"mem_req"`
-	Message    string   `json:"message"` // why it is not running (scheduler / container)
+	Message    string   `json:"message"`           // why it is not running (scheduler / container)
+	NetPols    []string `json:"netpols,omitempty"` // NetworkPolicies that select it
 }
 
 type Workload struct {
@@ -305,6 +316,7 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 			return s.Ingresses[i].Namespace+"/"+s.Ingresses[i].Name < s.Ingresses[j].Namespace+"/"+s.Ingresses[j].Name
 		})
 	}
+	b.fillResources(s, pods, now)
 	return s, nil
 }
 
@@ -343,10 +355,20 @@ func convertNode(n *corev1.Node, now time.Time) Node {
 		CPUm:          n.Status.Allocatable.Cpu().MilliValue(),
 		MemBytes:      n.Status.Allocatable.Memory().Value(),
 	}
+	out.Taints, out.Conditions = []string{}, []string{}
 	for _, c := range n.Status.Conditions {
 		if c.Type == corev1.NodeReady {
 			out.Ready = c.Status == corev1.ConditionTrue
+		} else if c.Status == corev1.ConditionTrue {
+			out.Conditions = append(out.Conditions, string(c.Type))
 		}
+	}
+	for _, t := range n.Spec.Taints {
+		s := t.Key
+		if t.Value != "" {
+			s += "=" + t.Value
+		}
+		out.Taints = append(out.Taints, s+":"+string(t.Effect))
 	}
 	for k := range n.Labels {
 		if r, ok := strings.CutPrefix(k, "node-role.kubernetes.io/"); ok && r != "" {

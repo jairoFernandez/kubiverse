@@ -71,6 +71,9 @@ static func for_view(kind: String, d: Dictionary) -> Array:
 	var ns: String = d.get("ns", "")
 	var n: String = d.get("name", "")
 	match kind:
+		"volume":
+			return [["the claim", "kubectl -n %s get pvc %s" % [ns, n]], ["why it is (not) bound: events", "kubectl -n %s describe pvc %s" % [ns, n]],
+				["the storage classes", "kubectl get storageclass"]]
 		"gate":
 			return [["every Ingress", "kubectl get ingress -A"], ["details and events", "kubectl describe ingress -A"],
 				["Services reachable from outside", "kubectl get svc -A --field-selector spec.type=LoadBalancer"]]

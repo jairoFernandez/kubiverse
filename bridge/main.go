@@ -64,6 +64,7 @@ type Bridge struct {
 	ingLister  networkinglisters.IngressLister // nil if Ingresses can't be listed
 	ops        opsListers                      // HPAs and PDBs (each nil if not allowed)
 	obs        observability                   // Prometheus, Alertmanager, Loki
+	res        resListers                      // storage, policies, quotas, CRDs
 	ctx        context.Context                 // lives as long as this cluster's bridge
 
 	mu      sync.Mutex
@@ -162,6 +163,7 @@ func main() {
 	mux.HandleFunc("GET /api/pod", hub.cluster((*Bridge).handlePod))
 	mux.HandleFunc("GET /api/rollout", hub.cluster((*Bridge).handleRollout))
 	mux.HandleFunc("GET /api/obs", hub.cluster((*Bridge).handleObs))
+	mux.HandleFunc("GET /api/cani", hub.cluster((*Bridge).handleCanI))
 	mux.HandleFunc("GET /api/series", hub.cluster((*Bridge).handleSeries))
 	mux.HandleFunc("GET /api/logsearch", hub.cluster((*Bridge).handleLogSearch))
 	mux.HandleFunc("GET /api/manifest", hub.cluster((*Bridge).handleManifestGet))
@@ -282,6 +284,7 @@ func startBridge(root context.Context, cfg *rest.Config, ctxName, kubeconfigPath
 		f.Policy().V1().PodDisruptionBudgets().Informer().AddEventHandler(markDirty)
 	}
 	probeCancel()
+	b.addResources(ctx, f, cs, cfg, markDirty)
 	b.watchEvents(ctx, f)
 
 	b.startWatch(ctx, f)

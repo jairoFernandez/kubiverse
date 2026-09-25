@@ -106,6 +106,9 @@ func _cluster(s: Dictionary) -> void:
 		if not n.get("ready", true):
 			down += 1
 	# The team's alerts count too: a critical one is a storm.
+	for n in s.get("nodes", []):
+		if n.get("conditions") != null and not (n.conditions as Array).is_empty():
+			bad += 4
 	for al in s.get("alerts", []):
 		match str(al.get("severity", "")):
 			"critical": down += 1

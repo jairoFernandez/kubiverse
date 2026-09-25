@@ -517,6 +517,7 @@ func _emit() -> void:
 		out.phase = "Running" if p.status == "Running" else "Pending"
 		s.pods.append(out)
 	s["alerts"] = _alerts()
+	_resources(s)
 	for wkey in workloads:
 		var wl: Dictionary = workloads[wkey]
 		var mine := pods.values().filter(func(p): return p._wl == wkey and not p.deleting)
@@ -995,3 +996,62 @@ func log_search(ns: String, wl_name: String, text: String, since: String) -> Dic
 		lines.append({"t": int((now - i * 7.3) * 1000.0), "pod": p.name, "container": wl.get("containers", [p.name])[0], "line": line})
 	var sel := "namespace=\"%s\"" % ns + ((", pod=~\"%s-.*\"" % wl_name) if wl_name != "" else "")
 	return {"ok": true, "query": "{%s}%s" % [sel, (" |= \"%s\"" % text) if text != "" else ""], "lines": lines}
+
+
+# --- block 5: storage, policies, quotas, CRDs --------------------------------
+
+## The resources beyond workloads, like the bridge's snapshot has them.
+func _resources(s: Dictionary) -> void:
+	var users := func(wkey: String) -> Array:
+		return pods.values().filter(func(p): return p._wl == wkey and not p.deleting).map(func(p): return p.name)
+	s["volumes"] = [
+		{"ns": "data", "name": "data-broker-0", "status": "Bound", "capacity": "20Gi", "request": "20Gi", "class": "standard", "access": ["RWO"], "volume": "pvc-3f1a", "pods": users.call("data/StatefulSet/broker").slice(0, 1), "age": 864000},
+		{"ns": "data", "name": "data-broker-1", "status": "Bound", "capacity": "20Gi", "request": "20Gi", "class": "standard", "access": ["RWO"], "volume": "pvc-77c2", "pods": users.call("data/StatefulSet/broker").slice(1, 2), "age": 864000},
+		{"ns": "shop", "name": "redis-data", "status": "Bound", "capacity": "8Gi", "request": "8Gi", "class": "standard", "access": ["RWO"], "volume": "pvc-19ab", "pods": users.call("shop/StatefulSet/redis"), "age": 2592000},
+		{"ns": "ml", "name": "datasets", "status": "Pending", "capacity": "", "request": "500Gi", "class": "fast-ssd", "access": ["RWX"], "volume": "", "pods": [], "age": 5400},
+	]
+	s["storage_classes"] = [
+		{"name": "standard", "provisioner": "rancher.io/local-path", "reclaim": "Delete", "binding": "WaitForFirstConsumer", "default": true, "expand": false},
+		{"name": "premium-rwo", "provisioner": "pd.csi.storage.gke.io", "reclaim": "Retain", "binding": "WaitForFirstConsumer", "default": false, "expand": true},
+	]
+	for n in s.namespaces:
+		match n.name:
+			"payments":
+				n["netpols"] = [
+					{"name": "default-deny", "selects": "all pods", "types": ["Ingress", "Egress"], "deny_in": true, "deny_out": true, "ingress": [], "egress": []},
+					{"name": "ledger-db", "selects": "app=ledger", "types": ["Egress"], "deny_in": false, "deny_out": false, "ingress": [], "egress": ["to pods app=postgres on 5432", "to namespaces kubernetes.io/metadata.name=kube-system on 53/UDP"]},
+				]
+				var used := pods.values().filter(func(p): return p.ns == "payments" and not p.deleting).size()
+				n["quota"] = [
+					{"quota": "payments-quota", "resource": "pods", "used": str(used), "hard": "4", "pct": used * 25.0},
+					{"quota": "payments-quota", "resource": "requests.cpu", "used": "%dm" % (used * 100), "hard": "500m", "pct": used * 20.0},
+				]
+				n["limits"] = ["Container (defaults): default request cpu 100m, memory 64Mi; default limit cpu 500m, memory 256Mi"]
+			"shop":
+				n["netpols"] = [{"name": "allow-frontend", "selects": "app=frontend", "types": ["Ingress"], "deny_in": false, "deny_out": false, "ingress": ["from all namespaces on 80"], "egress": []}]
+	for p in s.pods:
+		if p.ns == "payments":
+			p["netpols"] = ["default-deny"] + (["ledger-db"] if str(p.name).begins_with("ledger") else [])
+		elif p.ns == "shop" and str(p.name).begins_with("frontend"):
+			p["netpols"] = ["allow-frontend"]
+	for n in s.nodes:
+		n["taints"] = ["nvidia.com/gpu=present:NoSchedule"] if n.name == "gpu-1" else (["node-role.kubernetes.io/control-plane:NoSchedule"] if n.name == "control-plane" else [])
+		n["conditions"] = ["DiskPressure"] if n.name == "worker-c" and fmod(Time.get_unix_time_from_system(), 600.0) < 240.0 else []
+	s["apps"] = [
+		{"ns": "argocd", "name": "shop", "project": "default", "repo": "https://github.com/acme/platform.git", "path": "apps/shop", "revision": "a1b2c3d4e5", "dest_ns": "shop",
+			"sync": "Synced", "health": "Healthy", "auto_sync": true, "self_heal": true},
+		{"ns": "argocd", "name": "payments", "project": "default", "repo": "https://github.com/acme/platform.git", "path": "apps/payments", "revision": "f00dbabe12", "dest_ns": "payments",
+			"sync": "OutOfSync", "health": "Degraded", "auto_sync": false, "self_heal": false, "message": "Deployment ledger: 0/2 replicas available"},
+	]
+	s["certs"] = [
+		{"ns": "shop", "name": "shop-tls", "secret": "shop-tls", "dns": ["shop.example.com"], "issuer": "ClusterIssuer/letsencrypt", "ready": true, "expires_in": 60 * 86400},
+		{"ns": "payments", "name": "pay-tls", "secret": "pay-tls", "dns": ["pay.example.com"], "issuer": "ClusterIssuer/letsencrypt", "ready": true, "expires_in": 5 * 86400},
+	]
+
+
+func can_i(ns: String) -> Dictionary:
+	var checks := []
+	for c in [["see pods", true], ["read logs", true], ["exec into pods", ns != "payments"], ["delete pods", true], ["scale / edit deployments", true],
+			["create deployments", true], ["edit services", true], ["read configmaps", true], ["read secrets", ns != "payments"], ["port-forward", true]]:
+		checks.append({"what": c[0], "ok": c[1], "cmd": "kubectl auth can-i ... -n %s" % ns})
+	return {"ok": true, "user": "", "checks": checks}

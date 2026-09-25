@@ -58,6 +58,14 @@ func _init() -> void:
 	assert(not KubiMissions.check(last, "state", null, null, ast, {}), "still firing")
 	ast.alerts = []
 	assert(KubiMissions.check(last, "state", null, null, ast, {}), "alert gone")
+	# Search finds PVCs (to their tank), Argo CD apps and certificates (to their namespace).
+	var rs := {"volumes": [{"ns": "ml", "name": "datasets", "status": "Pending", "class": "fast-ssd", "request": "500Gi", "pods": []}],
+		"apps": [{"ns": "argocd", "name": "payments", "dest_ns": "payments", "sync": "OutOfSync", "health": "Degraded"}],
+		"certs": [{"ns": "shop", "name": "shop-tls", "dns": ["shop.example.com"], "ready": true}]}
+	var hv: Dictionary = ClusterSearch.find(rs, "datasets")[0]
+	assert(hv.kind == "volume" and hv.key == "ml/datasets" and hv.bad, str(hv))
+	assert(ClusterSearch.find(rs, "kind:app")[0].key == "payments", "app -> its namespace")
+	assert(ClusterSearch.find(rs, "shop.example.com")[0].kind == "namespace", "cert -> namespace")
 	# Kubi's dynamic missions: a hot node gives a bottleneck mission with the
 	# biggest pod named, and its VERIFY step passes once the node cools down.
 	var hs := {"nodes": [{"name": "n1", "cpu_m": 1000, "mem_bytes": 1 << 30}, {"name": "n2", "cpu_m": 1000, "mem_bytes": 1 << 30}],

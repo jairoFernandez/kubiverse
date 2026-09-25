@@ -267,7 +267,7 @@ func _process(delta: float) -> void:
 		_reconnect_in = 2.0
 
 
-const COLLECTIONS := ["nodes", "namespaces", "pods", "workloads", "services", "ingresses", "alerts"]
+const COLLECTIONS := ["nodes", "namespaces", "pods", "workloads", "services", "ingresses", "alerts", "volumes", "storage_classes", "apps", "certs"]
 var _seq := -1   # the bridge's number for the state we have (patches build on it)
 
 
@@ -290,6 +290,11 @@ func _on_patch(p: Dictionary) -> void:
 				it["age"] = float(it.get("age", 0)) + dt
 		for a in state.get("alerts", []):
 			a["since"] = float(a.get("since", 0)) + dt
+		for v in state.get("volumes", []):
+			v["age"] = float(v.get("age", 0)) + dt
+		for c in state.get("certs", []):
+			if float(c.get("expires_in", 0)) != 0.0:
+				c["expires_in"] = float(c.expires_in) - dt
 	if p.get("metrics") != null:
 		state["metrics"] = p.metrics
 	var sets: Dictionary = p.get("set") if p.get("set") != null else {}
@@ -327,7 +332,7 @@ func _on_patch(p: Dictionary) -> void:
 ## How the bridge names an item of a collection (bridge/delta.go).
 static func item_key(coll: String, it: Dictionary) -> String:
 	match coll:
-		"nodes", "namespaces":
+		"nodes", "namespaces", "storage_classes":
 			return str(it.name)
 		"workloads":
 			return "%s/%s/%s" % [it.ns, it.kind, it.name]
@@ -502,6 +507,17 @@ func log_search(ns: String, workload: String, text: String, since: String, cb: C
 		return
 	var q := "/api/logsearch?ns=%s&workload=%s&q=%s&since=%s%s" % [ns.uri_encode(), workload.uri_encode(), text.uri_encode(), since, _q(false)]
 	_http(HTTPClient.METHOD_GET, q, "", func(ok: bool, data):
+		var good := ok and typeof(data) == TYPE_DICTIONARY and bool(data.get("ok", false))
+		cb.call(good, data if typeof(data) == TYPE_DICTIONARY else {"error": str(data)}))
+
+
+## What I may do in a namespace (my own RBAC; impersonated in team mode).
+## cb(ok, {user, checks: [{what, ok, cmd}]} or {error})
+func can_i(ns: String, cb: Callable) -> void:
+	if mode == Mode.DEMO:
+		cb.call(true, _mock.can_i(ns))
+		return
+	_http(HTTPClient.METHOD_GET, "/api/cani?ns=%s%s" % [ns.uri_encode(), _q(false)], "", func(ok: bool, data):
 		var good := ok and typeof(data) == TYPE_DICTIONARY and bool(data.get("ok", false))
 		cb.call(good, data if typeof(data) == TYPE_DICTIONARY else {"error": str(data)}))
 

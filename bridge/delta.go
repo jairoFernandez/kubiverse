@@ -49,6 +49,10 @@ func (d *stateDiff) next(s *Snapshot) (full, patch []byte) {
 	diffList(d, p, "services", s.Services, func(x Service) string { return x.Namespace + "/" + x.Name }, nil)
 	diffList(d, p, "ingresses", s.Ingresses, func(x Ingress) string { return x.Namespace + "/" + x.Name }, nil)
 	diffList(d, p, "alerts", s.Alerts, func(a Alert) string { return a.ID }, func(a Alert) Alert { a.Since = 0; return a })
+	diffList(d, p, "volumes", s.Volumes, func(v Volume) string { return v.Namespace + "/" + v.Name }, func(v Volume) Volume { v.Age = 0; return v })
+	diffList(d, p, "storage_classes", s.StorageClasses, func(c StorageClass) string { return c.Name }, nil)
+	diffList(d, p, "apps", s.Apps, func(a ArgoApp) string { return a.Namespace + "/" + a.Name }, nil)
+	diffList(d, p, "certs", s.Certs, func(c Cert) string { return c.Namespace + "/" + c.Name }, func(c Cert) Cert { c.ExpiresIn /= 3600; return c })
 	m, _ := json.Marshal(s.Metrics)
 	if !bytes.Equal(m, d.metrics) {
 		d.metrics = m

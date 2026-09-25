@@ -384,6 +384,15 @@ The bridge finds them by itself among the cluster's Services (kube-prometheus-st
 - **LOGS (all pods)** on a workload or namespace: Loki, with a text filter and a time range, and the LogQL behind it.
 - The demo simulates all three: `ml/trainer` leaks memory (an alert, and the history shows since when), `payments/ledger` restarts until you roll it back.
 
+## Beyond workloads
+
+- **Storage**: every PersistentVolumeClaim is a tank in its hall (full and green when Bound, empty and blinking while Pending, red if Lost). Its inspector says size, class, access modes, which pods mount it and, when it's stuck, why: a StorageClass that doesn't exist (and which ones do), `WaitForFirstConsumer`, or the provisioner.
+- **Nodes**: taints and pressure conditions (MemoryPressure, DiskPressure, PIDPressure) in the inspector; pressure raises an alarm and darkens the weather.
+- **A namespace's inspector**: its ResourceQuotas as bars (≥90% raises an alarm), LimitRange defaults, NetworkPolicies in words ("default-deny: no traffic IN"; "from pods app=api on 5432"), its PVCs, the Argo CD apps that deploy into it, its certificates, and **your permissions there** (`can: see pods, read logs... · can't: read secrets`, from a SelfSubjectRulesReview: in team mode, the signed-in person's).
+- **A pod's inspector**: the NetworkPolicies that select it (or "all traffic allowed").
+- **Common CRDs, when installed**: Argo CD Applications (sync and health; OutOfSync, Missing and Degraded raise alarms, and a workload managed by an app shows its status), cert-manager Certificates (not ready, or expiring in less than 14 days, raise alarms) and Gateway API HTTPRoutes, drawn in the Internet city like Ingress routes.
+- All of it is searchable (`kind:pvc`, `kind:app`, `kind:cert`), and the Helm chart's ServiceAccount can read it.
+
 ## Quick start
 
 Requirements: Go (version in `bridge/go.mod`), Godot 4.7 (`brew install --cask godot`), a working kubeconfig.
@@ -501,6 +510,7 @@ The defaults expect oauth2-proxy answering `/oauth2/*` on the same host (see [va
 | GET | `/api/obs` | the Prometheus / Alertmanager / Loki found (`{prometheus, alertmanager, loki}`, null if missing) |
 | GET | `/api/series?kind=pod\|workload\|node&ns=&name=&range=1h\|6h\|24h\|7d` | `{cpu, mem, restarts}` as `[[unix, value]...]` from Prometheus |
 | GET | `/api/logsearch?ns=&workload=&q=&since=1h&limit=300` | `{query, lines: [{t, pod, container, line}]}` from Loki, newest first |
+| GET | `/api/cani?ns=` | `{user, checks: [{what, ok, cmd}]}`: what you may do in a namespace |
 | GET | `/api/rollout?ns=&name=` | a Deployment's revisions (newest first), paused, and its `hpa`, `pdb` and `gitops` owner |
 
 ## Layout
