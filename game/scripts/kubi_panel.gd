@@ -48,6 +48,7 @@ var _ollama_box: VBoxContainer
 var _llama_box: VBoxContainer
 var _dl_box: VBoxContainer
 var _sig := ""
+var _cmd_refs: Array[String] = []   # commands behind the RUN / COPY links
 var _attachments := []   # terminal outputs for the next question [{id, cmd, out, ok}]
 var _att_box: HFlowContainer
 var _explain_btn: Button
@@ -251,6 +252,7 @@ func _build_chat_page() -> VBoxContainer:
 	_list.add_theme_constant_override("separation", 4)
 	body.add_child(_list)
 	_diag = hud._rich(22)
+	_diag.selection_enabled = true
 	_diag.meta_clicked.connect(_on_cmd)
 	body.add_child(_diag)
 	_acts = HFlowContainer.new()
@@ -259,6 +261,7 @@ func _build_chat_page() -> VBoxContainer:
 	body.add_child(_acts)
 	body.add_child(hud._section("CHAT"))
 	_chat = hud._rich(22)
+	_chat.selection_enabled = true  # select + Ctrl/Cmd+C also works
 	_chat.meta_clicked.connect(_on_cmd)
 	body.add_child(_chat)
 	return body
@@ -591,9 +594,9 @@ func _show(d: Dictionary) -> void:
 		for i in d.steps.size():
 			t += "[color=#ffec27]%d.[/color] %s\n" % [i + 1, hud._esc(d.steps[i])]
 	if not d.cmds.is_empty():
-		t += "\n[color=#83769c]%s[/color]\n" % tr("COMMANDS (click: reading ones run, the rest are typed in the terminal for you to review)")
+		t += "\n[color=#83769c]%s[/color]\n" % tr("COMMANDS - RUN: reading ones run now, the others are typed in the terminal for you to review (Enter)")
 		for c in d.cmds:
-			t += "[color=#ffec27]$[/color] [url=%s]%s[/url]\n" % [c, hud._esc(c)]
+			t += cmd_line(c)
 	_diag.text = t
 	_clear_acts()
 	for a in d.acts:
@@ -609,8 +612,41 @@ func _clear_acts() -> void:
 ## A command clicked in the diagnosis or in an answer: reading ones run now
 ## and their output is attached to the chat; the rest go to the terminal
 ## input for you to review (their output can be sent back with "-> Kubi").
+## A command with its RUN and COPY buttons (links in the rich text).
+func cmd_line(c: String) -> String:
+	return "[color=#ffec27]$ %s[/color]\n   %s\n" % [hud._esc(c), _buttons(c)]
+
+
+func _buttons(c: String) -> String:
+	# Links carry an index (commands may contain "]", which would end the tag).
+	var i := _cmd_refs.size()
+	_cmd_refs.append(c)
+	var out := ""
+	if not c.contains("<"):
+		out += "[url=run:%d][bgcolor=#123a1d][color=#00e436] %s [/color][/bgcolor][/url] " % [i, tr("RUN")]
+	else:  # has <placeholders>: typed in the terminal for you to complete
+		out += "[url=fill:%d][bgcolor=#3a3212][color=#ffec27] %s [/color][/bgcolor][/url] " % [i, tr("TO TERMINAL")]
+	out += "[url=copy:%d][bgcolor=#1d2b53][color=#29adff] %s [/color][/bgcolor][/url]" % [i, tr("COPY")]
+	return out
+
+
 func _on_cmd(meta) -> void:
-	var cmd := str(meta)
+	var m := str(meta)
+	for pre in ["copy:", "run:", "fill:"]:
+		if m.begins_with(pre):
+			var i := int(m.substr(pre.length()))
+			if i < 0 or i >= _cmd_refs.size():
+				return
+			if pre == "copy:":
+				DisplayServer.clipboard_set(_cmd_refs[i])
+				hud.toast(tr("Copied: %s") % _cmd_refs[i], true)
+				return
+			if pre == "fill:":
+				hud._term_fill(_cmd_refs[i])
+				hud.toast(tr("Complete the <...> parts and press Enter"), true)
+				return
+			m = _cmd_refs[i]
+	var cmd := m
 	if Diagnose.is_read_only(cmd) and not cmd.contains("|") and not cmd.contains("<"):
 		if not Settings.terminal:
 			hud.toggle_terminal()
@@ -710,7 +746,7 @@ func _format(text: String) -> String:
 	for m in re.search_all(out):
 		var raw := m.get_string(1).replace("[lb]", "[")
 		if raw.begins_with("kubectl "):
-			out = out.replace(m.get_string(0), "[url=%s][color=#ffec27]%s[/color][/url]" % [raw, m.get_string(1)])
+			out = out.replace(m.get_string(0), "[color=#ffec27]%s[/color] %s" % [m.get_string(1), _buttons(raw)])
 		else:
 			out = out.replace(m.get_string(0), "[color=#ffa300]%s[/color]" % m.get_string(1))
 	var bold := RegEx.new()

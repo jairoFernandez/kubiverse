@@ -60,6 +60,7 @@ var _menu_btn: Button
 var _menu_panel: PanelContainer
 var _compact_term := false
 var _was_compact := false
+var _close_fab: Button
 var editor: ManifestEditor
 var term_log := []     # last terminal outputs [{id, cmd, out, ok}]
 var _term_seq := 0
@@ -178,6 +179,7 @@ class LabelOverlay extends Control:
 	var items := []
 	var font: Font
 	var crosshair := false
+	var text_scale := 1.0     # smaller plates on phones
 	var hits := []   # [[Rect2, Entity]] label plates you can click, last drawn on top
 	const PAD := Vector2(10, 5)
 
@@ -194,8 +196,8 @@ class LabelOverlay extends Control:
 		var sorted := items.duplicate()
 		sorted.sort_custom(func(a, b): return a.big and not b.big)
 		for it in sorted:
-			var size: int = 23 if it.big else (18 if it.get("small", false) else 21)
-			var sub_size := 18
+			var size: int = roundi((23 if it.big else (18 if it.get("small", false) else 21)) * text_scale)
+			var sub_size := roundi(18 * text_scale)
 			var sub: String = it.get("sub", "")
 			var w := font.get_string_size(it.text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
 			if sub != "":
@@ -711,6 +713,7 @@ func _build_game_ui() -> void:
 	h.add_child(_menu_btn)
 	_build_menu()
 
+
 	# ---- Volume panel (drops down under the bar)
 	_vol_panel = PanelContainer.new()
 	_vol_panel.anchor_left = 1.0
@@ -951,6 +954,7 @@ func _build_game_ui() -> void:
 	_term_input.add_theme_stylebox_override("focus", _flat(Color("05060c"), Vox.YELLOW, 2, 6))
 	_term_input.text_submitted.connect(_term_submit)
 	_term_input.gui_input.connect(_term_keys)
+	_term_input.text_changed.connect(_term_clean)
 	tin.add_child(_term_input)
 
 
@@ -1350,6 +1354,34 @@ func _apply_compact(on: bool) -> void:
 	_sync_view()
 
 
+## Closes the panel on top (phones have no ESC key). True if one closed.
+func close_top() -> bool:
+	if close_modals():
+		return true
+	for p in [_menu_panel, stats, _mission_panel]:
+		if p.visible:
+			p.visible = false
+			_sync_view()
+			return true
+	if _compact_term and _terminal.visible:
+		_compact_term = false
+		_term_input.release_focus()
+		_sync_view()
+		return true
+	if _inspector.visible:
+		inspect(null)
+		return true
+	return false
+
+
+func _anything_to_close() -> bool:
+	for p in [_confirm_panel, _build_panel, _guide_panel, _map_panel, _logs_panel, _view_panel, _vol_panel, _alarm_panel,
+			_legend, kubi, watch, _menu_panel, stats, _mission_panel, _inspector]:
+		if p.visible:
+			return true
+	return _compact_term and _terminal.visible
+
+
 ## Rects of the visible UI, where touches belong to the interface.
 func ui_rects() -> Array:
 	var out := []
@@ -1357,6 +1389,8 @@ func ui_rects() -> Array:
 			_alarm_panel, stats, _game_root.get_node("Minimap")]:
 		if c and c.is_visible_in_tree():
 			out.append(c.get_global_rect())
+	if _close_fab and _close_fab.visible:
+		out.append(_close_fab.get_global_rect().grow(8))
 	out.append(Rect2(0, 0, _game_root.size.x, TOP))
 	return out
 
@@ -1659,6 +1693,28 @@ func _term_keys(ev: InputEvent) -> void:
 		KEY_ESCAPE:
 			_term_input.release_focus()
 			_term_input.accept_event()
+
+
+## The terminal already is kubectl: a pasted "kubectl get pods" (or
+## "$ kubectl ...", or several lines) becomes "get pods".
+func _term_clean(t: String) -> void:
+	var clean := clean_kubectl(t)
+	if clean != t:
+		var col := _term_input.caret_column - (t.length() - clean.length())
+		_term_input.text = clean
+		_term_input.caret_column = clampi(col, 0, clean.length())
+
+
+static func clean_kubectl(t: String) -> String:
+	var line := t.split("\n")[0] if t.contains("\n") else t
+	var s := line.strip_edges(true, false)
+	for p in ["$ ", "% ", "> "]:
+		if s.begins_with(p):
+			s = s.substr(p.length())
+	for p in ["kubectl ", "k "]:
+		if s.begins_with(p):
+			s = s.substr(p.length())
+	return s if s != line.strip_edges(true, false) or t.contains("\n") else t
 
 
 func _term_submit(line: String) -> void:
@@ -2092,6 +2148,11 @@ func _build_modals() -> void:
 	editor = ManifestEditor.new()
 	_modal_layer.add_child(editor)
 	editor.build(self)
+	# Phones have no ESC: one big button closes whatever panel is on top.
+	_close_fab = _button("CLOSE X", close_top, "DangerButton")
+	_close_fab.custom_minimum_size = Vector2(120, 48)
+	_close_fab.visible = false
+	_modal_layer.add_child(_close_fab)
 
 	# Toast
 	_toast = _label("", 28, Vox.GREEN)
@@ -2425,6 +2486,21 @@ func _layout() -> void:
 		_fit_top_bar(sz.x)
 	var top := TOP
 	_help_bar.visible = not touch
+	overlay.text_scale = 0.82 if compact else 1.0
+	# Toasts wrap on narrow screens instead of running off the edges.
+	_toast.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if compact else TextServer.AUTOWRAP_OFF
+	_toast.custom_minimum_size.x = (sz.x - 30.0) if compact else 0.0
+	_close_fab.visible = compact and _anything_to_close() and not editor.visible
+	if _close_fab.visible:
+		_close_fab.move_to_front()
+		_close_fab.size = Vector2.ZERO
+		var fs := _close_fab.get_combined_minimum_size()
+		# Right under the open panel(s), on the right: away from the thumbs.
+		var lowest := top
+		for p in [_inspector, kubi, watch, _legend, _mission_panel, stats, _alarm_panel, _vol_panel, _view_panel, _menu_panel]:
+			if p.visible:
+				lowest = maxf(lowest, p.get_global_rect().end.y)
+		_close_fab.position = Vector2(sz.x - fs.x - 8.0, clampf(lowest + 8.0, top, sz.y * 0.62))
 	var bottom := (_help_bar.size.y + 6.0) if _help_bar.visible else 6.0
 	# Terminal and feed sit above the help bar.
 	_term_text.custom_minimum_size.y = 300 if _term_input.has_focus() else 120

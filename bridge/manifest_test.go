@@ -1,7 +1,10 @@
 package main
 
 import (
+	"compress/gzip"
 	"encoding/json"
+	"io"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -95,5 +98,34 @@ func TestLanCert(t *testing.T) {
 	raw2, _ := os.ReadFile(c2)
 	if string(raw1) != string(raw2) {
 		t.Fatal("certificate regenerated although it still covers the IPs")
+	}
+}
+
+func TestWebHandlerGzip(t *testing.T) {
+	dir := t.TempDir()
+	body := strings.Repeat("wasm wasm wasm ", 5000)
+	os.WriteFile(dir+"/index.wasm", []byte(body), 0o600)
+	h := webHandler(dir)
+	req := httptest.NewRequest("GET", "/index.wasm", nil)
+	req.Header.Set("Accept-Encoding", "gzip, br")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Header().Get("Content-Encoding") != "gzip" || rec.Header().Get("Content-Type") != "application/wasm" {
+		t.Fatalf("headers %v", rec.Header())
+	}
+	zr, err := gzip.NewReader(rec.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(zr)
+	if string(got) != body || rec.Body.Len() > len(body)/10 {
+		t.Fatalf("bad gzip body (%d bytes)", rec.Body.Len())
+	}
+	req = httptest.NewRequest("GET", "/../../etc/passwd", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code == 200 {
+		t.Fatal("path traversal served")
 	}
 }

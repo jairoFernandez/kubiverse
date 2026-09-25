@@ -9,7 +9,7 @@ extends Node
 const PITCH := -35.264       # classic isometric angle
 const DRAG_THRESHOLD := 6.0  # px before a click becomes a drag
 const ZOOM_MIN := 10.0
-const ZOOM_MAX := 70.0
+const ZOOM_MAX := 70.0         # desktop; touch screens can zoom out twice as far
 
 const LEVEL_ZOOM := {"plant": 34.0, "power": 38.0}
 
@@ -51,6 +51,7 @@ var _click_marker: Node3D
 var _touches := {}            # index -> position
 var _multi_touch := false
 var _kubi_tap_ms := 0
+var _base_px := 3             # pixel-art scale at normal zoom
 # Day/night cycle driven by the cluster clock
 var _env: Environment
 var _sun: DirectionalLight3D
@@ -629,6 +630,8 @@ func _screenshot_and_quit(path: String) -> void:
 			player.teleport(world.spawn)
 			await get_tree().create_timer(0.3).timeout
 			_click_move(Vector2.ZERO, world.buildings[key])
+			print("CLICK on hall %s -> path=%d (must be 0: only inspect)" % [key, _path.size()])
+			_path = _find_path(player.global_position, _standable_near(world.buildings[key].door_position()))
 			print("DOOR %s: path=%d" % [key, _path.size()])
 			for i in 1100:
 				await get_tree().process_frame
@@ -637,12 +640,35 @@ func _screenshot_and_quit(path: String) -> void:
 			print("  level=%s changes=%s path_left=%d" % [world.level, changes, _path.size()])
 		get_tree().quit()
 		return
+	for x in OS.get_cmdline_user_args():
+		if x.begins_with("--zoom="):
+			_zoom_target = float(x.substr(7))
+			_zoom = _zoom_target
+			await get_tree().create_timer(1.0).timeout
+			print("ZOOM ", _zoom, " px=", _px, " base=", _base_px, " vp=", _vp.size)
+	if "--clean-test" in OS.get_cmdline_user_args():
+		for t in ["kubectl get pods -A", "$ kubectl -n ml describe pod x", "get pods", "  kubectl logs a", "kubectl get pods\nkubectl get nodes", "kubectl", "kube"]:
+			print("CLEAN '%s' -> '%s'" % [t.c_escape(), Hud.clean_kubectl(t)])
+		# RUN / COPY links in a Kubi answer
+		hud.toggle_kubi()
+		var f: String = hud.kubi._format("Try `kubectl -n ml describe pod giant-experiment` then `kubectl get nodes`.")
+		print("FMT ", f.contains("run:"), " ", f.contains("copy:"), " refs=", hud.kubi._cmd_refs)
+		hud.kubi._on_cmd("copy:1")
+		print("CLIP ", DisplayServer.clipboard_get())
+		get_tree().quit()
+		return
 	if "--menu-open" in OS.get_cmdline_user_args():
 		hud.toggle_menu()
 		await get_tree().create_timer(0.4).timeout
 	if "--kubi" in OS.get_cmdline_user_args():
 		hud.toggle_kubi()
 		await get_tree().create_timer(1.0).timeout
+		if "--kubi-cmds" in OS.get_cmdline_user_args():
+			hud.kubi.custom_rect = Rect2(20, 100, 700, 600)
+			hud.kubi.select(Diagnose.problems(K8s.state)[0])
+			await get_tree().process_frame
+			hud.kubi._scroll.scroll_vertical = 330
+			await get_tree().create_timer(0.5).timeout
 		if "--kubi-resize" in OS.get_cmdline_user_args():
 			var k: KubiPanel = hud.kubi
 			var before := k.size
@@ -725,7 +751,12 @@ func _apply_scale() -> void:
 	if win.x < 2 or win.y < 2:
 		return
 	_ui = Settings.ui_factor(win, hud != null and hud.touch)
-	_px = maxi(2, roundi(3.0 * Settings.dpi()))
+	_base_px = maxi(2, roundi(3.0 * Settings.dpi()))
+	if hud != null and hud.touch:
+		# Phones have 3x density: 3*dpi would render at 1/9 of the screen.
+		# Aim at ~400 world pixels on the short side instead.
+		_base_px = clampi(roundi(minf(win.x, win.y) / 400.0), 2, 6)
+	_px = _pixel_scale()
 	var want := Vector2i(maxi(1, roundi(win.x / _ui)), maxi(1, roundi(win.y / _ui)))
 	root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
 	if root.content_scale_size != want:
@@ -835,6 +866,11 @@ func _process(delta: float) -> void:
 	_update_zone()
 	_kubi_tick(delta)
 	_follow_path(delta)
+	# Zoomed out, the pixel-art gets finer so things stay readable.
+	var want_px := _pixel_scale()
+	if want_px != _px:
+		_px = want_px
+		_vpc.stretch_shrink = _px
 	_touch_tick()
 	var busy := hud.is_modal_open() or get_viewport().gui_get_focus_owner() is LineEdit
 	player.input_enabled = not busy
@@ -1031,11 +1067,30 @@ func _update_labels() -> void:
 	var items := []
 	if not hud.is_connect_visible():
 		var cam := _active_cam()
-		for l in world.labels(player.global_position):
+		var me := player.global_position
+		# Phones: only what is close (or selected / in trouble), a few at most;
+		# zoomed far out: titles without the second line.
+		var near_r := 14.0 + _zoom * 0.25
+		var kept := 0
+		var all: Array = world.labels(me)
+		if hud.compact:
+			all.sort_custom(func(a, b): return a.pos.distance_to(me) < b.pos.distance_to(me))
+		for l in all:
 			if cam.is_position_behind(l.pos):
 				continue
-			if _fpv and l.pos.distance_to(player.global_position) > 28.0:
+			if _fpv and l.pos.distance_to(me) > 28.0:
 				continue
+			var e = l.get("entity")
+			var pinned: bool = e != null and (e == world.hovered or e == world.selected or e == hud.inspected())
+			if hud.compact and e != null and not pinned:
+				var d: float = Vector2(l.pos.x - me.x, l.pos.z - me.z).length()
+				if d > near_r or kept >= 7:
+					continue
+				kept += 1
+				if d > 7.0:
+					l.sub = ""
+			if _zoom > 40.0 and not pinned:
+				l.sub = ""
 			l.screen = cam.unproject_position(l.pos) * _px / _ui
 			items.append(l)
 		# Kubi's speech bubble and the watchtower ghosts' name tags.
@@ -1128,10 +1183,10 @@ func _unhandled_input(event: InputEvent) -> void:
 					_press_button = 0
 			MOUSE_BUTTON_WHEEL_UP:
 				if event.pressed:
-					_zoom_target = clampf(_zoom_target * 0.9, ZOOM_MIN, ZOOM_MAX)
+					_zoom_target = clampf(_zoom_target * 0.9, ZOOM_MIN, _zoom_max())
 			MOUSE_BUTTON_WHEEL_DOWN:
 				if event.pressed:
-					_zoom_target = clampf(_zoom_target * 1.1, ZOOM_MIN, ZOOM_MAX)
+					_zoom_target = clampf(_zoom_target * 1.1, ZOOM_MIN, _zoom_max())
 	elif event is InputEventMouseMotion and _press_button != 0:
 		var px_pos: Vector2 = event.position * _ui
 		if not _dragging and px_pos.distance_to(_press_pos) > DRAG_THRESHOLD:
@@ -1147,7 +1202,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		# Two-finger trackpad scroll pans the camera.
 		_drag_pan(-event.delta * 12.0)
 	elif event is InputEventMagnifyGesture:
-		_zoom_target = clampf(_zoom_target / event.factor, ZOOM_MIN, ZOOM_MAX)
+		_zoom_target = clampf(_zoom_target / event.factor, ZOOM_MIN, _zoom_max())
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
 			if not hud.close_modals():
@@ -1165,8 +1220,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_M: hud.toggle_map()
 			KEY_J: hud.toggle_missions()
 			KEY_BACKSPACE: _go_level("plant")
-			KEY_EQUAL, KEY_KP_ADD: _zoom_target = clampf(_zoom_target * 0.85, ZOOM_MIN, ZOOM_MAX)
-			KEY_MINUS, KEY_KP_SUBTRACT: _zoom_target = clampf(_zoom_target * 1.15, ZOOM_MIN, ZOOM_MAX)
+			KEY_EQUAL, KEY_KP_ADD: _zoom_target = clampf(_zoom_target * 0.85, ZOOM_MIN, _zoom_max())
+			KEY_MINUS, KEY_KP_SUBTRACT: _zoom_target = clampf(_zoom_target * 1.15, ZOOM_MIN, _zoom_max())
 			KEY_SPACE: player.jump()
 			KEY_Z: player.set_flying(not player.flying)
 			KEY_Y: hud.toggle_kubi()
@@ -1876,14 +1931,13 @@ func _ground_point(mouse: Vector2) -> Vector3:
 	return Vector3.INF
 
 
+## Click on empty ground = walk there. Clicking something (a hall, a pod,
+## an island...) only inspects it: you may just want to look at it. To go
+## in, double-click a hall or walk onto its door.
 func _click_move(mouse: Vector2, target: Entity) -> void:
-	var goal := Vector3.INF
-	if target is FactoryBuilding:
-		goal = _standable_near(target.door_position())  # click a hall = go in through its door
-	elif target != null and not target.is_area():
-		goal = _standable_near(target.target + (player.global_position - target.target).normalized() * 1.2)
-	else:
-		goal = _ground_point(mouse)
+	if target != null and not (target is NodeIsland):
+		return
+	var goal := _ground_point(mouse)
 	if goal == Vector3.INF:
 		return
 	var path := _find_path(player.global_position, goal)
@@ -1984,7 +2038,7 @@ func _follow_path(delta: float) -> void:
 	for i in range(1, _path.size()):
 		left += _path[i - 1].distance_to(_path[i])
 	player.auto_dir = d.normalized()
-	player.auto_run = left > 7.0
+	player.auto_run = left > 14.0
 	# Stuck against something: hop once, then give up.
 	if p.distance_to(_path_prev) < 0.5 * delta:
 		_path_stuck += delta
@@ -2085,7 +2139,7 @@ func _touch_input(event: InputEvent) -> bool:
 			var d0 := old.distance_to(other)
 			var d1 := (event.position as Vector2).distance_to(other)
 			if d0 > 10.0 and d1 > 10.0:
-				_zoom_target = clampf(_zoom_target * d0 / d1, ZOOM_MIN, ZOOM_MAX)
+				_zoom_target = clampf(_zoom_target * d0 / d1, ZOOM_MIN, _zoom_max())
 			var a0 := (old - other).angle()
 			var a1 := ((event.position as Vector2) - other).angle()
 			_yaw_target += rad_to_deg(angle_difference(a0, a1)) * -1.0
@@ -2108,3 +2162,12 @@ func _on_kubi(ui_pos: Vector2) -> bool:
 	var sp := cam.unproject_position(_kubi.global_position) * _px / _ui
 	var bubble := cam.unproject_position(_kubi.global_position + Vector3(0, 0.7, 0)) * _px / _ui
 	return ui_pos.distance_to(sp) < 36.0 or (_kubi.bubble != "" and ui_pos.distance_to(bubble + Vector2(0, -20)) < 50.0)
+
+
+func _zoom_max() -> float:
+	return ZOOM_MAX * (2.0 if hud != null and hud.touch else 1.0)
+
+
+## World pixel scale: the base one, finer when zoomed far out.
+func _pixel_scale() -> int:
+	return maxi(1, roundi(_base_px * clampf(26.0 / maxf(_zoom, 1.0), 0.34, 1.0)))

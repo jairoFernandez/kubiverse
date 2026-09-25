@@ -125,12 +125,8 @@ func main() {
 	mux.HandleFunc("POST /api/assistant/download", hub.auth(hub.handleAIDownload))
 	mux.HandleFunc("DELETE /api/assistant/model", hub.auth(hub.handleAIDeleteModel))
 	if *webDir != "" {
-		fs := http.FileServer(http.Dir(*webDir))
-		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Always revalidate: a rebuilt game must never run from a stale cache.
-			w.Header().Set("Cache-Control", "no-cache")
-			fs.ServeHTTP(w, r)
-		}))
+		// Always revalidated (a rebuilt game never runs from a stale cache), gzipped.
+		mux.Handle("/", webHandler(*webDir))
 		log.Printf("serving web build from %s", *webDir)
 	}
 
@@ -351,7 +347,11 @@ func (b *Bridge) handleWS(w http.ResponseWriter, r *http.Request) {
 		b.mu.Unlock()
 		conn.CloseNow()
 	}()
-	log.Printf("game client connected from %s", r.RemoteAddr)
+	log.Printf("game client connected from %s (%s)", r.RemoteAddr, shortAgent(r.UserAgent()))
+	since := time.Now()
+	defer func() {
+		log.Printf("game client %s disconnected after %s", r.RemoteAddr, time.Since(since).Round(time.Second))
+	}()
 
 	ctx := conn.CloseRead(r.Context())
 	if last != nil {
