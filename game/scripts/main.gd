@@ -47,6 +47,10 @@ var _path: Array[Vector3] = []
 var _path_stuck := 0.0
 var _path_prev := Vector3.ZERO
 var _click_marker: Node3D
+# Touch: fingers on the world (not on the controls) for pinch / twist / look
+var _touches := {}            # index -> position
+var _multi_touch := false
+var _kubi_tap_ms := 0
 # Day/night cycle driven by the cluster clock
 var _env: Environment
 var _sun: DirectionalLight3D
@@ -179,6 +183,17 @@ func _ready() -> void:
 	hud = Hud.new()
 	hud.world = world
 	add_child(hud)
+	# Touch controls (phones/tablets), above the HUD but below dialogs.
+	hud.touch = _want_touch()
+	hud.touch_ctl = TouchControls.new()
+	hud.touch_ctl.font = hud._font
+	hud.touch_ctl.blockers = hud.ui_rects
+	hud.add_child(hud.touch_ctl)
+	hud.move_child(hud.touch_ctl, hud._modal_layer.get_index())
+	hud.touch_ctl.action.connect(_on_touch_action)
+	hud.touch_mode_changed.connect(func():
+		hud.touch = _want_touch()
+		_apply_scale())
 	hud.disconnect_requested.connect(func():
 		_need_spawn = true
 		K8s.disconnect_all()
@@ -280,6 +295,8 @@ func _ready() -> void:
 
 func _screenshot_and_quit(path: String) -> void:
 	await get_tree().create_timer(4.0).timeout
+	if "--debug-connect" in OS.get_cmdline_user_args():
+		print("CONNECT root ", hud._connect_root.size, " v ", hud._connect_v.custom_minimum_size, " vis ", hud._connect_root.visible, " cols ", hud._connect_grid.columns)
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--lang="):
 			I18n.set_lang(arg.substr(7))
@@ -508,6 +525,101 @@ func _screenshot_and_quit(path: String) -> void:
 			print("  ARRIVED %s dist=%.2f" % [lvl, Vector2(player.global_position.x - goal.x, player.global_position.z - goal.z).length()])
 		get_tree().quit()
 		return
+	if "--touch-test" in OS.get_cmdline_user_args():
+		var tc := hud.touch_ctl
+		var sz := tc.size
+		var send := func(ev: InputEvent): Input.parse_input_event(ev)
+		# 1) joystick: press in the lower-left, drag right
+		var p0 := player.global_position
+		var t := InputEventScreenTouch.new()
+		t.index = 0
+		t.pressed = true
+		t.position = Vector2(sz.x * 0.2, sz.y * 0.8)
+		send.call(t)
+		await get_tree().process_frame
+		for i in 40:
+			var d := InputEventScreenDrag.new()
+			d.index = 0
+			d.position = t.position + Vector2(min(100, i * 10), 0)
+			d.relative = Vector2(10, 0)
+			send.call(d)
+			await get_tree().process_frame
+		print("STICK=", tc.stick, " moved=", player.global_position.distance_to(p0) > 1.0, " running=", player.running, " path=", _path.size())
+		var up := t.duplicate()
+		up.pressed = false
+		send.call(up)
+		await get_tree().process_frame
+		print("STICK after release=", tc.stick)
+		# 2) jump button
+		var b: Array = tc._buttons()[0]
+		var jt := InputEventScreenTouch.new()
+		jt.index = 1
+		jt.pressed = true
+		jt.position = b[2]
+		send.call(jt)
+		await get_tree().create_timer(0.1).timeout
+		print("JUMP on_ground=", player.on_ground(), " y=", snappedf(player.global_position.y, 0.01))
+		jt = jt.duplicate()
+		jt.pressed = false
+		send.call(jt)
+		await get_tree().create_timer(0.8).timeout
+		# 3) pinch zoom with two fingers in the middle of the world
+		var z0 := _zoom_target
+		var a := InputEventScreenTouch.new()
+		a.index = 0
+		a.pressed = true
+		a.position = Vector2(sz.x * 0.5, sz.y * 0.35)
+		var c := InputEventScreenTouch.new()
+		c.index = 1
+		c.pressed = true
+		c.position = Vector2(sz.x * 0.5, sz.y * 0.5)
+		send.call(a)
+		send.call(c)
+		await get_tree().process_frame
+		for i in 10:
+			var d := InputEventScreenDrag.new()
+			d.index = 1
+			d.position = c.position + Vector2(0, i * 8)
+			d.relative = Vector2(0, 8)
+			send.call(d)
+			await get_tree().process_frame
+		print("PINCH zoom ", snappedf(z0, 0.1), " -> ", snappedf(_zoom_target, 0.1), " pan=", _pan.round())
+		for e in [a, c]:
+			var u: InputEventScreenTouch = e.duplicate()
+			u.pressed = false
+			send.call(u)
+		await get_tree().process_frame
+		# 4) tap on the world = walk there
+		var tap := InputEventScreenTouch.new()
+		tap.index = 0
+		tap.pressed = true
+		tap.position = Vector2(sz.x * 0.6, sz.y * 0.4)
+		send.call(tap)
+		await get_tree().process_frame
+		tap = tap.duplicate()
+		tap.pressed = false
+		send.call(tap)
+		await get_tree().process_frame
+		print("TAP path=", _path.size(), " multi=", _multi_touch)
+		get_tree().quit()
+		return
+	if "--kubi-tap" in OS.get_cmdline_user_args():
+		await get_tree().create_timer(2.0).timeout
+		var cam := _active_cam()
+		var bp := cam.unproject_position(_kubi.global_position + Vector3(0, 0.7, 0)) * _px / _ui + Vector2(0, -18)
+		print("KUBI bubble='", _kubi.bubble, "' at ", bp, " on_kubi=", _on_kubi(bp))
+		for pressed in [true, false]:
+			var e := InputEventMouseButton.new()
+			e.button_index = MOUSE_BUTTON_LEFT
+			e.pressed = pressed
+			e.position = bp
+			Input.parse_input_event(e)
+			await get_tree().process_frame
+		await get_tree().process_frame
+		print("KUBI panel visible=", hud.kubi.visible)
+	if "--menu-open" in OS.get_cmdline_user_args():
+		hud.toggle_menu()
+		await get_tree().create_timer(0.4).timeout
 	if "--kubi" in OS.get_cmdline_user_args():
 		hud.toggle_kubi()
 		await get_tree().create_timer(1.0).timeout
@@ -592,7 +704,7 @@ func _apply_scale() -> void:
 	var win := Vector2(root.size)
 	if win.x < 2 or win.y < 2:
 		return
-	_ui = Settings.ui_factor(win)
+	_ui = Settings.ui_factor(win, hud != null and hud.touch)
 	_px = maxi(2, roundi(3.0 * Settings.dpi()))
 	var want := Vector2i(maxi(1, roundi(win.x / _ui)), maxi(1, roundi(win.y / _ui)))
 	root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
@@ -702,6 +814,7 @@ func _process(delta: float) -> void:
 	_update_zone()
 	_kubi_tick(delta)
 	_follow_path(delta)
+	_touch_tick()
 	var busy := hud.is_modal_open() or get_viewport().gui_get_focus_owner() is LineEdit
 	player.input_enabled = not busy
 	if _fpv and busy and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
@@ -752,7 +865,8 @@ func _toggle_fpv() -> void:
 		_fyaw = deg_to_rad(_yaw)
 		_fpitch = -0.12
 		_fcam.current = true
-		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		if not hud.touch:  # on touch screens you look around by dragging
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		hud.toast(tr("First person: move the mouse to look, click to inspect, ESC frees the mouse, P to go back."), true)
 	else:
 		_cam.current = true
@@ -961,6 +1075,8 @@ func _pick(mouse: Vector2) -> Entity:
 func _unhandled_input(event: InputEvent) -> void:
 	if hud.is_connect_visible():
 		return
+	if hud.touch and _touch_input(event):
+		return
 	if _fpv and _fpv_input(event):
 		return
 	if event is InputEventMouseButton:
@@ -975,6 +1091,14 @@ func _unhandled_input(event: InputEvent) -> void:
 					_press_button = event.button_index
 					_dragging = false
 				elif event.button_index == _press_button:
+					if not _dragging and _press_button == MOUSE_BUTTON_LEFT and not hud.is_modal_open() and _on_kubi(event.position):
+						# A tap can arrive twice on mobile browsers: ignore the echo.
+						if Time.get_ticks_msec() - _kubi_tap_ms > 400:
+							_kubi_tap_ms = Time.get_ticks_msec()
+							hud.toggle_kubi()
+						_dragging = false
+						_press_button = 0
+						return
 					if not _dragging and _press_button == MOUSE_BUTTON_LEFT and not hud.is_modal_open():
 						hud.inspect(_hovered)
 						if Settings.click_to_move and not _fpv:
@@ -1504,7 +1628,7 @@ func _kubi_state(s: Dictionary) -> void:
 		if hud.kubi.visible:
 			hud.kubi.refresh(s)
 	if probs.size() > _kubi_count and not hud.is_connect_visible():
-		_kubi.say(Diagnose.bubble(probs), 7.0, Vox.ORANGE)
+		_kubi.say(Diagnose.bubble(probs, hud.touch), 7.0, Vox.ORANGE)
 		Sfx.play("alarm")
 	elif probs.is_empty() and _kubi_count > 0:
 		_kubi.say(tr("All good!"), 4.0, Vox.GREEN)
@@ -1548,7 +1672,7 @@ func _kubi_tick(delta: float) -> void:
 			if not nd.get("ready", true) or nd.get("unschedulable", false):
 				d = Diagnose.node(nd, K8s.state)
 		if not d.is_empty() and d.sev >= 1:
-			_kubi.say("%s  [Y]" % d.title, 6.0, Vox.ORANGE)
+			_kubi.say(("%s  " + (tr("(tap me)") if hud.touch else "[Y]")) % d.title, 6.0, Vox.ORANGE)
 			if hud.kubi.visible:
 				hud.kubi.select(d)
 
@@ -1866,3 +1990,92 @@ func _show_click_marker(at: Vector3) -> void:
 	_click_marker.scale = Vector3.ONE * 1.6
 	create_tween().tween_property(_click_marker, "scale", Vector3.ONE, 0.25).set_trans(Tween.TRANS_BACK)
 	world.poof(at + Vector3(0, 0.1, 0), Vox.GREEN)
+
+
+# ------------------------------------------------------------ touch
+
+## Touch controls: on for touch screens (Settings.touch: auto/on/off).
+func _want_touch() -> bool:
+	if "--touch" in OS.get_cmdline_user_args():
+		return true
+	match Settings.touch:
+		"on": return true
+		"off": return false
+	return DisplayServer.is_touchscreen_available() and (OS.has_feature("mobile") or OS.has_feature("web_android") or OS.has_feature("web_ios") or OS.has_feature("web"))
+
+
+func _touch_tick() -> void:
+	var tc := hud.touch_ctl
+	var show := hud.touch and not hud.is_connect_visible() and not hud.is_modal_open() and not hud._menu_panel.visible
+	if tc.visible != show:
+		tc.visible = show
+		tc.reset()
+	player.touch_dir = tc.stick if show else Vector2.ZERO
+	player.touch_up = tc.jump_held and show
+	player.touch_down = tc.down_held and show
+	tc.show_fire = hud.chaos
+	if tc.flying != player.flying:
+		tc.flying = player.flying
+		tc.queue_redraw()
+
+
+func _on_touch_action(id: String) -> void:
+	match id:
+		"jump": player.jump()
+		"use": _interact()
+		"jet": player.set_flying(not player.flying)
+		"fire": _blast()
+
+
+## Fingers on the world: two = pinch zoom + twist rotate; one in first
+## person = look around. Returns true if the event was consumed.
+func _touch_input(event: InputEvent) -> bool:
+	# Mouse events emulated from a finger on the joystick/buttons are theirs.
+	if (event is InputEventMouseButton or event is InputEventMouseMotion) and (hud.touch_ctl.owns(event.position) or _multi_touch):
+		if event is InputEventMouseButton and not event.pressed:
+			_press_button = 0
+			_dragging = false
+		return true
+	if event is InputEventScreenTouch:
+		if event.pressed:
+			_touches[event.index] = event.position
+			if _touches.size() >= 2:
+				_multi_touch = true
+				_press_button = 0
+				_dragging = false
+		else:
+			_touches.erase(event.index)
+			if _touches.is_empty():
+				_multi_touch = false
+		return false
+	if event is InputEventScreenDrag and _touches.has(event.index):
+		var old: Vector2 = _touches[event.index]
+		if _touches.size() >= 2:
+			var ids := _touches.keys()
+			var other: Vector2 = _touches[ids[1] if ids[0] == event.index else ids[0]]
+			var d0 := old.distance_to(other)
+			var d1 := (event.position as Vector2).distance_to(other)
+			if d0 > 10.0 and d1 > 10.0:
+				_zoom_target = clampf(_zoom_target * d0 / d1, ZOOM_MIN, ZOOM_MAX)
+			var a0 := (old - other).angle()
+			var a1 := ((event.position as Vector2) - other).angle()
+			_yaw_target += rad_to_deg(angle_difference(a0, a1)) * -1.0
+			_yaw = _yaw_target
+		elif _fpv:
+			_fyaw -= event.relative.x * 0.008
+			_fpitch = clampf(_fpitch - event.relative.y * 0.008, -1.35, 1.2)
+		_touches[event.index] = event.position
+		return _touches.size() >= 2 or _fpv
+	return false
+
+
+## True if a click/tap (UI units) is on Kubi or its speech bubble.
+func _on_kubi(ui_pos: Vector2) -> bool:
+	if not _kubi.visible:
+		return false
+	var cam := _active_cam()
+	if cam.is_position_behind(_kubi.global_position):
+		return false
+	var sp := cam.unproject_position(_kubi.global_position) * _px / _ui
+	var bubble := cam.unproject_position(_kubi.global_position + Vector3(0, 0.7, 0)) * _px / _ui
+	return ui_pos.distance_to(sp) < 36.0 or (_kubi.bubble != "" and ui_pos.distance_to(bubble + Vector2(0, -20)) < 50.0)

@@ -13,6 +13,7 @@ signal goto_requested(kind: String, key: String, ns: String)
 signal fpv_requested
 signal add_cp_requested
 signal jetpack_requested
+signal touch_mode_changed
 signal watch_toggled(on: bool)
 
 const BG := Color(0.043, 0.051, 0.102, 0.92)
@@ -46,6 +47,19 @@ var _view_minimap: CheckBox
 var _view_fpv: CheckBox
 var fpv := false
 var kubi: KubiPanel
+var _connect_v: VBoxContainer
+var _connect_title: Label
+var _connect_grid: GridContainer
+# Phones / tablets: compact layout (menu instead of button rows) and touch controls.
+var compact := false
+var touch := false
+var touch_ctl: TouchControls
+var _bar_btns: Array[Control] = []
+var _strip_extra: Array[Control] = []
+var _menu_btn: Button
+var _menu_panel: PanelContainer
+var _compact_term := false
+var _was_compact := false
 var editor: ManifestEditor
 var term_log := []     # last terminal outputs [{id, cmd, out, ok}]
 var _term_seq := 0
@@ -53,6 +67,7 @@ var watch: WatchPanel
 var flying := false
 var _view_jet: CheckBox
 var _view_click: CheckBox
+var _view_touch: Button
 var _vol_panel: PanelContainer
 var _vol_mute: CheckBox
 var _vol_btn: Button
@@ -372,7 +387,9 @@ func _build_connect_ui() -> void:
 	v.custom_minimum_size = Vector2(720, 0)
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(v)
+	_connect_v = v
 	var title := Label.new()
+	_connect_title = title
 	title.text = "KUBECRAFT"
 	title.add_theme_font_override("font", _title_font)
 	title.add_theme_font_size_override("font_size", 38)
@@ -384,6 +401,7 @@ func _build_connect_ui() -> void:
 	v.add_child(title)
 	var sub := _label("Your Kubernetes cluster, as a voxel world.", 26, Vox.PEACH)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(sub)
 
 	# ---- saved clusters
@@ -395,6 +413,7 @@ func _build_connect_ui() -> void:
 	# ---- new connection
 	v.add_child(_section("NEW CONNECTION"))
 	var g := GridContainer.new()
+	_connect_grid = g
 	g.columns = 2
 	g.add_theme_constant_override("h_separation", 10)
 	g.add_theme_constant_override("v_separation", 8)
@@ -416,6 +435,9 @@ func _build_connect_ui() -> void:
 	ch.add_theme_constant_override("separation", 8)
 	_ctx_pick = OptionButton.new()
 	_ctx_pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_ctx_pick.fit_to_longest_item = false
+	_ctx_pick.clip_text = true
+	_ctx_pick.custom_minimum_size.x = 120
 	_ctx_pick.focus_mode = Control.FOCUS_NONE
 	_ctx_pick.add_item(tr("(bridge default)"))
 	_ctx_pick.item_selected.connect(func(_i): _save_name.placeholder_text = _picked_context())
@@ -426,8 +448,9 @@ func _build_connect_ui() -> void:
 	_save_name = LineEdit.new()
 	_save_name.placeholder_text = tr("name to save it as (optional)")
 	g.add_child(_save_name)
-	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 10)
+	var h := HFlowContainer.new()
+	h.add_theme_constant_override("h_separation", 10)
+	h.add_theme_constant_override("v_separation", 8)
 	var c := _button("CONNECT TO CLUSTER", func(): _do_connect(false), "GoButton")
 	c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	h.add_child(c)
@@ -463,8 +486,9 @@ func _build_connect_ui() -> void:
 	_kc_box.add_child(kb)
 
 	# ---- misc
-	var h2 := HBoxContainer.new()
-	h2.add_theme_constant_override("separation", 10)
+	var h2 := HFlowContainer.new()
+	h2.add_theme_constant_override("h_separation", 10)
+	h2.add_theme_constant_override("v_separation", 8)
 	var d := _button("DEMO MODE", func():
 		K8s.start_demo()
 		show_connect(false))
@@ -549,7 +573,9 @@ func _refresh_saved() -> void:
 	for c in _saved_list.get_children():
 		c.queue_free()
 	if Settings.servers.is_empty():
-		_saved_list.add_child(_label("Nothing saved yet: fill in a new connection and use SAVE & CONNECT.", 22, Vox.SLATE))
+		var none := _label("Nothing saved yet: fill in a new connection and use SAVE & CONNECT.", 22, Vox.SLATE)
+		none.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_saved_list.add_child(none)
 		return
 	for i in Settings.servers.size():
 		var sv: Dictionary = Settings.servers[i]
@@ -562,6 +588,7 @@ func _refresh_saved() -> void:
 			_status(tr("Connecting to %s ...") % sv.name, Vox.YELLOW), "GoButton")
 		go.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		go.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		go.clip_text = true  # long names shrink instead of widening the screen
 		go.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		go.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 		row.add_child(go)
@@ -648,6 +675,7 @@ func _build_game_ui() -> void:
 	h.add_theme_constant_override("separation", 12)
 	bar.add_child(h)
 	var logo := Label.new()
+	logo.name = "Logo"
 	logo.text = "KUBECRAFT"
 	logo.add_theme_font_override("font", _title_font)
 	logo.add_theme_font_size_override("font_size", 16)
@@ -672,15 +700,16 @@ func _build_game_ui() -> void:
 	_stats_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	h.add_child(_stats_label)
 	_vol_btn = _button("VOL", toggle_volume)
-	h.add_child(_vol_btn)
-	h.add_child(_button("Y KUBI", toggle_kubi))
-	h.add_child(_button("O WATCH", toggle_watch))
-	h.add_child(_button("G LEGEND", toggle_legend))
-	h.add_child(_button("B BUILD", open_build, "GoButton"))
 	_chaos_btn = _button("C CHAOS", toggle_chaos)
-	h.add_child(_chaos_btn)
-	h.add_child(_button("V VIEW", toggle_view))
-	h.add_child(_button("EXIT", func(): disconnect_requested.emit()))
+	for b in [_vol_btn, _button("Y KUBI", toggle_kubi), _button("O WATCH", toggle_watch), _button("G LEGEND", toggle_legend),
+			_button("B BUILD", open_build, "GoButton"), _chaos_btn, _button("V VIEW", toggle_view), _button("EXIT", func(): disconnect_requested.emit())]:
+		h.add_child(b)
+		_bar_btns.append(b)
+	_menu_btn = _button("MENU", toggle_menu, "GoButton")
+	_menu_btn.custom_minimum_size = Vector2(96, 44)
+	_menu_btn.visible = false
+	h.add_child(_menu_btn)
+	_build_menu()
 
 	# ---- Volume panel (drops down under the bar)
 	_vol_panel = PanelContainer.new()
@@ -739,6 +768,12 @@ func _build_game_ui() -> void:
 		Settings.click_to_move = not Settings.click_to_move
 		Settings.save())
 	vv.add_child(_view_click)
+	_view_touch = _button("", func():
+		Settings.touch = {"auto": "on", "on": "off", "off": "auto"}[Settings.touch]
+		Settings.save()
+		touch_mode_changed.emit()
+		_sync_view())
+	vv.add_child(_view_touch)
 	_view_run = _check("Always run  [X]", func():
 		Settings.always_run = not Settings.always_run
 		Settings.save())
@@ -937,9 +972,10 @@ func _build_level_strip() -> void:
 	_perf_label = _label("", 20, Vox.SILVER)
 	_perf_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	h.add_child(_perf_label)
-	h.add_child(_button("F3 STATS", toggle_stats))
-	h.add_child(_button("M MAP", toggle_map))
-	h.add_child(_button("J MISSIONS", toggle_missions, "GoButton"))
+	_strip_extra.append(_perf_label)
+	for b in [_button("F3 STATS", toggle_stats), _button("M MAP", toggle_map), _button("J MISSIONS", toggle_missions, "GoButton")]:
+		h.add_child(b)
+		_strip_extra.append(b)
 	_alarm_btn = _button("ALARMS 0", toggle_alarms)
 	h.add_child(_alarm_btn)
 	# Alarm dropdown
@@ -1176,11 +1212,15 @@ func _sync_view() -> void:
 	# First person is immersive: terminal and minimap step aside (/ brings
 	# the terminal back to type a command).
 	_terminal.visible = Settings.terminal and (not fpv or _term_input.has_focus())
+	if compact:
+		_terminal.visible = _compact_term or _term_input.has_focus()
 	_view_run.set_pressed_no_signal(Settings.always_run)
 	if _view_jet:
 		_view_jet.set_pressed_no_signal(flying)
 	if _view_click:
 		_view_click.set_pressed_no_signal(Settings.click_to_move)
+	if _view_touch:
+		_view_touch.text = tr("Touch controls: %s") % tr({"auto": "automatic", "on": "on", "off": "off"}[Settings.touch])
 	if _vol_mute:
 		_vol_mute.set_pressed_no_signal(Settings.muted)
 		_vol_btn.text = tr("MUTED") if Settings.muted else "VOL"
@@ -1215,6 +1255,112 @@ func toggle_watch() -> void:
 	watch_toggled.emit(watch.visible)
 
 
+## Compact layout: one big-button menu with everything the top rows hold.
+func _build_menu() -> void:
+	_menu_panel = PanelContainer.new()
+	_menu_panel.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	_menu_panel.offset_left = 8
+	_menu_panel.offset_right = -8
+	_menu_panel.offset_top = TOP
+	_menu_panel.visible = false
+	_menu_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_menu_panel.add_theme_stylebox_override("panel", _flat(Color(0.05, 0.06, 0.12, 0.98), Vox.GREEN, 3, 12))
+	_game_root.add_child(_menu_panel)
+	var grid := GridContainer.new()
+	grid.name = "Grid"
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 8)
+	grid.add_theme_constant_override("v_separation", 8)
+	_menu_panel.add_child(grid)
+	var items := [["KUBI", toggle_kubi], ["WATCH", toggle_watch], ["MAP", toggle_map], ["MISSIONS", toggle_missions],
+		["ALARMS", toggle_alarms], ["BUILD", open_build], ["CHAOS", toggle_chaos], ["TERMINAL", toggle_terminal],
+		["LEGEND", toggle_legend], ["STATS", toggle_stats], ["FIRST PERSON", func(): fpv_requested.emit()],
+		["JETPACK", func(): jetpack_requested.emit()], ["SOUND", toggle_volume], ["VIEW", toggle_view],
+		["EXIT", func(): disconnect_requested.emit()]]
+	for it in items:
+		var cb: Callable = it[1]
+		var b := _button(it[0], func():
+			_menu_panel.visible = false
+			cb.call(), "DangerButton" if it[0] == "EXIT" else "")
+		b.custom_minimum_size = Vector2(0, 54)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		grid.add_child(b)
+
+
+func toggle_menu() -> void:
+	_menu_panel.visible = not _menu_panel.visible
+	_menu_panel.move_to_front()
+	for p in [_view_panel, _vol_panel, _alarm_panel]:
+		p.visible = false
+	if touch_ctl:
+		touch_ctl.reset()
+
+
+## Desktop: if the top bar doesn't fit, the least used buttons move into
+## the MENU (kept in this order of importance: EXIT, BUILD, CHAOS, VIEW...).
+func _fit_top_bar(width: float) -> void:
+	var sep := 12.0
+	var used := 0.0
+	var h: HBoxContainer = _menu_btn.get_parent()
+	for c in h.get_children():
+		if not c in _bar_btns and c != _menu_btn and c.visible:
+			used += c.get_combined_minimum_size().x + sep
+	used += 20.0
+	# _bar_btns order: VOL, KUBI, WATCH, LEGEND, BUILD, CHAOS, VIEW, EXIT
+	var priority := [7, 4, 5, 6, 1, 2, 0, 3]
+	var hidden := false
+	var menu_w := _menu_btn.get_combined_minimum_size().x + sep
+	for i in priority:
+		var w: float = _bar_btns[i].get_combined_minimum_size().x + sep
+		var fits := used + w + menu_w <= width
+		_bar_btns[i].visible = fits and not hidden
+		if _bar_btns[i].visible:
+			used += w
+		else:
+			hidden = true
+	_menu_btn.visible = hidden
+
+
+## Switches between the desktop layout and the compact (phone) one.
+func _apply_compact(on: bool) -> void:
+	compact = on
+	for b in _bar_btns:
+		b.visible = not on
+	for b in _strip_extra:
+		b.visible = not on
+	_menu_btn.visible = on
+	if not on:
+		_menu_panel.visible = false
+	var mm: Control = _game_root.get_node("Minimap")
+	if on:
+		_mission_panel.visible = false  # opened from the menu
+		mm.anchor_left = 0.0
+		mm.anchor_right = 0.0
+		mm.anchor_top = 0.0
+		mm.anchor_bottom = 0.0
+	else:
+		mm.anchor_left = 0.0
+		mm.anchor_right = 0.0
+		mm.anchor_top = 1.0
+		mm.anchor_bottom = 1.0
+		_ctx_label.visible = true
+		map_mini.custom_minimum_size = MINIMAP_SIZES[Settings.minimap_size]
+		var logo: Label = _game_root.find_child("Logo", true, false)
+		logo.add_theme_font_size_override("font_size", 16)
+	_sync_view()
+
+
+## Rects of the visible UI, where touches belong to the interface.
+func ui_rects() -> Array:
+	var out := []
+	for c in [_inspector, kubi, watch, _terminal, _menu_panel, _mission_panel, _legend, _vol_panel, _view_panel,
+			_alarm_panel, stats, _game_root.get_node("Minimap")]:
+		if c and c.is_visible_in_tree():
+			out.append(c.get_global_rect())
+	out.append(Rect2(0, 0, _game_root.size.x, TOP))
+	return out
+
+
 func toggle_volume() -> void:
 	_vol_panel.visible = not _vol_panel.visible
 	_view_panel.visible = false
@@ -1242,6 +1388,14 @@ func toggle_lines() -> void:
 
 
 func toggle_terminal() -> void:
+	if compact:
+		_compact_term = not _compact_term
+		_sync_view()
+		return
+	_toggle_terminal_setting()
+
+
+func _toggle_terminal_setting() -> void:
 	Settings.terminal = not Settings.terminal
 	Settings.save()
 
@@ -1454,6 +1608,7 @@ func banner(title: String, body: String) -> void:
 		_game_root.add_child(_banner)
 	_banner_title.text = title
 	_banner_body.text = body
+	_banner_body.custom_minimum_size.x = minf(620.0, _game_root.size.x - 50.0)
 	_banner.size = Vector2.ZERO
 	_banner.visible = true
 	_banner.modulate.a = 1.0
@@ -2262,8 +2417,15 @@ func _layout_modals() -> void:
 
 func _layout() -> void:
 	var sz := _game_root.size
+	var want_compact := touch or sz.x < 760.0
+	if want_compact != _was_compact:
+		_was_compact = want_compact
+		_apply_compact(want_compact)
+	if not compact:
+		_fit_top_bar(sz.x)
 	var top := TOP
-	var bottom := _help_bar.size.y + 6.0
+	_help_bar.visible = not touch
+	var bottom := (_help_bar.size.y + 6.0) if _help_bar.visible else 6.0
 	# Terminal and feed sit above the help bar.
 	_term_text.custom_minimum_size.y = 300 if _term_input.has_focus() else 120
 	_terminal.offset_bottom = -bottom
@@ -2290,16 +2452,45 @@ func _layout() -> void:
 	_legend.size = Vector2.ZERO
 	var mm: Control = _game_root.get_node("Minimap")
 	var msz: Vector2 = mm.get_combined_minimum_size()
+	mm.offset_left = 10
 	mm.offset_bottom = -bottom
 	mm.offset_top = -bottom - msz.y
 	mm.offset_right = 10 + msz.x
 	# Kubi on the left, the watchtower on the right (over the inspector).
 	var pw := clampf(sz.x * 0.4, 360.0, 640.0)
 	# Kubi starts compact (drag/resize it to taste).
-	kubi.place(Rect2(10.0, top, minf(pw, 470.0), minf(sz.y - top - bottom, 430.0)), sz)
+	var krect := Rect2(10.0, top, minf(pw, 470.0), minf(sz.y - top - bottom, 430.0))
 	var wh: float = watch.get_combined_minimum_size().y if watch.collapsed else sz.y - top - bottom
+	if compact:
+		# Phones: panels use the full width; the lower part stays for the
+		# thumbs (joystick and buttons).
+		pw = sz.x - 16.0
+		krect = Rect2(8.0, top, pw, maxf(260.0, sz.y * 0.58 - top))
+		if not watch.collapsed:
+			wh = maxf(260.0, sz.y * 0.58 - top)
+		_inspector.offset_left = -pw - 8
+		_inspector.offset_right = -8
+		_insp_scroll.custom_minimum_size = Vector2(pw - 36, clampf(want - 36, 60, maxf(120.0, sz.y * 0.5 - top)))
+		_inspector.size.y = 0
+		_terminal.anchor_left = 0.0
+		_terminal.offset_left = 8
+		_mission_panel.get_child(0).custom_minimum_size.x = minf(380.0, sz.x - 40.0)
+		mm.offset_left = 8
+		mm.offset_right = 8 + msz.x
+		mm.offset_top = top
+		mm.offset_bottom = top + msz.y
+		# Small minimap on phones (it sits under the top bars).
+		map_mini.custom_minimum_size = (MINIMAP_SIZES[Settings.minimap_size] as Vector2).min(Vector2(sz.x * 0.42, sz.y * 0.24))
+		# Narrow screens: shorter title bar so the MENU button always fits.
+		var narrow := sz.x < 560
+		_ctx_label.visible = not narrow
+		var logo: Label = _game_root.find_child("Logo", true, false)
+		logo.add_theme_font_size_override("font_size", 11 if narrow else 16)
+		var grid: GridContainer = _menu_panel.get_node("Grid")
+		grid.columns = 3 if sz.x > 420 else 2
+	kubi.place(krect, sz)
 	watch.size = Vector2(pw, wh)
-	watch.position = Vector2(sz.x - pw - 10.0, top)
+	watch.position = Vector2(sz.x - pw - (8.0 if compact else 10.0), top)
 	# Centered dialogs: size to content, center, keep on screen.
 	var full := _modal_layer.size
 	for p in [_confirm_panel, _build_panel]:
@@ -2339,7 +2530,13 @@ func _process(delta: float) -> void:
 	if _connect_root.visible:
 		var sc: ScrollContainer = _connect_root.get_child(0).get_node("Scroll")
 		var want: float = sc.get_child(0).get_combined_minimum_size().y
-		sc.custom_minimum_size = Vector2(740, minf(want, _connect_root.size.y - 70))
+		var screen: Vector2 = get_viewport().get_visible_rect().size  # the root grows with its content: use the screen
+		sc.custom_minimum_size = Vector2(minf(740.0, screen.x - 40.0), minf(want, screen.y - 70))
+		# Phones: one column, smaller title.
+		var narrow := screen.x < 700.0
+		_connect_v.custom_minimum_size.x = minf(720.0, screen.x - 90.0)
+		_connect_grid.columns = 1 if narrow else 2
+		_connect_title.add_theme_font_size_override("font_size", 22 if narrow else 38)
 	if _toast_t > 0.0:
 		_toast_t -= delta
 		_toast.modulate.a = clampf(_toast_t, 0.0, 1.0)

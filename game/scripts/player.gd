@@ -35,6 +35,9 @@ var frozen := false             # scripted animation (warp) in control
 var auto_dir := Vector3.ZERO    # click-to-move: direction to the next waypoint
 var auto_run := false
 var manual := false             # keys pressed this frame (cancels click-to-move)
+var touch_dir := Vector2.ZERO   # on-screen joystick (-1..1, screen space)
+var touch_up := false           # jetpack: JUMP button held
+var touch_down := false         # jetpack: DOWN button held
 var _coyote := 0.0              # can still jump shortly after leaving an edge
 var _jump_buffer := 0.0         # a jump pressed just before landing still counts
 
@@ -224,6 +227,7 @@ func _process(delta: float) -> void:
 		if Input.is_physical_key_pressed(KEY_A): v.x -= 1
 		if Input.is_physical_key_pressed(KEY_S): v.y += 1
 		if Input.is_physical_key_pressed(KEY_W): v.y -= 1
+		v += touch_dir
 		v = v.limit_length(1.0)
 		dir = Vector3(v.x, 0, v.y).rotated(Vector3.UP, cam_yaw)
 	manual = dir.length() > 0.05
@@ -234,7 +238,7 @@ func _process(delta: float) -> void:
 	moving = dir.length() > 0.05
 	# Running shoes: SHIFT inverts the "always run" setting.
 	var shift := input_enabled and Input.is_physical_key_pressed(KEY_SHIFT)
-	running = moving and ((shift != Settings.always_run) or (auto and auto_run))
+	running = moving and ((shift != Settings.always_run) or (auto and auto_run) or touch_dir.length() > 0.9)
 	var speed := RUN_SPEED if running else WALK_SPEED
 	if flying and not _grounded:
 		speed = FLY_RUN_SPEED if running else FLY_SPEED
@@ -328,8 +332,8 @@ func _process(delta: float) -> void:
 ## Jetpack vertical control: hold SPACE to climb, CTRL to descend, nothing
 ## to hover. Lands on any floor or roof; can't go through the ceiling.
 func _fly(delta: float) -> void:
-	var up := input_enabled and Input.is_physical_key_pressed(KEY_SPACE)
-	var down := input_enabled and (Input.is_physical_key_pressed(KEY_CTRL) or Input.is_physical_key_pressed(KEY_META))
+	var up := input_enabled and (Input.is_physical_key_pressed(KEY_SPACE) or touch_up)
+	var down := input_enabled and (Input.is_physical_key_pressed(KEY_CTRL) or Input.is_physical_key_pressed(KEY_META) or touch_down)
 	var target := 0.0
 	if up:
 		target = FLY_UP

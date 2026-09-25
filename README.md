@@ -145,6 +145,19 @@ Todo el sonido se **genera por código** con un pequeño sintetizador chiptune (
 
 Cada isla tiene dos medidores (CPU azul y memoria rosa) que muestran lo **reservado por los requests** de sus pods frente a lo asignable del nodo: verde, amarillo o rojo según la presión. Su letrero dice, por ejemplo, "cpu 700m/4.0, mem 896 MiB/8 GiB". El panel del nodo separa lo reservado (lo único que mira el scheduler), lo libre y el uso real (metrics-server). Un pod Pending muestra el mensaje del scheduler con el motivo exacto, por ejemplo "0/4 nodes are available: 2 Insufficient cpu, 2 node(s) had untolerated taint(s)", y lo que pide.
 
+## Móvil y tablet (táctil)
+
+En pantallas táctiles (o si la ventana es estrecha) el juego cambia a un **modo compacto**:
+
+- Arriba solo el título, el estado y **MENÚ**, que abre todo en botones grandes: Kubi, vigía, mapa, misiones, alarmas, construir, caos, terminal, leyenda, stats, 1ª persona, jetpack, sonido, vista y salir.
+- Los paneles (inspector, Kubi, vigía, editor, pantalla de inicio) usan todo el ancho. La terminal y las misiones se abren desde el menú. El minimapa es pequeño y va arriba a la izquierda.
+- **Controles táctiles**:
+  - joystick flotante: pon el pulgar abajo a la izquierda; empujar hasta el borde = correr
+  - botones **SALTAR** (mantén pulsado para subir con el jetpack), **USAR**, **JET**, **BAJAR** (volando) y **FUEGO** (en modo caos)
+  - **tocar** = inspeccionar e ir andando; **arrastrar** = mover la cámara; **pellizcar** = zoom; **girar con dos dedos** = rotar; en primera persona, arrastrar = mirar
+  - **toca a Kubi** o su bocadillo para abrir su panel
+- La escala de la UI se ajusta al teléfono (unas 460 unidades en el lado corto). En VISTA > "Controles táctiles" se elige automático / sí / no.
+
 ## Sonido (VOL)
 
 El botón **VOL** de la barra superior abre volumen general, música y efectos, y **silenciar todo**. Se guarda en los ajustes.

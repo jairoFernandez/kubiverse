@@ -75,15 +75,21 @@ func build(h) -> void:
 	title.add_theme_font_size_override("font_size", 18)
 	title.mouse_filter = Control.MOUSE_FILTER_PASS
 	head.add_child(title)
-	_status = hud._label("", 20, Vox.LAVENDER)
-	_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_status.mouse_filter = Control.MOUSE_FILTER_PASS
-	head.add_child(_status)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spacer.mouse_filter = Control.MOUSE_FILTER_PASS
+	head.add_child(spacer)
 	head.add_child(hud._button("SETTINGS", toggle_settings))
 	_fold_btn = hud._button("_", func(): set_collapsed(not collapsed))
 	head.add_child(_fold_btn)
 	head.add_child(hud._button("X", func(): visible = false))
+	# Engine status on its own line (a narrow phone header would squash it).
+	_status = hud._label("", 18, Vox.LAVENDER)
+	_status.clip_text = true
+	_status.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_status.mouse_filter = Control.MOUSE_FILTER_PASS
+	v.add_child(_status)
+	_bottom.append(_status)
 	_scroll = ScrollContainer.new()
 	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED

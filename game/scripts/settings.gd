@@ -25,6 +25,7 @@ var sfx_volume := 0.8
 var master_volume := 1.0
 var muted := false
 var click_to_move := true
+var touch := "auto"   # on-screen touch controls: auto | on | off
 
 
 func _ready() -> void:
@@ -48,6 +49,7 @@ func _ready() -> void:
 		master_volume = cf.get_value("audio", "master", master_volume)
 		muted = cf.get_value("audio", "muted", muted)
 		click_to_move = cf.get_value("controls", "click_to_move", click_to_move)
+		touch = cf.get_value("controls", "touch", touch)
 	apply_audio()
 
 
@@ -77,6 +79,7 @@ func save() -> void:
 	cf.set_value("audio", "master", master_volume)
 	cf.set_value("audio", "muted", muted)
 	cf.set_value("controls", "click_to_move", click_to_move)
+	cf.set_value("controls", "touch", touch)
 	cf.save(PATH)
 	apply_audio()
 	changed.emit()
@@ -97,6 +100,10 @@ func dpi() -> float:
 
 ## Final UI zoom: DPI times the user's preference, but never so big that the
 ## canvas gets smaller than ~1280x800 logical units at 100%.
-func ui_factor(win: Vector2) -> float:
+func ui_factor(win: Vector2, touch_mode := false) -> float:
+	if touch_mode:
+		# Phones: about 460 UI units on the short side, so text and buttons
+		# are finger-sized whatever the pixel density.
+		return clampf(minf(win.x, win.y) / 460.0, 0.8, 5.0) * ui_scale
 	var fit := maxf(0.8, minf(win.x / 1280.0, win.y / 800.0))
 	return minf(dpi(), fit) * ui_scale

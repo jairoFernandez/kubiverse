@@ -225,9 +225,11 @@ static func node(n: Dictionary, _state: Dictionary) -> Dictionary:
 
 
 ## Short sentence for Kubi's speech bubble.
-static func bubble(problems_list: Array) -> String:
+static func bubble(problems_list: Array, touch := false) -> String:
 	if problems_list.is_empty():
 		return _t("All good!")
+	if touch:
+		return _t("%d problem(s). Tap me") % problems_list.size()
 	if problems_list.size() == 1:
 		return _t("1 problem: %s. Press Y") % problems_list[0].title
 	return _t("%d problems. Press Y") % problems_list.size()

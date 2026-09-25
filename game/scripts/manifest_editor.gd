@@ -57,8 +57,9 @@ func build(h) -> void:
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 8)
 	_frame.add_child(v)
-	var head := HBoxContainer.new()
-	head.add_theme_constant_override("separation", 12)
+	var head := HFlowContainer.new()
+	head.add_theme_constant_override("h_separation", 12)
+	head.add_theme_constant_override("v_separation", 6)
 	v.add_child(head)
 	_title = hud._label("", 26, Vox.GREEN)
 	_title.add_theme_font_override("font", hud._title_font)
@@ -68,7 +69,7 @@ func build(h) -> void:
 	_status = hud._rich(20)
 	_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_status.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	_status.custom_minimum_size.x = 200
+	_status.custom_minimum_size.x = 260
 	head.add_child(_status)
 	head.add_child(hud._button("RELOAD", func(): _confirm_discard(func(): open(kind, ns, obj_name, _focus))))
 	head.add_child(hud._button("CLOSE [ESC]", request_close))
@@ -118,17 +119,15 @@ func build(h) -> void:
 	_result = hud._rich(20)
 	_result.meta_clicked.connect(func(_m): _ask_kubi_error())
 	v.add_child(_result)
-	var bar := HBoxContainer.new()
-	bar.add_theme_constant_override("separation", 10)
+	var bar := HFlowContainer.new()
+	bar.add_theme_constant_override("h_separation", 10)
+	bar.add_theme_constant_override("v_separation", 8)
 	v.add_child(bar)
 	_validate_btn = hud._button("VALIDATE (dry run)", func(): _submit(true))
 	bar.add_child(_validate_btn)
 	_apply_btn = hud._button("APPLY", func(): _submit(false), "GoButton")
 	bar.add_child(_apply_btn)
 	bar.add_child(hud._button("ASK KUBI ABOUT THIS LINE", _ask_kubi_line))
-	var sp := Control.new()
-	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bar.add_child(sp)
 	var legend: Label = hud._label(tr("~ changed   !! warning"), 20, Color(0.2, 0.75, 0.4))
 	bar.add_child(legend)
 
@@ -206,6 +205,18 @@ func open(k: String, n_s: String, n: String, focus := "") -> void:
 func _process(delta: float) -> void:
 	if not visible:
 		return
+	# Phones: no room for the decoder column; the line under the cursor is
+	# still explained below the code. Thinner frame too.
+	var narrow := size.x < 720.0
+	_notes.visible = not narrow
+	_title.add_theme_font_size_override("font_size", 10 if narrow else 14)
+	var full := "EDIT // %s %s" % [kind.to_upper(), (ns + "/" if ns != "" else "") + obj_name]
+	_title.text = ("EDIT // " + obj_name) if narrow else full
+	var m := 8.0 if narrow else 30.0
+	_frame.offset_left = m
+	_frame.offset_top = m
+	_frame.offset_right = -m
+	_frame.offset_bottom = -m
 	_t += delta
 	match _phase:
 		"rain":
@@ -268,7 +279,7 @@ func _finish_decode() -> void:
 	_apply_btn.disabled = _readonly
 	Sfx.play("coin")
 	_status.text = "[color=#00e436]%s[/color]  [color=#1f7a3d]%s[/color]" % [tr("ACCESS GRANTED"),
-		tr("read-only bridge: you can read and validate, not apply") if _readonly else tr("edit the YAML; the right column explains each line")]
+		tr("read-only bridge: you can read and validate, not apply") if _readonly else (tr("edit the YAML; the line under the cursor is explained below") if size.x < 720.0 else tr("edit the YAML; the right column explains each line"))]
 	_update_detail()
 
 
