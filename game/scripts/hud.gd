@@ -1946,7 +1946,35 @@ func _term_submit(line: String) -> void:
 	if line.begins_with("edit ") or line.contains(" edit "):
 		_term_edit(line)
 		return
-	term_run(line)
+	# No shell here (on purpose): "a && b" runs one kubectl after the other,
+	# and "kubectl x | grep y" runs the kubectl part and says the filter was
+	# skipped, instead of failing.
+	var steps := Array(line.split("&&", false)).map(func(x): return x.strip_edges().trim_prefix("kubectl ").strip_edges())
+	_term_chain(steps.filter(func(x): return x != ""))
+
+
+func _term_chain(steps: Array) -> void:
+	if steps.is_empty():
+		return
+	var line: String = steps[0]
+	var rest := steps.slice(1)
+	if line.contains("|"):
+		var filter := line.substr(line.find("|")).strip_edges()
+		line = line.left(line.find("|")).strip_edges()
+		_term_text.append_text("[color=#83769c]%s[/color]\n" % (tr("(no shell in the game terminal: running 'kubectl %s' without '%s'; ask Kubi to filter the output)") % [_esc(line), _esc(filter)]))
+	if line.begins_with("edit "):
+		_term_edit(line)
+		_term_chain(rest)
+		return
+	if line.begins_with("port-forward "):
+		term_run(line)
+		_term_chain(rest)
+		return
+	term_run(line, func(entry: Dictionary):
+		if entry.ok:
+			_term_chain(rest)
+		elif not rest.is_empty():
+			_term_text.append_text("[color=#ff4d6d]%s[/color]\n" % tr("(stopped: the previous command failed)")))
 
 
 ## `kubectl edit` would need a text editor on the bridge host: open the

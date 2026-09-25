@@ -9,6 +9,8 @@ signal lang_changed
 const LANGS := {"en": "English", "es": "Español"}
 
 const ES := {
+	"(no shell in the game terminal: running 'kubectl %s' without '%s'; ask Kubi to filter the output)": "(la terminal del juego no tiene shell: se ejecuta 'kubectl %s' sin '%s'; pide a Kubi que filtre la salida)",
+	"(stopped: the previous command failed)": "(detenido: el comando anterior falló)",
 	"open": "abierto",
 	"connecting": "conectando",
 	"lost": "perdido",
