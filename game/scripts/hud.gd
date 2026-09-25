@@ -176,6 +176,12 @@ var _insp_preview: Label
 var _insp_cmds: RichTextLabel
 var _insp_target: Entity
 var _insp_kind := ""
+var _trend_box: VBoxContainer      # history from Prometheus (pods, workloads, nodes)
+var _trend: TrendChart
+var _trend_want := ""              # "kind|ns|name|range" asked for
+var _trend_t := 0.0
+var _trend_range := "1h"
+var _trend_ranges: Array = []      # the range buttons
 var _insp_key := ""
 var _insp_sig := ""
 var _insp_t := 0.0
@@ -200,6 +206,11 @@ var _logs_container: OptionButton
 var _logs_prev: CheckBox
 var _logs_follow: CheckBox
 var _logs_pod: Dictionary = {}
+var _logs_agg: Dictionary = {}      # {ns, workload}: logs of many pods (Loki) instead of one pod
+var _logs_pod_row: Control          # container / previous / follow (one pod)
+var _logs_agg_row: Control          # filter / range (Loki)
+var _logs_filter: LineEdit
+var _logs_range: OptionButton
 var _logs_t := 0.0
 
 var _confirm_panel: PanelContainer
@@ -1083,6 +1094,28 @@ func _build_game_ui() -> void:
 	_insp_info.selection_enabled = true
 	_insp_info.add_theme_constant_override("line_separation", 6)
 	_insp_box.add_child(_insp_info)
+	_trend_box = VBoxContainer.new()
+	_trend_box.add_theme_constant_override("separation", 4)
+	_trend_box.visible = false
+	_insp_box.add_child(_trend_box)
+	var trh := HBoxContainer.new()
+	trh.add_theme_constant_override("separation", 8)
+	_trend_box.add_child(trh)
+	var trl := _section("HISTORY (Prometheus)")
+	trl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	trh.add_child(trl)
+	for r in ["1h", "6h", "24h", "7d"]:
+		var trb := _button(r, func():
+			_trend_range = r
+			_trend_want = ""
+			_update_trend())
+		trb.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		_trend_ranges.append(trb)
+		trh.add_child(trb)
+	_trend = TrendChart.new()
+	_trend.font = _font
+	_trend.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_trend_box.add_child(_trend)
 	_insp_box.add_child(_section("ACTIONS"))
 	_insp_buttons = HFlowContainer.new()
 	_insp_buttons.add_theme_constant_override("h_separation", 8)
@@ -1399,6 +1432,9 @@ func _compute_alarms(s: Dictionary) -> Array:
 	for w in s.get("workloads", []):
 		if int(w.ready) < int(w.desired):
 			by_sev[1].append(["workload", w])
+	# The team's own alerts (Alertmanager / Prometheus rules).
+	for al in s.get("alerts", []):
+		by_sev[{"critical": 3, "warning": 2}.get(str(al.get("severity", "")), 1)].append(["alert", al])
 	_pod_counts = [running, pending, bad]
 	var out := []
 	for sev in [3, 2, 1]:
@@ -1410,6 +1446,9 @@ func _compute_alarms(s: Dictionary) -> Array:
 					a.merge({"kind": "node", "key": d.name, "ns": ""})
 				"workload":
 					a.merge({"kind": "workload", "key": "%s/%s/%s" % [d.ns, d.kind, d.name], "ns": d.ns})
+				"alert":
+					a.merge(alert_target(d))
+					a["alert"] = d
 				_:
 					a.merge({"kind": "pod", "key": d.ns + "/" + d.name, "ns": d.ns})
 			if out.size() < ALARM_TEXTS:
@@ -1419,7 +1458,45 @@ func _compute_alarms(s: Dictionary) -> Array:
 					"pod": a.text = tr("%s/%s  %s (restarts %d)") % [d.ns, d.name, d.status, int(d.restarts)]
 					"stuck": a.text = tr("%s/%s  stuck in %s") % [d.ns, d.name, d.status]
 					"workload": a.text = tr("%s %s/%s  %d/%d ready") % [str(d.kind).to_lower(), d.ns, d.name, int(d.ready), int(d.desired)]
+					"alert": a.text = "ALERT %s: %s" % [d.name, d.get("summary", "") if str(d.get("summary", "")) != "" else "%s/%s" % [d.get("ns", ""), d.get("pod", "")]]
 			out.append(a)
+	return out
+
+
+## Where an alert points: its pod, workload, node or namespace (by its labels).
+static func alert_target(al: Dictionary) -> Dictionary:
+	var ns := str(al.get("ns", ""))
+	if str(al.get("pod", "")) != "":
+		return {"kind": "pod", "key": ns + "/" + str(al.pod), "ns": ns}
+	if str(al.get("workload", "")) != "":
+		return {"kind": "workload", "key": ns + "/" + str(al.workload), "ns": ns}
+	if str(al.get("node", "")) != "":
+		return {"kind": "node", "key": str(al.node), "ns": ""}
+	if ns != "":
+		return {"kind": "namespace", "key": ns, "ns": ns}
+	return {"kind": "", "key": "", "ns": ""}
+
+
+## The alerts about what the inspector shows.
+func _alert_lines(kind: String, d: Dictionary) -> Array:
+	var out := []
+	for al in K8s.state.get("alerts", []):
+		var t := alert_target(al)
+		var hit := false
+		match kind:
+			"pod": hit = t.kind == "pod" and t.key == "%s/%s" % [d.ns, d.name] or (t.kind == "workload" and str(al.ns) == d.ns and str(d.get("owner_name", "")) != "" and str(al.workload).ends_with("/" + str(d.owner_name)))
+			"workload": hit = str(al.get("ns", "")) == d.ns and (str(al.get("workload", "")) == "%s/%s" % [d.kind, d.name] or str(al.get("pod", "")).begins_with(d.name + "-"))
+			"node": hit = str(al.get("node", "")) == d.name
+			"namespace": hit = str(al.get("ns", "")) == str(d.get("name", ""))
+		if not hit:
+			continue
+		var c := "ff004d" if al.get("severity", "") == "critical" else "ffa300"
+		out.append("[color=#%s]ALERT %s[/color] [color=#83769c](%s, %s)[/color]" % [c, al.name, al.get("severity", "?"), _age(al.get("since", 0))])
+		var txt := str(al.get("description", "")) if str(al.get("description", "")) != "" else str(al.get("summary", ""))
+		if txt != "":
+			out.append("  " + _esc(txt))
+		if str(al.get("runbook", "")) != "":
+			out.append("  [color=#29adff]%s[/color] %s" % [tr("runbook:"), _esc(str(al.runbook))])
 	return out
 
 
@@ -1430,7 +1507,11 @@ func _fill_alarms() -> void:
 		_alarm_list.add_child(_label("All good: nothing failing.", 24, Vox.GREEN))
 		return
 	for a in _alarms.slice(0, 10):
-		var b := _button(a.text, func(): goto_requested.emit(a.kind, a.key, a.ns), "DangerButton" if a.sev >= 3 else "")
+		var b := _button(a.text, func():
+			if a.kind == "":
+				toast(str(a.get("alert", {}).get("description", a.text)), false)
+			else:
+				goto_requested.emit(a.kind, a.key, a.ns), "DangerButton" if a.sev >= 3 else "")
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		b.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		b.custom_minimum_size = Vector2(500, 0)
@@ -2611,9 +2692,51 @@ func _kv(k: String, v: String) -> String:
 	return "[color=#c2c3c7]%s[/color] %s" % [tr(k).rpad(11), v]
 
 
+## The inspected pod / workload / node's history, fetched when it changes
+## and every 30 s.
+func _update_trend() -> void:
+	var kind := ""
+	var d: Dictionary = _insp_target.data if is_instance_valid(_insp_target) and "data" in _insp_target else {}
+	match _insp_kind:
+		"pod": kind = "pod"
+		"workload": kind = "workload"
+		"node": kind = "node"
+	if kind == "" or d.is_empty() or not K8s.has_obs("prometheus"):
+		_trend_box.visible = false
+		return
+	_trend_box.visible = true
+	for rb in _trend_ranges:
+		rb.theme_type_variation = "GoButton" if rb.text == _trend_range else ""
+	var want := "%s|%s|%s|%s" % [kind, d.get("ns", ""), d.name, _trend_range]
+	if want == _trend_want and _trend_t < 30.0:
+		return
+	var fresh := want != _trend_want
+	_trend_want = want
+	_trend_t = 0.0
+	if fresh:
+		_trend.set_rows([], tr("asking Prometheus..."))
+	K8s.series(kind, str(d.get("ns", "")), str(d.name), _trend_range, func(ok: bool, data: Dictionary):
+		if _trend_want != want:
+			return
+		if not ok:
+			_trend.set_rows([], tr("no history: %s") % str(data.get("error", "?")))
+			return
+		var rows := []
+		if data.get("cpu") != null:
+			rows.append({"label": "CPU", "points": data.cpu, "unit": "cores", "color": Color(0.16, 0.68, 1.0)})
+		if data.get("mem") != null:
+			rows.append({"label": tr("MEMORY"), "points": data.mem, "unit": "bytes", "color": Color(0.51, 0.46, 0.61).lightened(0.3)})
+		if data.get("restarts") != null:
+			rows.append({"label": tr("RESTARTS"), "points": data.restarts, "unit": "count", "color": Color(1.0, 0.3, 0.3)})
+		_trend.set_rows(rows, tr("no data yet"))
+		if missions:
+			missions.notify("history", {"kind": kind, "ns": d.get("ns", ""), "name": d.name}))
+
+
 func _refresh_inspector() -> void:
 	if not _inspector.visible:
 		return
+	_update_trend()
 	if not is_instance_valid(_insp_target) or (_insp_target is PodBot and _insp_target.dying):
 		var again := world.find_entity(_insp_kind, _insp_key)
 		if again:
@@ -2689,6 +2812,8 @@ func _refresh_inspector() -> void:
 			lines.append_array(_owner_lines(d))
 			lines.append_array(_usage_lines(K8s.state.get("pods", []).filter(func(p): return p.ns == d.ns and p.get("owner_kind") == d.kind and p.get("owner_name") == d.name)))
 			buttons.append_array(_workload_buttons(d, ro))
+			if K8s.has_obs("loki"):
+				buttons.append(["LOGS (all pods)", func(): open_aggregate_logs(d.ns, d.name), "", false, "logcli query '{namespace=\"%s\", pod=~\"%s-.*\"}'" % [d.ns, d.name]])
 			buttons.append(["EDIT YAML", func(): open_editor(d.kind, d.ns, d.name), "", false, "kubectl -n %s edit %s %s" % [d.ns, str(d.kind).to_lower(), d.name]])
 			var req := {"action": "delete_workload", "kind": d.kind, "ns": d.ns, "name": d.name}
 			buttons.append(["DELETE", func(): _delete_workload(d), "DangerButton", ro, Kubectl.for_action(req)])
@@ -2733,6 +2858,8 @@ func _refresh_inspector() -> void:
 				lines.append("[color=#83769c]%s[/color]" % tr("windows = pods (green ok, red failing)"))
 				lines.append("[color=#83769c]%s[/color]" % tr("roof light = worst status inside"))
 				buttons.append(["ENTER HALL [E]", func(): level_requested.emit("ns:" + d.name), "GoButton", false, "kubectl -n %s get all" % d.name])
+				if K8s.has_obs("loki"):
+					buttons.append(["LOGS (all pods)", func(): open_aggregate_logs(d.name), "", false, "logcli query '{namespace=\"%s\"}'" % d.name])
 		"container":
 			var c: Dictionary = d
 			_insp_title.text = (tr("INIT CONTAINER %s") if c.get("init", false) else tr("CONTAINER %s")) % c.name
@@ -2840,6 +2967,8 @@ func _refresh_inspector() -> void:
 				buttons.append(["CORDON", func(): _cordon(d), "DangerButton", ro, Kubectl.for_action(req)])
 			var dr := {"action": "drain", "name": d.name}
 			buttons.append(["DRAIN", func(): _drain(d), "DangerButton", ro, Kubectl.for_action(dr)])
+	if is_instance_valid(_insp_target) and "data" in _insp_target:
+		lines.append_array(_alert_lines(_insp_kind, _insp_target.data))
 	_insp_info.text = "\n".join(lines)
 	var sig := str(buttons.map(func(b): return [b[0], b[3], b[4]])) + _insp_key
 	if sig != _insp_sig:
@@ -3152,6 +3281,27 @@ func _build_modals() -> void:
 	var lh2 := HFlowContainer.new()
 	lh2.add_theme_constant_override("h_separation", 12)
 	lv.add_child(lh2)
+	_logs_pod_row = lh2
+	var la := HFlowContainer.new()
+	la.add_theme_constant_override("h_separation", 12)
+	la.visible = false
+	lv.add_child(la)
+	_logs_agg_row = la
+	la.add_child(_label("contains", 24, Vox.SILVER))
+	_logs_filter = LineEdit.new()
+	_logs_filter.custom_minimum_size.x = 320
+	_logs_filter.placeholder_text = tr("text, e.g. ERROR")
+	_logs_filter.add_theme_font_size_override("font_size", 22)
+	_logs_filter.text_submitted.connect(func(_t): _load_logs())
+	la.add_child(_logs_filter)
+	la.add_child(_label("last", 24, Vox.SILVER))
+	_logs_range = OptionButton.new()
+	_logs_range.focus_mode = Control.FOCUS_NONE
+	for r in ["1h", "6h", "24h", "7d"]:
+		_logs_range.add_item(r)
+	_logs_range.item_selected.connect(func(_i): _load_logs())
+	la.add_child(_logs_range)
+	la.add_child(_button("SEARCH", _load_logs, "GoButton"))
 	lh2.add_child(_label("container", 24, Vox.SILVER))
 	_logs_container = OptionButton.new()
 	_logs_container.focus_mode = Control.FOCUS_NONE
@@ -3665,7 +3815,25 @@ func _do_build() -> void:
 	K8s.action(_build_req())
 
 
+## Logs of every pod of a namespace or workload at once (Loki).
+func open_aggregate_logs(ns: String, workload := "") -> void:
+	_logs_pod = {}
+	_logs_agg = {"ns": ns, "workload": workload}
+	_logs_title.text = tr("LOGS (Loki)  %s") % (ns + ("/" + workload if workload != "" else "  " + tr("(all pods)")))
+	_logs_pod_row.visible = false
+	_logs_agg_row.visible = true
+	_logs_text.text = tr("loading...")
+	_logs_panel.visible = true
+	_logs_filter.grab_focus()
+	_load_logs()
+	if missions:
+		missions.notify("agglogs", _logs_agg)
+
+
 func open_logs(d: Dictionary) -> void:
+	_logs_agg = {}
+	_logs_pod_row.visible = true
+	_logs_agg_row.visible = false
 	_logs_pod = d
 	_logs_title.text = "LOGS  %s/%s" % [d.ns, d.name]
 	_logs_container.clear()
@@ -3677,6 +3845,30 @@ func open_logs(d: Dictionary) -> void:
 	_load_logs()
 	if missions:
 		missions.notify("logs", d, _logs_prev.button_pressed)
+
+
+func _load_agg_logs() -> void:
+	var agg := _logs_agg
+	var since := _logs_range.get_item_text(_logs_range.selected)
+	_logs_t = 0.0
+	K8s.log_search(agg.ns, agg.workload, _logs_filter.text.strip_edges(), since, func(ok: bool, data: Dictionary):
+		if _logs_agg != agg:
+			return
+		if not ok:
+			_logs_text.text = tr("ERROR: %s") % str(data.get("error", "?"))
+			_logs_text.add_theme_color_override("font_readonly_color", Vox.RED)
+			return
+		_logs_cmd.text = "LogQL: %s   (logcli query '%s')" % [data.get("query", ""), data.get("query", "")]
+		var out := PackedStringArray()
+		var lines: Array = data.get("lines", []) if data.get("lines") != null else []
+		# oldest first, like a terminal, newest at the bottom
+		for i in range(lines.size() - 1, -1, -1):
+			var l: Dictionary = lines[i]
+			var ts := Time.get_datetime_string_from_unix_time(int(float(l.t) / 1000.0)).substr(11)
+			out.append("%s  %-28s %s" % [ts, str(l.pod).substr(0, 28), l.line])
+		_logs_text.text = "\n".join(out) if not out.is_empty() else tr("(nothing matches in that time)")
+		_logs_text.add_theme_color_override("font_readonly_color", Vox.WHITE)
+		_logs_text.scroll_vertical = _logs_text.get_line_count())
 
 
 func _logs_container_name() -> String:
@@ -3691,6 +3883,9 @@ func _update_logs_cmd() -> void:
 
 
 func _load_logs() -> void:
+	if not _logs_agg.is_empty():
+		_load_agg_logs()
+		return
 	if _logs_pod.is_empty():
 		return
 	_update_logs_cmd()
@@ -3851,6 +4046,7 @@ func _process(delta: float) -> void:
 		_perf_label.text = clock_text + "  " + StatsPanel.summary()
 		_perf_label.tooltip_text = weather_why
 	_insp_t += delta
+	_trend_t += delta
 	if _insp_t > 0.3:
 		_insp_t = 0.0
 		_refresh_inspector()
@@ -3879,7 +4075,7 @@ func _process(delta: float) -> void:
 		l.modulate.a = clampf(t / 2.0, 0.0, 1.0)
 		if t <= 0.0:
 			l.queue_free()
-	if _logs_panel.visible and _logs_follow.button_pressed:
+	if _logs_panel.visible and _logs_follow.button_pressed and _logs_agg.is_empty():
 		_logs_t += delta
 		if _logs_t > 3.0:
 			_load_logs()

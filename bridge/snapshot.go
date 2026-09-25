@@ -25,6 +25,7 @@ type Snapshot struct {
 	Services   []Service   `json:"services"`
 	Ingresses  []Ingress   `json:"ingresses"`
 	Metrics    Metrics     `json:"metrics"`
+	Alerts     []Alert     `json:"alerts"` // firing (Alertmanager / Prometheus rules)
 }
 
 type Node struct {
@@ -127,6 +128,10 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 	b.mu.Lock()
 	s.Metrics = b.metrics
 	b.mu.Unlock()
+	s.Alerts = b.currentAlerts()
+	if s.Alerts == nil {
+		s.Alerts = []Alert{}
+	}
 
 	nodes, err := b.nodeLister.List(labels.Everything())
 	if err != nil {

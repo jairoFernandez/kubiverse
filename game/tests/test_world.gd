@@ -38,6 +38,26 @@ func _init() -> void:
 	var host: Dictionary = ClusterSearch.find(cs_state, "shop.example")[0]
 	assert(host.kind == "service" and host.key == "shop/api", "host -> its service")
 	assert(ClusterSearch.find(cs_state, "ns:shop nothing-here").is_empty(), "all words must match")
+	# History: memory that climbs and stays up has a "since"; flat noise has none; restarts too.
+	var climb := []
+	var flat := []
+	var rst := []
+	for i in 60:
+		climb.append([i * 60.0, 100.0 if i < 40 else 100.0 + (i - 40) * 30.0])
+		flat.append([i * 60.0, 100.0 + (i % 3)])
+		rst.append([i * 60.0, 0.0 if i < 50 else float(i - 49)])
+	assert(TrendChart.change_since(climb, "bytes") >= 40 * 60.0, "memory since")
+	assert(TrendChart.change_since(flat, "bytes") == 0.0, "noise is not a change")
+	assert(TrendChart.change_since(rst, "count") == 50 * 60.0, "restarts since")
+	# An alert becomes a Kubi mission that ends when the alert stops firing.
+	var ast := {"pods": [], "nodes": [], "services": [], "ingresses": [], "workloads": [{"ns": "ml", "kind": "Deployment", "name": "trainer", "desired": 1, "ready": 1}],
+		"alerts": [{"id": "a1", "name": "ContainerMemoryNearLimit", "severity": "warning", "ns": "ml", "workload": "Deployment/trainer", "summary": "leak", "source": "alertmanager"}]}
+	var am: Array = KubiMissions.generate(ast).filter(func(m): return str(m.id).begins_with("k:alert:"))
+	assert(am.size() == 1, "alert mission")
+	var last: Dictionary = am[0].steps[am[0].steps.size() - 1]
+	assert(not KubiMissions.check(last, "state", null, null, ast, {}), "still firing")
+	ast.alerts = []
+	assert(KubiMissions.check(last, "state", null, null, ast, {}), "alert gone")
 	# Kubi's dynamic missions: a hot node gives a bottleneck mission with the
 	# biggest pod named, and its VERIFY step passes once the node cools down.
 	var hs := {"nodes": [{"name": "n1", "cpu_m": 1000, "mem_bytes": 1 << 30}, {"name": "n2", "cpu_m": 1000, "mem_bytes": 1 << 30}],

@@ -33,8 +33,9 @@ type Hub struct {
 	readOnly     bool
 	token        string
 	pol          *policy
-	inCluster    bool   // one cluster: the one the bridge runs in
-	userHeader   string // team mode: the proxy's user header
+	inCluster    bool              // one cluster: the one the bridge runs in
+	obsFlags     map[string]string // --prometheus/--alertmanager/--loki
+	userHeader   string            // team mode: the proxy's user header
 	groupsHeader string
 
 	mu       sync.Mutex
@@ -221,6 +222,8 @@ func (h *Hub) start(name string) (*Bridge, error) {
 		b.kubectlContext = ref.ctx
 		b.pol = h.pol
 		b.inCluster = h.inCluster
+		b.obs.flags = h.obsFlags
+		go b.alertLoop(b.ctx)
 	}
 	return b, err
 }

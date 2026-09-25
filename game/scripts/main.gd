@@ -204,7 +204,9 @@ func _ready() -> void:
 	underground.font = hud._font
 	underground.player = player
 	underground.alarms = func() -> Array: return hud._alarms
-	underground.alarm_clicked.connect(func(a: Dictionary): hud.goto_requested.emit(a.kind, a.key, a.ns))
+	underground.alarm_clicked.connect(func(a: Dictionary):
+		if str(a.get("kind", "")) != "":
+			hud.goto_requested.emit(a.kind, a.key, a.ns))
 	add_child(underground)
 	hud.disconnect_requested.connect(func():
 		_need_spawn = true

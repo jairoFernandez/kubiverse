@@ -177,6 +177,7 @@ func start_demo() -> void:
 	_mock.event.connect(func(ev): cluster_event.emit(ev))
 	_mock.watch.connect(func(w): watch_updated.emit(w))
 	connection_changed.emit("online", "demo cluster (simulated)")
+	refresh_obs()
 	_mock.start()
 
 
@@ -234,6 +235,7 @@ func _process(delta: float) -> void:
 		match st:
 			WebSocketPeer.STATE_OPEN:
 				connection_changed.emit("online", base_url)
+				refresh_obs()
 			WebSocketPeer.STATE_CLOSED:
 				var reason := _ws.get_close_reason()
 				connection_changed.emit("offline", "bridge unreachable at %s %s — retrying" % [base_url, reason])
@@ -265,7 +267,7 @@ func _process(delta: float) -> void:
 		_reconnect_in = 2.0
 
 
-const COLLECTIONS := ["nodes", "namespaces", "pods", "workloads", "services", "ingresses"]
+const COLLECTIONS := ["nodes", "namespaces", "pods", "workloads", "services", "ingresses", "alerts"]
 var _seq := -1   # the bridge's number for the state we have (patches build on it)
 
 
@@ -286,6 +288,8 @@ func _on_patch(p: Dictionary) -> void:
 		for coll in ["nodes", "pods"]:
 			for it in state[coll]:
 				it["age"] = float(it.get("age", 0)) + dt
+		for a in state.get("alerts", []):
+			a["since"] = float(a.get("since", 0)) + dt
 	if p.get("metrics") != null:
 		state["metrics"] = p.metrics
 	var sets: Dictionary = p.get("set") if p.get("set") != null else {}
@@ -327,10 +331,14 @@ static func item_key(coll: String, it: Dictionary) -> String:
 			return str(it.name)
 		"workloads":
 			return "%s/%s/%s" % [it.ns, it.kind, it.name]
+		"alerts":
+			return str(it.id)
 	return "%s/%s" % [it.ns, it.name]
 
 
 static func _sort_key(coll: String, it: Dictionary) -> String:
+	if coll == "alerts":
+		return str({"critical": 0, "warning": 1, "info": 2}.get(it.get("severity", ""), 3)) + str(it.id)
 	if coll == "pods":
 		# namespace first, then name (a "/" would sort "app/x" after "app-2/y")
 		return str(it.ns) + char(1) + str(it.name)
@@ -339,7 +347,7 @@ static func _sort_key(coll: String, it: Dictionary) -> String:
 
 func _on_state(s: Dictionary) -> void:
 	# Go encodes empty slices as null; normalise so callers can iterate.
-	for k in ["nodes", "namespaces", "pods", "workloads", "services", "ingresses"]:
+	for k in COLLECTIONS:
 		if s.get(k) == null:
 			s[k] = []
 	state = s
@@ -452,6 +460,50 @@ func action(req: Dictionary) -> void:
 		else:
 			action_done.emit(bool(data.get("ok", false)), str(data.get("message", data.get("error", ""))), req)
 	)
+
+
+## What observability the cluster has: {prometheus, alertmanager, loki}
+## (each null or {found}). Asked on connecting.
+var obs := {}
+signal obs_changed
+
+func refresh_obs() -> void:
+	if mode == Mode.DEMO:
+		obs = {"prometheus": {"found": "demo"}, "alertmanager": {"found": "demo"}, "loki": {"found": "demo"}}
+		obs_changed.emit()
+		return
+	obs = {}
+	if mode != Mode.BRIDGE:
+		return
+	_http(HTTPClient.METHOD_GET, "/api/obs" + _q(), "", func(ok: bool, data):
+		if ok and typeof(data) == TYPE_DICTIONARY:
+			obs = data
+			obs_changed.emit())
+
+
+func has_obs(kind: String) -> bool:
+	return obs.get(kind) != null
+
+
+## History from Prometheus: kind pod|workload|node. cb(ok, {cpu, mem, restarts: [[t, v]...]} or {error})
+func series(kind: String, ns: String, name: String, span: String, cb: Callable) -> void:
+	if mode == Mode.DEMO:
+		cb.call(true, _mock.series(kind, ns, name, span))
+		return
+	_http(HTTPClient.METHOD_GET, "/api/series?kind=%s&ns=%s&name=%s&range=%s%s" % [kind, ns.uri_encode(), name.uri_encode(), span, _q(false)], "", func(ok: bool, data):
+		var good := ok and typeof(data) == TYPE_DICTIONARY and bool(data.get("ok", false))
+		cb.call(good, data if typeof(data) == TYPE_DICTIONARY else {"error": str(data)}))
+
+
+## Logs of a whole namespace or workload (Loki), newest first. cb(ok, {lines: [{t, pod, container, line}], query} or {error})
+func log_search(ns: String, workload: String, text: String, since: String, cb: Callable) -> void:
+	if mode == Mode.DEMO:
+		cb.call(true, _mock.log_search(ns, workload, text, since))
+		return
+	var q := "/api/logsearch?ns=%s&workload=%s&q=%s&since=%s%s" % [ns.uri_encode(), workload.uri_encode(), text.uri_encode(), since, _q(false)]
+	_http(HTTPClient.METHOD_GET, q, "", func(ok: bool, data):
+		var good := ok and typeof(data) == TYPE_DICTIONARY and bool(data.get("ok", false))
+		cb.call(good, data if typeof(data) == TYPE_DICTIONARY else {"error": str(data)}))
 
 
 ## A Deployment's rollout history and who else has a say. cb(ok, data)

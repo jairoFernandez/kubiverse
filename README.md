@@ -375,6 +375,15 @@ English and Spanish (the system language is detected; change it on the start scr
 - **Drain**: on a node, DRAIN cordons it and evicts its pods through the Eviction API, so PodDisruptionBudgets are honoured; DaemonSet and static pods stay. What a budget holds back is reported, to drain again once the replacements are ready.
 - In the demo, `payments/ledger`'s last deploy is the broken one: HISTORY → UNDO TO r1 fixes it.
 
+## Observability with history (Prometheus, Alertmanager, Loki)
+
+The bridge finds them by itself among the cluster's Services (kube-prometheus-stack, the Prometheus and Loki charts: `prometheus-operated`, `alertmanager-operated`, `loki-gateway`...) and reaches them through the API server's service proxy with your kubeconfig (no port-forward), or by their DNS name when it runs in the cluster. `--prometheus URL`, `--alertmanager URL` and `--loki URL` point elsewhere; `off` turns one off.
+
+- **HISTORY in the inspector** (pods, workloads, nodes): CPU, memory and restarts over 1h / 6h / 24h / 7d, with the peak and **since when** it changed ("up since 22 min ago", "restarting for 4 min"), marked on the chart.
+- **Your team's alerts** (Alertmanager, without silenced or inhibited ones; or Prometheus's firing rules) join the ALARMS list, point at their pod, workload, node or namespace, show up in its inspector with the description and runbook, darken the weather (critical = storm) and become **Kubi missions**: inspect, look at the history, search the logs, mitigate, and it's done when the alert stops firing.
+- **LOGS (all pods)** on a workload or namespace: Loki, with a text filter and a time range, and the LogQL behind it.
+- The demo simulates all three: `ml/trainer` leaks memory (an alert, and the history shows since when), `payments/ledger` restarts until you roll it back.
+
 ## Quick start
 
 Requirements: Go (version in `bridge/go.mod`), Godot 4.7 (`brew install --cask godot`), a working kubeconfig.
@@ -430,6 +439,9 @@ There are two ways to play in the browser:
 --audit-dir DIR      audit logs for the watchtower (defaults to ~/.kubecraft/audit)
 --production CTXS    comma-separated contexts that are PRODUCTION for everyone (changes need a confirmation)
 --lan                local network (phones): self-signed HTTPS + all interfaces + random token + prints the URLs
+--prometheus URL     Prometheus for the history charts (auto: find it in the cluster; off)
+--alertmanager URL   Alertmanager for the alerts (auto / off; without it, Prometheus's firing rules)
+--loki URL           Loki for LOGS (all pods) (auto / off)
 --in-cluster         run inside the cluster with the pod's ServiceAccount (team mode)
 --auth-user-header H trust H (set by your OIDC proxy) as the signed-in user; changes impersonate them
 --auth-groups-header H  comma-separated groups header from the same proxy
@@ -486,6 +498,9 @@ The defaults expect oauth2-proxy answering `/oauth2/*` on the same host (see [va
 | GET | `/api/audit?limit=&context=` | the change log (newest first) |
 | GET | `/api/whoami` | `{team, user, groups, in_cluster}`: who changes are made as |
 | POST | `/api/action` | `{"action": "delete_pod" \| "scale" \| "restart" \| "pause" \| "resume" \| "rollout_undo" \| "cordon" \| "uncordon" \| "drain" \| "create_deployment" \| "delete_workload", "kind", "ns", "name", "replicas", "image", "service", "revision"}` |
+| GET | `/api/obs` | the Prometheus / Alertmanager / Loki found (`{prometheus, alertmanager, loki}`, null if missing) |
+| GET | `/api/series?kind=pod\|workload\|node&ns=&name=&range=1h\|6h\|24h\|7d` | `{cpu, mem, restarts}` as `[[unix, value]...]` from Prometheus |
+| GET | `/api/logsearch?ns=&workload=&q=&since=1h&limit=300` | `{query, lines: [{t, pod, container, line}]}` from Loki, newest first |
 | GET | `/api/rollout?ns=&name=` | a Deployment's revisions (newest first), paused, and its `hpa`, `pdb` and `gitops` owner |
 
 ## Layout

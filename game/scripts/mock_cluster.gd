@@ -516,6 +516,7 @@ func _emit() -> void:
 				out[k] = p[k]
 		out.phase = "Running" if p.status == "Running" else "Pending"
 		s.pods.append(out)
+	s["alerts"] = _alerts()
 	for wkey in workloads:
 		var wl: Dictionary = workloads[wkey]
 		var mine := pods.values().filter(func(p): return p._wl == wkey and not p.deleting)
@@ -883,3 +884,114 @@ func rollout(ns: String, n: String) -> Dictionary:
 	for i in range(hist.size() - 1, -1, -1):
 		revs.append({"revision": i + 1, "images": [hist[i]], "cause": "", "age": 3600 * (hist.size() - i), "current": hist[i] == wl.image})
 	return {"ok": true, "revisions": revs, "paused": wl.get("paused", false), "hpa": wl.get("hpa"), "pdb": wl.get("pdb"), "gitops": wl.get("gitops")}
+
+
+# --- observability (block 4): what Prometheus, Alertmanager and Loki would say
+
+var _alert_since := {}   # id -> unix time it started firing
+var _fixed_at := {}      # workload key -> when a rollback fixed it (restarts stop growing)
+
+## Alerts like kube-prometheus-stack's rules would fire on this cluster.
+func _alerts() -> Array:
+	var out := []
+	var now := Time.get_unix_time_from_system()
+	var seen := {}
+	var add := func(id: String, name: String, sev: String, ns: String, pod: String, wl: String, node: String, summary: String, desc: String):
+		seen[id] = true
+		if not _alert_since.has(id):
+			_alert_since[id] = now - (1800.0 if name == "ContainerMemoryNearLimit" else 240.0)
+		out.append({"id": id, "name": name, "severity": sev, "ns": ns, "pod": pod, "workload": wl, "node": node, "summary": summary,
+			"description": desc, "runbook": "https://runbooks.prometheus-operator.dev/runbooks/kubernetes/" + name.to_lower(),
+			"since": int(now - _alert_since[id]), "source": "alertmanager"})
+	for wkey in workloads:
+		var wl: Dictionary = workloads[wkey]
+		var bad := pods.values().filter(func(p): return p._wl == wkey and not p.deleting and p.status != "Running")
+		match wl.get("behaviour", "ok"):
+			"crash":
+				if not bad.is_empty():
+					add.call("crash/" + wkey, "KubePodCrashLooping", "warning", wl.ns, bad[0].name, "%s/%s" % [wl.kind, wl.name], "",
+						"Pod %s/%s is crash looping." % [wl.ns, bad[0].name], "Pod %s/%s (%s) is in waiting state (reason: CrashLoopBackOff)." % [wl.ns, bad[0].name, wl.containers[0]])
+			"pullfail", "unschedulable":
+				if not bad.is_empty():
+					add.call("notready/" + wkey, "KubePodNotReady", "warning", wl.ns, bad[0].name, "%s/%s" % [wl.kind, wl.name], "",
+						"Pod has been in a non-ready state for more than 15 minutes.", "Pod %s/%s has been in a non-ready state for longer than 15 minutes." % [wl.ns, bad[0].name])
+	if workloads.has("ml/Deployment/trainer"):
+		add.call("mem/ml/trainer", "ContainerMemoryNearLimit", "warning", "ml", "", "Deployment/trainer", "",
+			"Memory of ml/trainer keeps growing (a leak?).", "trainer's working set grew from 1.1 GiB to 3.4 GiB in the last hour and is at 91% of its limit.")
+	for n in nodes.values():
+		if not n.get("ready", true):
+			add.call("node/" + n.name, "KubeNodeNotReady", "critical", "", "", "", n.name, "Node is not ready.", "%s has been unready for more than 15 minutes." % n.name)
+	for id in _alert_since.keys():
+		if not seen.has(id):
+			_alert_since.erase(id)
+	out.sort_custom(func(a, b): return a.severity == "critical" and b.severity != "critical")
+	return out
+
+
+## History as Prometheus would have it (1h/6h/24h, 60 points).
+func series(kind: String, ns: String, n: String, span: String) -> Dictionary:
+	var secs: float = {"1h": 3600.0, "6h": 21600.0, "24h": 86400.0, "7d": 604800.0}.get(span, 3600.0)
+	var now := Time.get_unix_time_from_system()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(kind + ns + n)
+	var base_cpu := rng.randf_range(0.05, 0.6) * (4.0 if kind == "node" else 1.0)
+	var base_mem := rng.randf_range(80.0, 400.0) * 1048576.0 * (8.0 if kind == "node" else 1.0)
+	var leak := ns == "ml" and n.begins_with("trainer")
+	var crashing := ns == "payments" and n.begins_with("ledger")
+	var wkey := "payments/Deployment/ledger"
+	var fixed: float = _fixed_at.get(wkey, 0.0)
+	if crashing and workloads.has(wkey) and workloads[wkey].get("behaviour", "") == "ok" and fixed == 0.0:
+		fixed = now
+		_fixed_at[wkey] = now
+	var cpu := []
+	var mem := []
+	var restarts := []
+	for i in 61:
+		var t := now - secs + secs * i / 60.0
+		var wave := 1.0 + 0.25 * sin(t / 600.0 + rng.randf()) + rng.randf_range(-0.08, 0.08)
+		cpu.append([t, maxf(0.0, base_cpu * wave)])
+		var m := base_mem * (1.0 + rng.randf_range(-0.03, 0.03))
+		if leak:
+			# grows since about 45 minutes ago
+			m = 1.1 * 1073741824.0 + maxf(0.0, t - (now - 2700.0)) / 2700.0 * 2.3 * 1073741824.0
+		mem.append([t, m])
+		if kind != "node":
+			var r := 0.0
+			if crashing:
+				var until := fixed if fixed > 0.0 else t
+				r = floorf(maxf(0.0, minf(t, until) - (now - 1500.0)) / 300.0)
+			restarts.append([t, r])
+	var out := {"ok": true, "range": span, "cpu": cpu, "mem": mem}
+	if kind != "node":
+		out["restarts"] = restarts
+	return out
+
+
+## Logs of a namespace / workload as Loki would return them (newest first).
+func log_search(ns: String, wl_name: String, text: String, since: String) -> Dictionary:
+	var now := Time.get_unix_time_from_system()
+	var mine := pods.values().filter(func(p): return p.ns == ns and (wl_name == "" or str(p._wl).ends_with("/" + wl_name)) \
+		and (p.status == "Running" or workloads.get(p._wl, {}).get("behaviour", "") == "crash"))
+	var lines := []
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(now / 10.0)
+	var paths := ["/api/cart", "/api/orders", "/healthz", "/api/items/42", "/metrics", "/api/checkout"]
+	for i in 240:
+		if mine.is_empty():
+			break
+		var p: Dictionary = mine[rng.randi() % mine.size()]
+		var wl: Dictionary = workloads.get(p._wl, {})
+		var line := ""
+		if wl.get("behaviour", "") == "crash":
+			line = ["ledger starting (attempt %d)" % (p.restarts + 1), "connecting to postgres at db.payments:5432", "FATAL: db connection refused"][i % 3]
+		elif rng.randf() < 0.06:
+			line = "WARN slow query took %dms (orders by customer)" % rng.randi_range(800, 3000)
+		elif rng.randf() < 0.03:
+			line = "ERROR upstream %s returned 502" % paths[rng.randi() % paths.size()]
+		else:
+			line = "GET %s %d %dms" % [paths[rng.randi() % paths.size()], 200, rng.randi_range(2, 60)]
+		if text != "" and not line.to_lower().contains(text.to_lower()):
+			continue
+		lines.append({"t": int((now - i * 7.3) * 1000.0), "pod": p.name, "container": wl.get("containers", [p.name])[0], "line": line})
+	var sel := "namespace=\"%s\"" % ns + ((", pod=~\"%s-.*\"" % wl_name) if wl_name != "" else "")
+	return {"ok": true, "query": "{%s}%s" % [sel, (" |= \"%s\"" % text) if text != "" else ""], "lines": lines}

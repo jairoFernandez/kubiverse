@@ -63,6 +63,8 @@ type Bridge struct {
 	dsLister   appslisters.DaemonSetLister
 	ingLister  networkinglisters.IngressLister // nil if Ingresses can't be listed
 	ops        opsListers                      // HPAs and PDBs (each nil if not allowed)
+	obs        observability                   // Prometheus, Alertmanager, Loki
+	ctx        context.Context                 // lives as long as this cluster's bridge
 
 	mu      sync.Mutex
 	dirty   bool
@@ -99,6 +101,9 @@ func main() {
 		llmModel   = flag.String("llm-model", llm.Model, "Ollama model for the in-game assistant (auto = best installed local model)")
 		audit      = flag.String("audit-dir", auditDir, "directory with API server audit logs (<dir>/<context>/**/audit.log) for WATCHTOWER mode")
 	)
+	promURL := flag.String("prometheus", "auto", "Prometheus URL for trends (auto = find it in the cluster, off = none)")
+	amURL := flag.String("alertmanager", "auto", "Alertmanager URL for alerts (auto / off)")
+	lokiURL := flag.String("loki", "auto", "Loki URL for logs of whole namespaces (auto / off)")
 	inCluster := flag.Bool("in-cluster", false, "run inside the cluster with the pod's ServiceAccount (team mode, see deploy/helm)")
 	userHeader := flag.String("auth-user-header", "", "team mode: header with the signed-in user set by an OIDC proxy (e.g. X-Auth-Request-Email); requests without it are refused and changes impersonate that user")
 	groupsHeader := flag.String("auth-groups-header", "", "team mode: header with the user's groups (comma-separated), e.g. X-Auth-Request-Groups")
@@ -123,6 +128,7 @@ func main() {
 	hub := newHub(ctx, *kubeconfig, *kubectx, *dataDir, *readOnly, *token)
 	hub.pol = newPolicy(filepath.Dir(*dataDir), strings.Split(*production, ","))
 	hub.inCluster, hub.userHeader, hub.groupsHeader = *inCluster, *userHeader, *groupsHeader
+	hub.obsFlags = map[string]string{"prometheus": *promURL, "alertmanager": *amURL, "loki": *lokiURL}
 	if *inCluster {
 		hub.defaultCtx = inClusterName
 	}
@@ -155,6 +161,9 @@ func main() {
 	mux.HandleFunc("/api/portforward", hub.cluster((*Bridge).handleForwards))
 	mux.HandleFunc("GET /api/pod", hub.cluster((*Bridge).handlePod))
 	mux.HandleFunc("GET /api/rollout", hub.cluster((*Bridge).handleRollout))
+	mux.HandleFunc("GET /api/obs", hub.cluster((*Bridge).handleObs))
+	mux.HandleFunc("GET /api/series", hub.cluster((*Bridge).handleSeries))
+	mux.HandleFunc("GET /api/logsearch", hub.cluster((*Bridge).handleLogSearch))
 	mux.HandleFunc("GET /api/manifest", hub.cluster((*Bridge).handleManifestGet))
 	mux.HandleFunc("POST /api/manifest", hub.cluster((*Bridge).handleManifestPut))
 	mux.HandleFunc("GET /api/assistant", hub.auth(hub.handleAIStatus))
@@ -222,6 +231,7 @@ func startBridge(root context.Context, cfg *rest.Config, ctxName, kubeconfigPath
 	}
 	ctx, cancel := context.WithCancel(root)
 	b.stop = cancel
+	b.ctx = ctx
 	f := informers.NewSharedInformerFactory(cs, 10*time.Minute)
 	b.nodeLister = f.Core().V1().Nodes().Lister()
 	b.nsLister = f.Core().V1().Namespaces().Lister()
@@ -273,6 +283,7 @@ func startBridge(root context.Context, cfg *rest.Config, ctxName, kubeconfigPath
 	}
 	probeCancel()
 	b.watchEvents(ctx, f)
+
 	b.startWatch(ctx, f)
 	log.Printf("[%s] connecting to %s ...", ctxName, cfg.Host)
 	f.Start(ctx.Done())

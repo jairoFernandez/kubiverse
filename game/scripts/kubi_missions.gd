@@ -31,6 +31,12 @@ static func generate(s: Dictionary) -> Array:
 			continue
 		seen_owner[okey] = true
 		out.append(_failing(p, wkey, cat, s))
+	# 1b) The team's alerts (Alertmanager / Prometheus rules).
+	for al in s.get("alerts", []):
+		var tgt := _alert_wkey(s, al)
+		if tgt != "" and seen_owner.has(tgt) and str(al.get("name", "")) in ["KubePodCrashLooping", "KubePodNotReady"]:
+			continue  # the failing-pod mission already covers it
+		out.append(_alert(al, tgt))
 	# 2) Hot nodes.
 	var load := node_load(s)
 	var avg := 0.0
@@ -239,6 +245,38 @@ static func _no_requests(w: Dictionary, wkey: String, p: Dictionary) -> Dictiona
 # ------------------------------------------------------------ checks
 
 ## Does this event (or the state) complete the step?
+static func _alert_wkey(s: Dictionary, al: Dictionary) -> String:
+	if str(al.get("workload", "")) != "":
+		return "%s/%s" % [al.ns, al.workload]
+	if str(al.get("pod", "")) != "":
+		for p in s.get("pods", []):
+			if p.ns == al.ns and p.name == al.pod:
+				return workload_key(s, p)
+	return ""
+
+
+static func _alert(al: Dictionary, wkey: String) -> Dictionary:
+	var m := _m("k:alert:" + str(al.id), {"critical": 90, "warning": 60}.get(str(al.get("severity", "")), 30))
+	var what := str(al.get("summary", "")) if str(al.get("summary", "")) != "" else str(al.get("description", ""))
+	m.title = ["Alert %s: %s", [al.name, what]]
+	var runbook := str(al.get("runbook", ""))
+	m.learn = ["Your team's monitoring fired this (%s, %s). %s%s", [al.get("source", "alert"), al.get("severity", "?"), al.get("description", ""),
+		(" Runbook: " + runbook) if runbook != "" else ""]]
+	m.target = {"alert": al.id, "wkey": wkey, "pod": "%s/%s" % [al.get("ns", ""), al.get("pod", "")] if str(al.get("pod", "")) != "" else ""}
+	var ns := str(al.get("ns", ""))
+	if str(al.get("node", "")) != "":
+		m.steps.append(_step(0, ["Click node %s: what is it running, how full is it?", [al.node]], "kubectl describe node %s" % al.node, {"on": "inspect", "kind": "node", "key": al.node}))
+	elif wkey != "":
+		m.steps.append(_step(0, ["Find %s (search: Ctrl/Cmd+F) and click it.", [wkey.get_slice("/", 2)]], "kubectl -n %s get %s" % [ns, _res(wkey)], {"on": "any", "of": [{"on": "inspect", "kind": "workload", "key": wkey}, {"on": "inspect", "kind": "pod", "owner": wkey}]}))
+	m.steps.append(_step(1, ["Look at its HISTORY in the inspector: since when is it like this?", []], "# Prometheus: the query behind the alert", {"on": "history"}))
+	if ns != "":
+		m.steps.append(_step(1, ["Search the logs of all its pods at once (LOGS all pods, e.g. 'error').", []], "logcli query '{namespace=\"%s\"} |= \"error\"'" % ns, {"on": "any", "of": [{"on": "agglogs"}, {"on": "logs", "owner": wkey}]} if wkey != "" else {"on": "agglogs"}))
+	m.steps.append(_step(2, ["Mitigate: follow the runbook, roll back a bad deploy, give it resources or fix it; or ask Kubi.", []], runbook if runbook != "" else "kubectl -n %s rollout undo %s" % [ns, _res(wkey)],
+		{"on": "any", "of": [{"on": "change", "wkey": wkey}, {"on": "kubi"}]} if wkey != "" else {"on": "any", "of": [{"on": "change"}, {"on": "kubi"}]}))
+	m.steps.append(_step(3, ["Verify: the alert stops firing.", []], "# Alertmanager: the alert is gone", {"on": "state", "cond": "alert_gone", "id": al.id}))
+	return m
+
+
 static func check(step: Dictionary, ev: String, a, b, s: Dictionary, flags: Dictionary) -> bool:
 	return _match(step.check, ev, a, b, s, flags)
 
@@ -267,14 +305,14 @@ static func _match(c: Dictionary, ev: String, a, b, s: Dictionary, flags: Dictio
 				return false
 			var line := str(a).strip_edges().trim_prefix("kubectl ").strip_edges()
 			return c.prefix.any(func(pf): return line.begins_with(pf))
-		"stats", "kubi":
+		"stats", "kubi", "history", "agglogs":
 			return ev == c.on
 		"change":
 			if ev == "manifest" and b:
 				if c.has("svc"):
 					return a.get("kind", "") == "Service" and "%s/%s" % [a.ns, a.name] == c.svc
 				return not c.has("wkey") or "%s/%s/%s" % [a.ns, a.kind, a.name] == c.wkey or (str(c.wkey).contains("/Pod/") and a.get("kind", "") == "Pod")
-			if ev == "action" and b and a.get("action", "") in ["restart", "scale", "delete_pod", "delete_workload"]:
+			if ev == "action" and b and a.get("action", "") in ["restart", "scale", "delete_pod", "delete_workload", "rollout_undo", "resume"]:
 				if not c.has("wkey"):
 					return true
 				var k := "%s/%s/%s" % [a.get("ns", ""), a.get("kind", ""), a.get("name", "")]
@@ -315,6 +353,8 @@ static func _cond(c: Dictionary, s: Dictionary, flags: Dictionary) -> bool:
 		"has_requests":
 			var mine: Array = s.get("pods", []).filter(func(p): return workload_key(s, p) == c.wkey and PodBot.categorize(p) == "ok")
 			return not mine.is_empty() and mine.all(func(p): return float(p.get("cpu_req_m", 0)) > 0.0 or float(p.get("mem_req", 0)) > 0.0)
+		"alert_gone":
+			return not s.get("alerts", []).any(func(al): return str(al.id) == str(c.id))
 		"quiet":
 			var total := 0
 			for p in s.get("pods", []):
