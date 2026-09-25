@@ -217,6 +217,7 @@ func _ready() -> void:
 	add_child(missions)
 	hud.missions = missions
 	missions.progress_changed.connect(hud.refresh_missions)
+	missions.kubi_found.connect(func(m): hud.toast(tr("Kubi found a new mission: %s") % m.title, false))
 	missions.completed.connect(func(m):
 		Sfx.play("jingle")
 		for wi in Weapons.LIST.size():
@@ -322,6 +323,41 @@ func _screenshot_and_quit(path: String) -> void:
 		if arg.begins_with("--level="):
 			_go_level(arg.substr(8))
 			await get_tree().create_timer(2.5).timeout
+	if "--kubi-test" in OS.get_cmdline_user_args():
+		missions.set_level("kubi")
+		await get_tree().create_timer(3.0).timeout
+		for km in missions.dynamic:
+			var v := missions.view(km)
+			print("KT %s | %s | steps=%d" % [km.id, v.title, km.steps.size()])
+		var cur := missions.current()
+		print("KT current=%s step=%s goal=%s" % [cur.get("id", ""), cur.get("step", -1), cur.get("goal", "")])
+		# Walk the first step of the current one: inspect what it asks for.
+		var km0: Dictionary = missions.dynamic[missions.index()] if not missions.dynamic.is_empty() else {}
+		if not km0.is_empty():
+			var c: Dictionary = km0.steps[0].check
+			for p in K8s.state.pods:
+				if c.get("kind", "") == "pod" and KubiMissions._owns(K8s.state, str(c.get("owner", "")), p):
+					missions.notify("inspect", "pod", p)
+					break
+			print("KT after inspect step=%s" % missions.current().get("step", -1))
+			missions.notify("kubectl", "-n payments describe pod x", true)
+			print("KT after describe step=%s" % missions.current().get("step", -1))
+			var t := str(km0.target.get("wkey", "")).split("/")
+			if t.size() == 3:
+				K8s.get_manifest(t[1], t[0], t[2], func(ok: bool, yaml: String, _ro: bool):
+					var fixed := RegEx.create_from_string("(?m)^(\\s*-?\\s*image:\\s*).+$").sub(yaml, "$1busybox:1.36")
+					K8s.prod_ok = true
+					K8s.put_manifest(t[1], t[0], t[2], fixed, false, func(ok2: bool, _m: String):
+						if ok2:
+							missions.notify("manifest", {"kind": t[1], "ns": t[0], "name": t[2]}, true))
+					K8s.prod_ok = false)
+			for i in 40:
+				await get_tree().create_timer(0.5).timeout
+				if missions.current().get("id", "") != km0.id:
+					break
+			print("KT after fix: current=%s done=%s" % [missions.current().get("id", ""), km0.id in Settings.missions_done])
+		hud._mission_panel.visible = true
+		hud._terminal.visible = false
 	if "--mission-log" in OS.get_cmdline_user_args():
 		hud.open_mission_log("intermediate")
 		await get_tree().create_timer(0.5).timeout

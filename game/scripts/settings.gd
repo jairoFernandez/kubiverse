@@ -17,6 +17,9 @@ var missions_done: Array = []
 var mission_idx := 0          # legacy: progress of the single track, now "basic"
 var mission_progress := {}    # track id -> index of the current mission
 var mission_level := "basic"  # sandbox track: basic | intermediate | advanced
+var mission_kubi := false     # playing Kubi's dynamic missions (any cluster kind)
+var kubi_active := ""         # id of the dynamic mission being played
+var kubi_steps := {}          # dynamic mission id -> current step
 var cluster_kinds := {}       # "bridge url|context" -> "prod" | "sandbox"
 var lang := ""
 var always_run := false
@@ -47,6 +50,9 @@ func _ready() -> void:
 		mission_idx = cf.get_value("missions", "idx", mission_idx)
 		mission_progress = cf.get_value("missions", "progress", {"basic": mission_idx})
 		mission_level = cf.get_value("missions", "level", mission_level)
+		mission_kubi = cf.get_value("missions", "kubi", mission_kubi)
+		kubi_active = cf.get_value("missions", "kubi_active", kubi_active)
+		kubi_steps = cf.get_value("missions", "kubi_steps", kubi_steps)
 		cluster_kinds = cf.get_value("clusters", "kinds", cluster_kinds)
 		lang = cf.get_value("ui", "lang", lang)
 		always_run = cf.get_value("ui", "always_run", always_run)
@@ -102,6 +108,9 @@ func save() -> void:
 	cf.set_value("missions", "idx", mission_idx)
 	cf.set_value("missions", "progress", mission_progress)
 	cf.set_value("missions", "level", mission_level)
+	cf.set_value("missions", "kubi", mission_kubi)
+	cf.set_value("missions", "kubi_active", kubi_active)
+	cf.set_value("missions", "kubi_steps", kubi_steps)
 	cf.set_value("clusters", "kinds", cluster_kinds)
 	cf.set_value("ui", "lang", lang)
 	cf.set_value("ui", "always_run", always_run)

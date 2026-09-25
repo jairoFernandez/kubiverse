@@ -129,6 +129,8 @@ var _log_detail: RichTextLabel
 var _log_btns: HBoxContainer
 var _log_track := ""
 var _log_sel := 0
+var _mission_phase: RichTextLabel  # Kubi missions: DIAGNOSE > UNDERSTAND > MITIGATE > VERIFY
+var _mission_kbtns: HBoxContainer
 var _kind_panel: PanelContainer  # asks which kind a new cluster is
 var _confirm_prod: Label         # red "PRODUCTION CLUSTER" line in the confirm dialog
 var _mission_track: HFlowContainer
@@ -1249,9 +1251,18 @@ func _build_missions_panel() -> void:
 	v.add_child(_mission_body)
 	_mission_title = _label("", 26, Vox.YELLOW)
 	_mission_body.add_child(_mission_title)
+	_mission_phase = _rich(19)
+	_mission_phase.visible = false
+	_mission_body.add_child(_mission_phase)
 	_mission_goal = _label("", 24)
 	_mission_goal.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_mission_body.add_child(_mission_goal)
+	_mission_kbtns = HBoxContainer.new()
+	_mission_kbtns.add_theme_constant_override("separation", 6)
+	_mission_kbtns.visible = false
+	_mission_kbtns.add_child(_button("ASK KUBI", _ask_kubi_mission, "GoButton"))
+	_mission_kbtns.add_child(_button("NEXT PROBLEM", func(): missions.next_dynamic()))
+	_mission_body.add_child(_mission_kbtns)
 	_mission_learn = _label("", 22, Vox.PEACH)
 	_mission_learn.visible = false
 	_mission_learn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1274,6 +1285,16 @@ func refresh_missions() -> void:
 	if _log_panel and _log_panel.visible:
 		_refresh_log()
 	_refresh_mission_track()
+	var kubi_track := missions.track() == "kubi"
+	_mission_phase.visible = false
+	_mission_kbtns.visible = false
+	if kubi_track and missions.all_done():
+		_mission_hdr.text = tr("KUBI'S MISSIONS")
+		_mission_title.text = tr("Nothing to fix right now")
+		_mission_goal.text = tr("Kubi watches the cluster: when a node gets hot, a pod fails, a Service loses its pods or something looks risky, a mission with real names appears here.")
+		_mission_learn.text = ""
+		_mission_cmd.text = ""
+		return
 	if missions.all_done():
 		_mission_hdr.text = tr("MISSIONS COMPLETE")
 		_mission_title.text = tr("Certified plant!")
@@ -1284,10 +1305,40 @@ func refresh_missions() -> void:
 		return
 	var m := missions.current()
 	_mission_hdr.text = tr("MISSION %d / %d") % [missions.index() + 1, missions.list().size()]
+	if kubi_track:
+		_mission_hdr.text = tr("KUBI %d / %d") % [missions.index() + 1, missions.list().size()]
+		var parts := []
+		for i in m.phases.size():
+			var name := tr(KubiMissions.PHASES[m.phases[i]])
+			if i < m.step:
+				parts.append("[color=#00e436]✓ %s[/color]" % name)
+			elif i == m.step:
+				parts.append("[color=#ffec27][b]▶ %s[/b][/color]" % name)
+			else:
+				parts.append("[color=#5f574f]%s[/color]" % name)
+		_mission_phase.text = "  ".join(parts)
+		_mission_phase.visible = true
+		_mission_kbtns.visible = true
 	_mission_title.text = tr(m.title)
 	_mission_goal.text = tr(m.goal)
 	_mission_learn.text = tr(m.learn)
-	_mission_cmd.text = "[color=#ffec27]$[/color] [url=%s]%s[/url]" % [m.cmd, m.cmd]
+	_mission_cmd.text = "[color=#ffec27]$[/color] [url=%s]%s[/url]" % [m.cmd, m.cmd] if m.cmd != "" else ""
+
+
+## Kubi's mission to the AI (or the built-in guide): a plan for this cluster.
+func _ask_kubi_mission() -> void:
+	var m := missions.current()
+	if m.is_empty():
+		return
+	var steps := []
+	var km: Dictionary = missions.dynamic[missions.index()] if missions.index() < missions.dynamic.size() else {}
+	for st in km.get("steps", []):
+		steps.append("- [%s] %s" % [KubiMissions.PHASES[st.phase], missions.fmt(st.text)])
+	kubi.open()
+	kubi.attach({"id": Time.get_ticks_msec(), "cmd": "Kubi mission: " + str(m.title), "ok": true,
+		"out": "%s\n\n%s\n\n%s\n%s" % [m.title, m.learn, "\n".join(steps), JSON.stringify(m.target)]})
+	kubi.ask(tr("Help me with this mission on my %s cluster: %s. I'm at step '%s'. Tell me what to check, the likely cause, and the safest way to mitigate it, with the exact kubectl commands.") % [
+		tr("PRODUCTION") if K8s.is_prod() else tr("SANDBOX"), m.title, m.goal])
 
 
 ## PRODUCTION label, or the three sandbox levels as buttons.
@@ -1295,14 +1346,17 @@ func _refresh_mission_track() -> void:
 	for c in _mission_track.get_children():
 		c.queue_free()
 	var t := missions.track()
-	if t == "prod":
-		var l := _label("PRODUCTION · read-only missions", 20, Vox.RED)
-		_mission_track.add_child(l)
+	if K8s.is_prod():
+		_mission_track.add_child(_label("PRODUCTION:", 20, Vox.RED))
+		_mission_track.add_child(_button("GUIDED", func(): missions.set_level("prod"), "GoButton" if t == "prod" else ""))
 	else:
 		_mission_track.add_child(_label("SANDBOX · level:", 20, Vox.GREEN))
 		for lv in Missions.LEVELS:
 			var b := _button(Missions.TRACK_TITLES[lv], func(): missions.set_level(lv), "GoButton" if lv == t else "")
 			_mission_track.add_child(b)
+	var kb := _button("KUBI %d" % missions.dynamic.size() if not missions.dynamic.is_empty() else "KUBI", func(): missions.set_level("kubi"), "GoButton" if t == "kubi" else "")
+	kb.tooltip_text = tr("Missions Kubi writes from the live cluster: real problems with real names")
+	_mission_track.add_child(kb)
 	# The sample scenario: the demo has it built in; never offered on production.
 	_mission_scn.visible = t == "intermediate" and K8s.mode == K8s.Mode.BRIDGE
 
@@ -1330,8 +1384,8 @@ func open_mission_log(t := "") -> void:
 func _refresh_log() -> void:
 	for c in _log_tabs.get_children():
 		c.queue_free()
-	for t in ["prod"] + Missions.LEVELS:
-		var l := Missions.list_of(t)
+	for t in ["kubi", "prod"] + Missions.LEVELS:
+		var l := missions.list_of(t)
 		var done := l.filter(func(m): return m.id in Settings.missions_done).size()
 		var name := "%s  %d/%d" % [tr(Missions.TRACK_TITLES[t]), done, l.size()]
 		_log_tabs.add_child(_button(name, func():
@@ -1340,7 +1394,14 @@ func _refresh_log() -> void:
 			_refresh_log(), "GoButton" if t == _log_track else ""))
 	for c in _log_list.get_children():
 		c.queue_free()
-	var list := Missions.list_of(_log_track)
+	var list := missions.list_of(_log_track)
+	for c in _log_btns.get_children():
+		c.queue_free()
+	if list.is_empty():
+		_log_detail.text = "[color=#83769c]%s[/color]" % tr("Kubi finds nothing to fix right now: no hot nodes, failing pods, Services without endpoints or risky workloads.")
+		return
+	if _log_track == "kubi":
+		list = list.map(func(km): return missions.view(km))
 	_log_sel = clampi(_log_sel, 0, list.size() - 1)
 	var cur := missions.index() if _log_track == missions.track() else -1
 	for i in list.size():
@@ -1356,9 +1417,19 @@ func _refresh_log() -> void:
 	var t := "[color=#ffec27][b]%s[/b][/color]   [color=#83769c]%s[/color]\n\n" % [tr(m.title), state]
 	t += "[color=#fff1e8]%s[/color]\n\n" % tr(m.goal)
 	t += "[color=#29adff]%s[/color]\n[color=#ffccaa]%s[/color]\n\n" % [tr("WHY?"), tr(m.learn)]
-	t += "[color=#83769c]%s[/color]\n" % tr("The same with kubectl (click to put it in the terminal):")
-	for c in str(m.cmd).split(" && "):
-		t += "[color=#ffec27]$[/color] [url=%s]%s[/url]\n" % [c, c]
+	if m.get("dynamic", false):
+		var km: Dictionary = missions.dynamic[_log_sel]
+		t = "[color=#ffec27][b]%s[/b][/color]   [color=#83769c]%s[/color]\n\n[color=#ffccaa]%s[/color]\n\n" % [m.title, state, m.learn]
+		for i in km.steps.size():
+			var st: Dictionary = km.steps[i]
+			var col := "#00e436" if i < m.step else ("#ffec27" if i == m.step else "#c2c3c7")
+			t += "[color=%s]%d. %s[/color] [color=#83769c](%s)[/color]\n" % [col, i + 1, missions.fmt(st.text), tr(KubiMissions.PHASES[st.phase])]
+			if st.cmd != "":
+				t += "    [color=#ffec27]$[/color] [url=%s]%s[/url]\n" % [st.cmd, st.cmd]
+	else:
+		t += "[color=#83769c]%s[/color]\n" % tr("The same with kubectl (click to put it in the terminal):")
+		for c in str(m.cmd).split(" && "):
+			t += "[color=#ffec27]$[/color] [url=%s]%s[/url]\n" % [c, c]
 	if not missions.playable(_log_track):
 		t += "\n[color=#ff77a8]%s[/color]" % (tr("Production missions: they are played on a cluster marked PRODUCTION.") if _log_track == "prod" \
 			else tr("Sandbox missions: they are played on a sandbox cluster (or the demo), never on production."))

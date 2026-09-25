@@ -12,6 +12,20 @@ func _init() -> void:
 		assert(WebHost.is_local(o), o)
 	for o in ["https://jairo.github.io", "https://kubiverse.dev", "https://172.32.0.1", "https://8.8.8.8"]:
 		assert(not WebHost.is_local(o), o)
+	# Kubi's dynamic missions: a hot node gives a bottleneck mission with the
+	# biggest pod named, and its VERIFY step passes once the node cools down.
+	var hs := {"nodes": [{"name": "n1", "cpu_m": 1000, "mem_bytes": 1 << 30}, {"name": "n2", "cpu_m": 1000, "mem_bytes": 1 << 30}],
+		"pods": [{"ns": "shop", "name": "api-1", "node": "n1", "status": "Running", "phase": "Running", "ready": 1, "total": 1, "cpu_req_m": 900, "mem_req": 0, "owner_kind": "Deployment", "owner_name": "api"},
+			{"ns": "shop", "name": "web-1", "node": "n2", "status": "Running", "phase": "Running", "ready": 1, "total": 1, "cpu_req_m": 100, "mem_req": 0, "owner_kind": "Deployment", "owner_name": "web"}],
+		"workloads": [{"ns": "shop", "kind": "Deployment", "name": "api", "desired": 2, "ready": 2}, {"ns": "shop", "kind": "Deployment", "name": "web", "desired": 2, "ready": 2}],
+		"services": [], "ingresses": []}
+	var gen := KubiMissions.generate(hs)
+	var hot: Array = gen.filter(func(m): return m.id == "k:hot:n1")
+	assert(hot.size() == 1, "hot node mission")
+	assert(str(hot[0].steps[1].text[1]).contains("api-1"), "names the biggest pod")
+	assert(not KubiMissions.check(hot[0].steps[-1], "state", null, null, hs, {}), "still hot")
+	hs.pods[0].cpu_req_m = 300
+	assert(KubiMissions.check(hot[0].steps[-1], "state", null, null, hs, {}), "cooled down")
 	await process_frame
 	var fails := 0
 	var mock := MockCluster.new()

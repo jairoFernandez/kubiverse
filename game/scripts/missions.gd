@@ -10,10 +10,11 @@ extends Node
 
 signal progress_changed
 signal completed(m: Dictionary)
+signal kubi_found(m: Dictionary)   # a new dynamic mission appeared (Kubi track)
 
 const NS := "academia"
 const LEVELS := ["basic", "intermediate", "advanced"]
-const TRACK_TITLES := {"prod": "PRODUCTION", "basic": "BASIC", "intermediate": "INTERMEDIATE", "advanced": "ADVANCED"}
+const TRACK_TITLES := {"prod": "PRODUCTION", "basic": "BASIC", "intermediate": "INTERMEDIATE", "advanced": "ADVANCED", "kubi": "KUBI"}
 
 ## Sandbox, basic: the guided tour (also unlocks the chaos weapons).
 const LIST := [
@@ -102,8 +103,8 @@ const PROD := [
 		"learn_es": "Cada nodo tiene CPU y memoria asignables. El scheduler coloca pods según sus requests, no según el uso real: un nodo puede estar 'lleno' sin hacer nada.",
 		"cmd": "kubectl describe node <node>"},
 	{"id": "p_bottleneck", "title": "Bottleneck hunt", "title_es": "Caza del cuello de botella",
-		"goal": "Find and click the node with the most CPU reserved (its blue gauge is the fullest).",
-		"goal_es": "Encuentra y haz clic en el nodo con más CPU reservada (su medidor azul es el más lleno).",
+		"goal": "Find and click the node with the most CPU reserved (its blue gauge is the fullest). For a plan with real names (which pods, what to lower, how to verify) switch to the KUBI missions.",
+		"goal_es": "Encuentra y haz clic en el nodo con más CPU reservada (su medidor azul es el más lleno). Para un plan con nombres reales (qué pods, qué bajar, cómo verificar) cambia a las misiones de KUBI.",
 		"learn": "When one node is much fuller than the rest (see 'Allocated resources' in describe nodes), new pods pile up on the others or stay Pending. Spread them with requests that match reality, anti-affinity or topology spread constraints.",
 		"learn_es": "Cuando un nodo está mucho más lleno que el resto (mira 'Allocated resources' en describe nodes), los pods nuevos se amontonan en los demás o se quedan Pending. Repártelos con requests realistas, anti-afinidad o topology spread constraints.",
 		"cmd": "kubectl describe nodes"},
@@ -215,6 +216,10 @@ const ADVANCED := [
 ]
 
 var _flags := {}
+## Kubi's missions, rebuilt from the cluster state every couple of seconds.
+var dynamic: Array = []
+var _dyn_t := -10.0
+var _dyn_seen := {}
 
 
 ## Every mission of every track (translations, weapon hints).
@@ -224,6 +229,8 @@ static func all() -> Array:
 
 ## The track that applies now: production clusters only get the read-only one.
 func track() -> String:
+	if Settings.mission_kubi:
+		return "kubi"
 	if K8s.is_prod():
 		return "prod"
 	return Settings.mission_level if Settings.mission_level in LEVELS else "basic"
@@ -231,6 +238,7 @@ func track() -> String:
 
 func list() -> Array:
 	match track():
+		"kubi": return dynamic
 		"prod": return PROD
 		"intermediate": return INTERMEDIATE
 		"advanced": return ADVANCED
@@ -238,8 +246,15 @@ func list() -> Array:
 
 
 func set_level(level: String) -> void:
-	if level == Settings.mission_level or not level in LEVELS:
+	if level == "kubi" or level == "prod":
+		Settings.mission_kubi = level == "kubi"
+		_flags.clear()
+		Settings.save()
+		progress_changed.emit()
 		return
+	if (level == Settings.mission_level and not Settings.mission_kubi) or not level in LEVELS:
+		return
+	Settings.mission_kubi = false
 	Settings.mission_level = level
 	_flags.clear()
 	Settings.save()
@@ -247,8 +262,9 @@ func set_level(level: String) -> void:
 
 
 ## Missions of a track, for the mission log.
-static func list_of(t: String) -> Array:
+func list_of(t: String) -> Array:
 	match t:
+		"kubi": return dynamic
 		"prod": return PROD
 		"intermediate": return INTERMEDIATE
 		"advanced": return ADVANCED
@@ -257,12 +273,22 @@ static func list_of(t: String) -> Array:
 
 ## Tracks you can play on this cluster: production only gets its own.
 func playable(t: String) -> bool:
+	if t == "kubi":
+		return true
 	return t == "prod" if K8s.is_prod() else t in LEVELS
 
 
 ## Mission log: make mission i of track t the current one (to replay it).
 func jump(t: String, i: int) -> void:
 	if not playable(t):
+		return
+	Settings.mission_kubi = t == "kubi"
+	if t == "kubi":
+		if i >= 0 and i < dynamic.size():
+			Settings.kubi_active = dynamic[i].id
+		_flags.clear()
+		Settings.save()
+		progress_changed.emit()
 		return
 	if t in LEVELS:
 		Settings.mission_level = t
@@ -279,25 +305,134 @@ func kind_changed() -> void:
 
 
 func current() -> Dictionary:
+	if track() == "kubi":
+		var km := _active()
+		return {} if km.is_empty() else view(km)
 	var l := list()
 	var i := index()
 	return l[i] if i < l.size() else {}
 
 
 func index() -> int:
+	if track() == "kubi":
+		var km := _active()
+		return maxi(0, dynamic.find(km))
 	return int(Settings.mission_progress.get(track(), 0))
 
 
 func all_done() -> bool:
+	if track() == "kubi":
+		return _active().is_empty()
 	return index() >= list().size()
 
 
 func skip() -> void:
+	if track() == "kubi":
+		_kubi_step_done(true)
+		return
 	_advance()
+
+
+# ------------------------------------------------------------ Kubi's missions
+
+## The dynamic mission being played (the first unfinished one if none).
+func _active() -> Dictionary:
+	for km in dynamic:
+		if km.id == Settings.kubi_active:
+			return km
+	for km in dynamic:
+		if not km.id in Settings.missions_done:
+			Settings.kubi_active = km.id
+			return km
+	return {}
+
+
+## Kubi's next problem (panel button).
+func next_dynamic() -> void:
+	if dynamic.size() < 2:
+		return
+	var i := (dynamic.find(_active()) + 1) % dynamic.size()
+	Settings.kubi_active = dynamic[i].id
+	_flags.clear()
+	progress_changed.emit()
+
+
+func kubi_step(km: Dictionary) -> int:
+	return clampi(int(Settings.kubi_steps.get(km.id, 0)), 0, km.steps.size() - 1)
+
+
+## Translated view of a dynamic mission, shaped like the static ones.
+func view(km: Dictionary) -> Dictionary:
+	var i := kubi_step(km)
+	var st: Dictionary = km.steps[i]
+	return {"id": km.id, "dynamic": true, "title": fmt(km.title), "goal": fmt(st.text), "learn": fmt(km.learn),
+		"cmd": st.cmd, "step": i, "steps": km.steps.size(), "phase": st.phase,
+		"phases": km.steps.map(func(x): return x.phase), "target": km.target}
+
+
+func fmt(pair: Array) -> String:
+	var f := tr(str(pair[0]))
+	var args: Array = pair[1].map(func(x): return tr(x) if typeof(x) == TYPE_STRING else x)
+	return f % args if not args.is_empty() else f
+
+
+func _refresh_dynamic(force := false) -> void:
+	var now := Time.get_ticks_msec() / 1000.0
+	if not force and now - _dyn_t < 2.0:
+		return
+	_dyn_t = now
+	var before := _active()
+	var list_now: Array = KubiMissions.generate(K8s.state)
+	var ids: Array = list_now.map(func(x): return x.id)
+	# The problem went away while we were on it: fixed (maybe outside the game).
+	if not before.is_empty() and not before.id in ids and kubi_step(before) > 0 and track() == "kubi":
+		_kubi_complete(before)
+	dynamic = list_now
+	for km in dynamic:
+		if not _dyn_seen.has(km.id):
+			_dyn_seen[km.id] = true
+			if track() == "kubi" and _dyn_seen.size() > dynamic.size():
+				kubi_found.emit(view(km))
+	if track() == "kubi":
+		progress_changed.emit()
+
+
+func _kubi_step_done(skipped := false) -> void:
+	var km := _active()
+	if km.is_empty():
+		return
+	var i := kubi_step(km) + 1
+	_flags.clear()
+	if i >= km.steps.size():
+		_kubi_complete(km)
+		return
+	Settings.kubi_steps[km.id] = i
+	Settings.save()
+	if not skipped:
+		Sfx.play("coin")
+	progress_changed.emit()
+
+
+func _kubi_complete(km: Dictionary) -> void:
+	if not km.id in Settings.missions_done:
+		Settings.missions_done.append(km.id)
+	Settings.kubi_steps.erase(km.id)
+	Settings.kubi_active = ""
+	Settings.save()
+	completed.emit(view(km) if km.steps.size() > 0 else km)
+	progress_changed.emit()
 
 
 ## Restarts the current track only.
 func restart() -> void:
+	if track() == "kubi":
+		for km in dynamic:
+			Settings.missions_done.erase(km.id)
+		Settings.kubi_steps.clear()
+		Settings.kubi_active = ""
+		Settings.save()
+		progress_changed.emit()
+		return
 	for m in list():
 		Settings.missions_done.erase(m.id)
 	Settings.mission_progress[track()] = 0
@@ -324,6 +459,13 @@ func _advance() -> void:
 ##   action(req, ok), state(state), stats, watch, kubi, chaos,
 ##   kubectl(line, ok), manifest({kind, ns, name}, ok)
 func notify(ev: String, a = null, b = null) -> void:
+	if ev == "state":
+		_refresh_dynamic()
+	if track() == "kubi":
+		var km := _active()
+		if not km.is_empty() and KubiMissions.check(km.steps[kubi_step(km)], ev, a, b, K8s.state, _flags):
+			_kubi_step_done()
+		return
 	var m := current()
 	if m.is_empty():
 		return
