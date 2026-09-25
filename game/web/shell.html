@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0">
+		<meta name="theme-color" content="#1d2b53">
+		<title>$GODOT_PROJECT_NAME</title>
+		<style>
+@font-face { font-family: 'Press Start 2P'; src: url('fonts/PressStart2P-Regular.ttf') format('truetype'); font-display: swap; }
+@font-face { font-family: 'VT323'; src: url('fonts/VT323-Regular.ttf') format('truetype'); font-display: swap; }
+
+html, body, #canvas { margin: 0; padding: 0; border: 0; }
+body { color: #fff1e8; background-color: #1d2b53; overflow: hidden; touch-action: none; }
+#canvas { display: block; }
+#canvas:focus { outline: none; }
+
+/* ---------- Kubiverse loading screen ---------- */
+#status {
+	position: absolute; inset: 0; z-index: 2;
+	display: flex; flex-direction: column; justify-content: center; align-items: center;
+	background: linear-gradient(#0b1026 0%, #1d2b53 70%, #2a2350 100%);
+	font-family: 'VT323', ui-monospace, Menlo, monospace;
+	visibility: hidden; overflow: hidden;
+	transition: opacity .6s ease;
+}
+#status.fade { opacity: 0; pointer-events: none; }
+#status-splash { display: none; }
+#stars, #city { position: absolute; left: 0; right: 0; pointer-events: none; }
+#stars { top: 0; bottom: 0; }
+.star { position: absolute; width: 2px; height: 2px; background: #fff1e8; animation: twinkle 3s infinite steps(2); }
+@keyframes twinkle { 50% { opacity: .2; } }
+#city { bottom: 0; height: 34vh; display: flex; align-items: flex-end; gap: 0; opacity: .9; }
+.tower { position: relative; flex: 1 1 0; background: #151a33; box-shadow: inset 0 4px 0 #22284a; }
+.tower i { position: absolute; width: 4px; height: 4px; background: #ffec27; animation: win 7s infinite steps(1); }
+.tower i.c { background: #83d6ff; }
+@keyframes win { 70% { opacity: 1; } 71% { opacity: .15; } 90% { opacity: .15; } 91% { opacity: 1; } }
+.packet { position: absolute; width: 6px; height: 6px; background: #29adff; box-shadow: 0 0 6px #29adff; bottom: 34vh; animation: fly linear forwards; }
+@keyframes fly { to { transform: translate(var(--dx), var(--dy)); opacity: 0; } }
+
+#box { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; width: min(92vw, 760px); margin-top: -8vh; }
+#kubi { width: 88px; height: 88px; margin-bottom: 18px; animation: bob 1.6s ease-in-out infinite; image-rendering: pixelated; }
+#kubi canvas { width: 100%; height: 100%; image-rendering: pixelated; }
+@keyframes bob { 50% { transform: translateY(-10px); } }
+#logo { font-family: 'Press Start 2P', monospace; font-size: clamp(22px, 7.2vw, 64px); letter-spacing: .04em; white-space: nowrap; user-select: none; }
+#logo span { display: inline-block; text-shadow: 0 .12em 0 #000, .06em .12em 0 #000; animation: hop 2.4s ease-in-out infinite; }
+@keyframes hop { 0%, 60%, 100% { transform: translateY(0); } 30% { transform: translateY(-.18em); } }
+#tag { margin-top: 14px; font-size: clamp(18px, 3.2vw, 28px); color: #c2c3c7; text-align: center; }
+
+#bar { margin-top: 34px; width: min(80vw, 520px); height: 22px; padding: 3px; border: 3px solid #fff1e8; box-shadow: 4px 4px 0 #000; background: #0b1026; }
+#fill { height: 100%; width: 0%;
+	background: repeating-linear-gradient(90deg, #00e436 0 14px, #008751 14px 18px); }
+#bar.busy #fill { width: 100% !important; animation: busy 1s linear infinite;
+	background: repeating-linear-gradient(90deg, #29adff 0 14px, #1d2b53 14px 28px); background-size: 56px 100%; }
+@keyframes busy { to { background-position: 56px 0; } }
+#stage { margin-top: 10px; font-size: clamp(18px, 3vw, 24px); color: #ffec27; min-height: 1.2em; text-align: center; }
+#tip { margin-top: 26px; max-width: min(88vw, 640px); min-height: 3.4em; font-size: clamp(18px, 3vw, 24px); color: #fff1e8; text-align: center; line-height: 1.15; transition: opacity .4s; }
+#tip b { color: #ffa300; font-weight: normal; }
+
+#status-progress { display: none; }
+#status-notice { display: none; margin: 18px 2rem 0; padding: 1rem; background: #5b3943; border: 3px solid #ff004d; color: #fff1e8; font-size: 22px; text-align: center; z-index: 1; }
+		</style>
+		$GODOT_HEAD_INCLUDE
+	</head>
+	<body>
+		<canvas id="canvas">Your browser does not support the canvas tag.</canvas>
+		<noscript>Your browser does not support JavaScript.</noscript>
+
+		<div id="status">
+			<div id="stars"></div>
+			<div id="city"></div>
+			<img id="status-splash" class="$GODOT_SPLASH_CLASSES" src="$GODOT_SPLASH" alt="">
+			<div id="box">
+				<div id="kubi"></div>
+				<div id="logo"></div>
+				<div id="tag"></div>
+				<div id="bar"><div id="fill"></div></div>
+				<div id="stage"></div>
+				<div id="tip"></div>
+				<progress id="status-progress"></progress>
+				<div id="status-notice"></div>
+			</div>
+		</div>
+
+		<script src="$GODOT_URL"></script>
+		<script>
+const GODOT_CONFIG = $GODOT_CONFIG;
+const GODOT_THREADS_ENABLED = $GODOT_THREADS_ENABLED;
+const engine = new Engine(GODOT_CONFIG);
+
+// ---------- Loading screen decoration (no game logic here) ----------
+(function () {
+	const es = (navigator.language || 'en').toLowerCase().startsWith('es');
+	const T = es ? {
+		tag: 'tu clúster de Kubernetes, como un mundo que puedes recorrer',
+		dl: 'Descargando el mundo', start: 'Encendiendo la planta…', prep: 'Preparando el motor…',
+		tips: [
+			'Cada <b>edificio</b> es un namespace y cada <b>robot</b> un pod.',
+			'Un pod en <b>CrashLoopBackOff</b> se reinicia una y otra vez: mira sus logs.',
+			'La <b>puerta Ingress</b> reparte cada dominio a su Service.',
+			'Pulsa <b>Y</b> para hablar con Kubi: te ayuda a arreglar lo que falla.',
+			'En la <b>sala de energía</b> cada isla es un nodo.',
+			'Un Service sin pods listos responde <b>503</b>.',
+			'Los pods <b>Completed</b> son trabajos que ya terminaron.',
+			'¿Muchos jugadores a la vez? Activa el <b>modo vigía</b> con O.',
+		],
+	} : {
+		tag: 'your Kubernetes cluster, as a world you can walk',
+		dl: 'Downloading the world', start: 'Powering up the plant…', prep: 'Warming up the engine…',
+		tips: [
+			'Each <b>building</b> is a namespace and each <b>robot</b> is a pod.',
+			'A pod in <b>CrashLoopBackOff</b> keeps restarting: read its logs.',
+			'The <b>Ingress gate</b> sends each domain to its Service.',
+			'Press <b>Y</b> to talk to Kubi: it helps you fix what is broken.',
+			'In the <b>power room</b> every island is a node.',
+			'A Service with no ready pods answers <b>503</b>.',
+			'<b>Completed</b> pods are jobs that already finished.',
+			'Who else is in the cluster? Open the <b>watchtower</b> with O.',
+		],
+	};
+	window.__kvText = T;
+	document.documentElement.lang = es ? 'es' : 'en';
+	const $ = (id) => document.getElementById(id);
+
+	// Logo: one PICO-8 colour per letter, staggered hop.
+	const cols = ['#ff004d', '#ffa300', '#ffec27', '#00e436', '#29adff', '#83769c', '#ff77a8', '#ffec27', '#00e436'];
+	'KUBIVERSE'.split('').forEach((ch, i) => {
+		const s = document.createElement('span');
+		s.textContent = ch;
+		s.style.color = cols[i];
+		s.style.animationDelay = (i * 0.12) + 's';
+		$('logo').appendChild(s);
+	});
+	$('tag').textContent = T.tag;
+
+	// Stars
+	for (let i = 0; i < 70; i++) {
+		const d = document.createElement('div');
+		d.className = 'star';
+		d.style.left = (Math.random() * 100) + '%';
+		d.style.top = (Math.random() * 62) + '%';
+		d.style.animationDelay = (Math.random() * 3) + 's';
+		if (Math.random() < 0.2) { d.style.width = d.style.height = '3px'; }
+		$('stars').appendChild(d);
+	}
+	// Skyline with lit windows
+	const n = Math.max(10, Math.round(innerWidth / 70));
+	for (let i = 0; i < n; i++) {
+		const t = document.createElement('div');
+		t.className = 'tower';
+		const h = 25 + Math.random() * 75;
+		t.style.height = h + '%';
+		t.style.margin = '0 ' + (2 + Math.random() * 6) + 'px';
+		for (let k = 0; k < h / 6; k++) {
+			const w = document.createElement('i');
+			if (Math.random() < 0.3) w.className = 'c';
+			w.style.left = (15 + Math.floor(Math.random() * 4) * 20) + '%';
+			w.style.top = (6 + k * 9) + '%';
+			w.style.animationDelay = (Math.random() * 7) + 's';
+			if (Math.random() < 0.55) t.appendChild(w);
+		}
+		$('city').appendChild(t);
+	}
+	// Requests flying out of the city
+	setInterval(() => {
+		if (!document.getElementById('status')) return;
+		const p = document.createElement('div');
+		p.className = 'packet';
+		p.style.left = (Math.random() * 100) + '%';
+		p.style.setProperty('--dx', ((Math.random() - 0.5) * 200) + 'px');
+		p.style.setProperty('--dy', (-120 - Math.random() * 200) + 'px');
+		p.style.background = p.style.boxShadow = '';
+		const c = cols[Math.floor(Math.random() * cols.length)];
+		p.style.background = c;
+		p.style.boxShadow = '0 0 6px ' + c;
+		p.style.animationDuration = (1.5 + Math.random() * 1.5) + 's';
+		$('status').appendChild(p);
+		setTimeout(() => p.remove(), 3200);
+	}, 260);
+
+	// Kubi: pixel drone drawn from a tiny map, with a blinking eye.
+	const map = [
+		'....aa....',
+		'...a..a...',
+		'.bbbbbbbb.',
+		'bwwwwwwwwb',
+		'bwkkkkkkwb',
+		'bwkeekkkwb',
+		'bwkeekkkwb',
+		'bwkkkkkkwb',
+		'bwwwwwwwwb',
+		'.bbbbbbbb.',
+		'..s....s..',
+	];
+	const pal = { a: '#c2c3c7', b: '#1d2b53', w: '#29adff', k: '#0b1026', e: '#00e436', s: '#ffa300' };
+	const cv = document.createElement('canvas');
+	cv.width = 10; cv.height = 11;
+	$('kubi').appendChild(cv);
+	const g = cv.getContext('2d');
+	let blink = 0, look = 0;
+	function drawKubi() {
+		g.clearRect(0, 0, 10, 11);
+		map.forEach((row, y) => row.split('').forEach((c, x) => {
+			if (c === '.') return;
+			let col = pal[c];
+			if (c === 'e') {
+				if (blink > 0) col = pal.k;
+				x += look;
+			}
+			g.fillStyle = col;
+			g.fillRect(x, y, 1, 1);
+		}));
+		if (blink > 0) blink--;
+	}
+	setInterval(() => {
+		if (Math.random() < 0.08) blink = 2;
+		if (Math.random() < 0.05) look = Math.floor(Math.random() * 3);
+		drawKubi();
+	}, 120);
+	drawKubi();
+
+	// Tips carousel
+	let tip = Math.floor(Math.random() * T.tips.length);
+	function nextTip() {
+		const el = $('tip');
+		el.style.opacity = 0;
+		setTimeout(() => { el.innerHTML = T.tips[tip % T.tips.length]; el.style.opacity = 1; tip++; }, 400);
+	}
+	nextTip();
+	window.__kvTips = setInterval(nextTip, 4200);
+}());
+
+(function () {
+	const statusOverlay = document.getElementById('status');
+	const statusProgress = document.getElementById('status-progress');
+	const statusNotice = document.getElementById('status-notice');
+	const bar = document.getElementById('bar');
+	const fill = document.getElementById('fill');
+	const stage = document.getElementById('stage');
+	const T = window.__kvText;
+
+	let initializing = true;
+	let statusMode = '';
+
+	function setStatusMode(mode) {
+		if (statusMode === mode || !initializing) {
+			return;
+		}
+		if (mode === 'hidden') {
+			initializing = false;
+			statusOverlay.classList.add('fade');
+			clearInterval(window.__kvTips);
+			setTimeout(() => statusOverlay.remove(), 650);
+			return;
+		}
+		statusOverlay.style.visibility = 'visible';
+		bar.style.display = mode === 'progress' ? 'block' : 'none';
+		statusNotice.style.display = mode === 'notice' ? 'block' : 'none';
+		statusMode = mode;
+	}
+
+	function setStatusNotice(text) {
+		while (statusNotice.lastChild) {
+			statusNotice.removeChild(statusNotice.lastChild);
+		}
+		text.split('\n').forEach((line) => {
+			statusNotice.appendChild(document.createTextNode(line));
+			statusNotice.appendChild(document.createElement('br'));
+		});
+	}
+
+	function displayFailureNotice(err) {
+		console.error(err);
+		if (err instanceof Error) {
+			setStatusNotice(err.message);
+		} else if (typeof err === 'string') {
+			setStatusNotice(err);
+		} else {
+			setStatusNotice('An unknown error occurred.');
+		}
+		setStatusMode('notice');
+		initializing = false;
+	}
+
+	const mb = (b) => (b / 1048576).toFixed(1);
+
+	const missing = Engine.getMissingFeatures({
+		threads: GODOT_THREADS_ENABLED,
+	});
+
+	if (missing.length !== 0) {
+		if (GODOT_CONFIG['serviceWorker'] && GODOT_CONFIG['ensureCrossOriginIsolationHeaders'] && 'serviceWorker' in navigator) {
+			let serviceWorkerRegistrationPromise;
+			try {
+				serviceWorkerRegistrationPromise = navigator.serviceWorker.getRegistration();
+			} catch (err) {
+				serviceWorkerRegistrationPromise = Promise.reject(new Error('Service worker registration failed.'));
+			}
+			Promise.race([
+				serviceWorkerRegistrationPromise.then((registration) => {
+					if (registration != null) {
+						return Promise.reject(new Error('Service worker already exists.'));
+					}
+					return registration;
+				}).then(() => engine.installServiceWorker()),
+				new Promise((resolve) => {
+					setTimeout(() => resolve(), 2000);
+				}),
+			]).then(() => {
+				window.location.reload();
+			}).catch((err) => {
+				console.error('Error while registering service worker:', err);
+			});
+		} else {
+			const missingMsg = 'Error\nThe following features required to run Godot projects on the Web are missing:\n';
+			displayFailureNotice(missingMsg + missing.join('\n'));
+		}
+	} else {
+		setStatusMode('progress');
+		bar.classList.add('busy');
+		stage.textContent = T.dl + '…';
+		// The browser compiles the engine after (or while) downloading and
+		// reports nothing meanwhile: if progress stalls, show an animated bar.
+		let last = Date.now();
+		const watchdog = setInterval(() => {
+			if (!initializing) { clearInterval(watchdog); return; }
+			if (Date.now() - last > 700 && !bar.classList.contains('busy')) {
+				bar.classList.add('busy');
+				stage.textContent = T.prep;
+			}
+		}, 250);
+		engine.startGame({
+			'onProgress': function (current, total) {
+				last = Date.now();
+				if (current > 0 && total > 0) {
+					bar.classList.remove('busy');
+					const p = Math.min(100, (current / total) * 100);
+					fill.style.width = p.toFixed(1) + '%';
+					if (current >= total) {
+						bar.classList.add('busy');
+						stage.textContent = T.start;
+					} else {
+						stage.textContent = T.dl + '  ' + Math.floor(p) + '%  ·  ' + mb(current) + ' / ' + mb(total) + ' MB';
+					}
+				} else {
+					bar.classList.add('busy');
+				}
+			},
+		}).then(() => {
+			setStatusMode('hidden');
+		}, displayFailureNotice);
+	}
+}());
+		</script>
+	</body>
+</html>

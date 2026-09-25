@@ -19,6 +19,8 @@ Tu cluster de Kubernetes **real** convertido en un mundo 3D pixel‑art (voxel) 
 
 ## Intro
 
+Mientras carga, la versión web muestra una pantalla propia ([`game/web/shell.html`](game/web/shell.html)): el logo, Kubi, una ciudad pixel-art con peticiones volando, la barra con los MB descargados y consejos que van cambiando, en español o inglés según el navegador. La versión nativa arranca con [`game/assets/splash.png`](game/assets/splash.png).
+
 Al conectar un cluster, un vuelo de ~14 s presenta el mundo: el logo sobre el globo de Internet, la ciudad con tus dominios, la puerta Ingress y la planta; al final Kubi saluda. Cualquier tecla o toque la salta. En **VISTA** puedes desactivarla (**Intro al conectar**) o verla otra vez (**VER INTRO**). Los datos locales siguen en `~/.kubecraft` (nombre anterior del proyecto) para no perder configuraciones.
 
 ## La fábrica: niveles

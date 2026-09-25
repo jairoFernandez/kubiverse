@@ -24,6 +24,7 @@ game-import:
 
 web: game-import
 	mkdir -p build/web && $(GODOT) --headless --path game --export-release "Web" ../build/web/index.html
+	mkdir -p build/web/fonts && cp game/assets/fonts/*.ttf build/web/fonts/
 
 macos: game-import
 	mkdir -p build/macos && $(GODOT) --headless --path game --export-release "macOS" ../build/macos/Kubiverse.zip

@@ -9,7 +9,10 @@ run/main_scene="res://scenes/main.tscn"
 config/icon="res://icon.svg"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 boot_splash/bg_color=Color(0.113725, 0.168627, 0.32549, 1)
-boot_splash/show_image=false
+boot_splash/show_image=true
+boot_splash/image="res://assets/splash.png"
+boot_splash/fullsize=false
+boot_splash/use_filter=false
 
 [autoload]
 
