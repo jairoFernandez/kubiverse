@@ -283,6 +283,10 @@ func _ready() -> void:
 	K8s.cluster_kind_needed.connect(ask_cluster_kind)
 	K8s.kind_refused.connect(func(msg: String): toast(tr("The bridge refused: %s") % msg, false))
 	K8s.cluster_kind_changed.connect(_on_kind_changed)
+	K8s.team_user_changed.connect(func(user: String):
+		_update_kind_btn()
+		if user != "":
+			toast(tr("Signed in as %s: changes are made as you, with your permissions.") % user, true))
 	K8s.prod_confirm_requested.connect(func(req: Dictionary):
 		confirm(tr("This changes a PRODUCTION cluster: %s") % Kubectl.for_action(req), func(): K8s.action(req), Kubectl.for_action(req)))
 	K8s.cluster_event.connect(add_event)
@@ -3275,6 +3279,10 @@ func _update_kind_btn() -> void:
 	else:
 		_kind_btn.text = tr("PRODUCTION") if kind == "prod" else tr("KIND?")
 		_kind_btn.theme_type_variation = "DangerButton"
+	if K8s.team_user != "":
+		_kind_btn.text += "  ·  " + K8s.team_user
+	_kind_btn.tooltip_text = tr("Shared team bridge: you see the whole cluster, and every change is made as %s (your RBAC decides).") % K8s.team_user \
+		if K8s.team_user != "" else ""
 
 
 ## This cluster's look (theme): farm, futuristic, space station, medieval...

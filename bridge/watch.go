@@ -373,7 +373,11 @@ func (b *Bridge) players() []Visitor {
 		if agent == "" {
 			agent = "Kubiverse"
 		}
-		out = append(out, Visitor{Key: "player|" + c.addr, User: "Kubiverse player", Agent: agent, IPs: []string{c.ip},
+		who := "Kubiverse player"
+		if c.user != "" {
+			who = c.user
+		}
+		out = append(out, Visitor{Key: "player|" + c.addr, User: who, Agent: agent, IPs: []string{c.ip},
 			Source: "player", First: c.since.Unix(), Last: time.Now().Unix()})
 	}
 	return out

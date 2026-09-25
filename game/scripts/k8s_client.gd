@@ -11,6 +11,7 @@ signal watch_updated(data: Dictionary)   # WATCHTOWER: visitors + recent actions
 signal cluster_kind_needed               # a cluster seen for the first time: ask prod or sandbox
 signal cluster_kind_changed(kind: String)
 signal prod_confirm_requested(req: Dictionary)  # a change on a production cluster needs a yes
+signal team_user_changed(user: String)    # team mode: who the bridge acts as
 signal kind_refused(message: String)     # the bridge didn't accept a kind change
 signal forwards_updated(list: Array)    # port-forwards open on the bridge (with traffic counters)
 
@@ -31,6 +32,9 @@ var _kind_key := ""
 var prod_ok := false
 ## The bridge marked this context PRODUCTION (--production): not changeable.
 var kind_locked := false
+## Team mode (bridge in the cluster behind the company login): who we are.
+## Changes go through as this person, with their RBAC. "" otherwise.
+var team_user := ""
 
 ## Port-forwards: [{id, kind, ns, name, port, pod, target, local, url,
 ## bytes_in, bytes_out, conns, total, status, error}]
@@ -52,18 +56,29 @@ func default_bridge_url() -> String:
 		# From a public static host (the GitHub Pages demo) the bridge runs
 		# on the player's machine instead.
 		var origin = JavaScriptBridge.eval("window.location.origin", true)
-		if origin != null and str(origin).begins_with("http") and WebHost.is_local(str(origin)):
+		if origin != null and str(origin).begins_with("http") and served_by_bridge():
 			return str(origin)
 	return "http://127.0.0.1:8088"
 
 
-## True when this web page comes from a k8s-bridge (localhost or `--lan`), so
-## a bridge is already running. False natively and on a public static host.
+var _served_by_bridge := -1
+
+## True when this web page comes from a k8s-bridge (localhost, `--lan`, or a
+## team bridge in the cluster behind the company login), so a bridge is
+## already running. False natively and on a public static host (Pages demo).
 func served_by_bridge() -> bool:
 	if not OS.has_feature("web"):
 		return false
-	var origin = JavaScriptBridge.eval("window.location.origin", true)
-	return origin != null and WebHost.is_local(str(origin))
+	if _served_by_bridge < 0:
+		var origin = JavaScriptBridge.eval("window.location.origin", true)
+		if origin != null and WebHost.is_local(str(origin)):
+			_served_by_bridge = 1
+			return true
+		# Any other host: ask it (a bridge answers its health check).
+		var probe = JavaScriptBridge.eval("""(function(){try{var x=new XMLHttpRequest();
+			x.open('GET','healthz',false);x.send();return x.status==200&&x.responseText=='ok'}catch(e){return false}})()""", true)
+		_served_by_bridge = 1 if probe == true else 0
+	return _served_by_bridge == 1
 
 
 const GET_BRIDGE := "https://raw.githubusercontent.com/jairoFernandez/kubiverse/main/bridge/get-bridge"
@@ -277,6 +292,11 @@ func _resolve_kind() -> void:
 	cluster_kind = str(Settings.cluster_kinds.get(key, ""))
 	if cluster_kind != "":
 		cluster_kind_changed.emit(cluster_kind)
+	_http(HTTPClient.METHOD_GET, "/api/whoami", "", func(ok: bool, data):
+		var was := team_user
+		team_user = str(data.get("user", "")) if ok and typeof(data) == TYPE_DICTIONARY and bool(data.get("team", false)) else ""
+		if team_user != was:
+			team_user_changed.emit(team_user))
 	var ctx := str(state.get("context", context))
 	_http(HTTPClient.METHOD_GET, "/api/kind?context=" + ctx.uri_encode() + _q(false), "", func(ok: bool, data):
 		if kind_key() != key:

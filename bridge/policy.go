@@ -182,7 +182,7 @@ func (b *Bridge) audit(r *http.Request, what, target, detail string, err error) 
 	}
 	kind, _ := b.pol.kind(b.contextName)
 	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-	e := AuditEntry{Context: b.contextName, Kind: kind, Client: ip, Agent: shortAgent(r.UserAgent()), User: r.Header.Get("Impersonate-User"),
+	e := AuditEntry{Context: b.contextName, Kind: kind, Client: ip, Agent: shortAgent(r.UserAgent()), User: identityFrom(r.Context()).User,
 		What: what, Target: target, Detail: detail, OK: err == nil, Confirmed: confirmed(r, b.contextName)}
 	if err != nil {
 		e.Error = err.Error()

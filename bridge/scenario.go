@@ -56,10 +56,7 @@ func (b *Bridge) handleScenario(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "kubectl is not installed on the bridge host"})
 		return
 	}
-	args := []string{"--context", b.kubectlCtx(), "--request-timeout=30s"}
-	if b.kubeconfigPath != "" {
-		args = append(args, "--kubeconfig", b.kubeconfigPath)
-	}
+	args := b.kubectlBase(r.Context(), "30s")
 	if req.Remove {
 		args = append(args, "delete", "--ignore-not-found", "--wait=false", "-f", "-")
 	} else {

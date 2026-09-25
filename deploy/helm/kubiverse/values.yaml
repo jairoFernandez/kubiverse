@@ -1,0 +1,59 @@
+image:
+  repository: ghcr.io/jairofernandez/kubiverse-bridge
+  tag: ""            # defaults to the chart's appVersion
+  pullPolicy: IfNotPresent
+
+# The cluster is PRODUCTION: every change asks for a confirmation that says
+# so, and the game can't mark it sandbox. Set false for a lab cluster.
+production: true
+
+# Read-only for everyone (no changes at all, even with RBAC).
+readOnly: false
+
+# Team login. Put an OIDC proxy in front (oauth2-proxy, or your ingress
+# controller's external auth) that signs people in and passes these headers.
+# Requests without the user header are refused. Changes impersonate that
+# user (and groups), so the cluster's RBAC decides what each person may do.
+auth:
+  userHeader: X-Auth-Request-Email
+  groupsHeader: X-Auth-Request-Groups
+
+# Public URL of the game (the ingress host), allowed as a browser origin.
+ingress:
+  enabled: true
+  className: nginx
+  host: kubiverse.example.com
+  tls:
+    secretName: ""   # e.g. kubiverse-tls (cert-manager, ...)
+  annotations:
+    # ingress-nginx + oauth2-proxy (https://oauth2-proxy.github.io/oauth2-proxy/):
+    nginx.ingress.kubernetes.io/auth-url: "https://$host/oauth2/auth"
+    nginx.ingress.kubernetes.io/auth-signin: "https://$host/oauth2/start?rd=$escaped_request_uri"
+    nginx.ingress.kubernetes.io/auth-response-headers: "X-Auth-Request-Email,X-Auth-Request-Groups"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"   # the game's WebSocket
+
+# Only the ingress controller may talk to the bridge: the user header is
+# trusted, so nothing else in the cluster must be able to reach the pod.
+networkPolicy:
+  enabled: true
+  ingressControllerNamespace: ingress-nginx
+
+# Kubi's AI: an Ollama service in the cluster (models stay in-cluster).
+# Empty = Kubi uses only its built-in guide.
+llm:
+  url: ""            # e.g. http://ollama.ollama.svc:11434
+  model: auto
+
+# Keep the kinds, the change log (audit) and AI settings across restarts.
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClass: ""
+
+resources:
+  requests: {cpu: 100m, memory: 256Mi}
+  limits: {memory: 1Gi}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

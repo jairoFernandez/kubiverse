@@ -1,0 +1,9 @@
+apiVersion: v2
+name: kubiverse
+description: Kubiverse for a team - the bridge runs in the cluster behind your OIDC login; everyone sees the cluster, changes are made as each person (their RBAC).
+type: application
+version: 0.1.0
+appVersion: "0.1.7"   # first release with the image; keep in step with tags
+home: https://github.com/jairoFernandez/kubiverse
+sources:
+  - https://github.com/jairoFernandez/kubiverse

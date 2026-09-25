@@ -1,0 +1,83 @@
+{{- if and (not .Values.auth.userHeader) (not .Values.readOnly) }}
+{{- fail "auth.userHeader is required (team login), or set readOnly: true" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kubiverse.name" . }}
+  labels: {{- include "kubiverse.labels" . | nindent 4 }}
+spec:
+  replicas: 1   # port-forwards and the change log live in one process
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {{- include "kubiverse.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "kubiverse.selector" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "kubiverse.name" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: bridge
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --in-cluster
+            - --addr=0.0.0.0:8088
+            - --data=/data/kubeconfigs
+            {{- with .Values.auth.userHeader }}
+            - --auth-user-header={{ . }}
+            {{- end }}
+            {{- with .Values.auth.groupsHeader }}
+            - --auth-groups-header={{ . }}
+            {{- end }}
+            {{- if .Values.production }}
+            - --production=in-cluster
+            {{- end }}
+            {{- if .Values.readOnly }}
+            - --readonly
+            {{- end }}
+            {{- if .Values.ingress.host }}
+            - --allow-origin=https://{{ .Values.ingress.host }}
+            {{- end }}
+            - --llm-url={{ .Values.llm.url }}
+            - --llm-model={{ .Values.llm.model }}
+          env:
+            - {name: HOME, value: /data}
+          ports:
+            - {name: http, containerPort: 8088}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim: {claimName: {{ include "kubiverse.name" . }}}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}

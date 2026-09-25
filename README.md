@@ -407,6 +407,9 @@ There are two ways to play in the browser:
 --audit-dir DIR      audit logs for the watchtower (defaults to ~/.kubecraft/audit)
 --production CTXS    comma-separated contexts that are PRODUCTION for everyone (changes need a confirmation)
 --lan                local network (phones): self-signed HTTPS + all interfaces + random token + prints the URLs
+--in-cluster         run inside the cluster with the pod's ServiceAccount (team mode)
+--auth-user-header H trust H (set by your OIDC proxy) as the signed-in user; changes impersonate them
+--auth-groups-header H  comma-separated groups header from the same proxy
 ```
 
 Web build URL parameters: `?bridge=http://host:8088`, `?token=...`, `?demo=1`.
@@ -421,6 +424,25 @@ The game performs **real** actions with your kubeconfig's credentials.
 - **Nothing secret reaches the AI**: tokens, passwords, API keys, AWS keys, JWTs, private keys and credentials in URLs are redacted from the context, logs, command outputs and chat before they go to the model (and from the audit log).
 - For important clusters use `--readonly`, or a kubeconfig/ServiceAccount with limited RBAC (`get/list/watch` + only the verbs you want to allow: `pods/delete`, `deployments/scale`, `nodes/patch`...).
 - If you expose the bridge beyond localhost (`--addr 0.0.0.0:8088`), **always** use `--token` and `--allow-origin`.
+
+## Team mode: Kubiverse for everyone, in the cluster
+
+One bridge runs **inside** the cluster ([Helm chart](deploy/helm/kubiverse), image `ghcr.io/jairofernandez/kubiverse-bridge`) behind your company login. Everyone opens the same URL, sees the whole cluster, and **every change is made as the person who clicked**: the bridge impersonates them (`Impersonate-User` / `kubectl --as`), so your RBAC decides what each one may do and the API server's audit log names the real person.
+
+```
+helm install kubiverse deploy/helm/kubiverse -n kubiverse --create-namespace \
+  --set ingress.host=kubiverse.example.com
+```
+
+The defaults expect oauth2-proxy answering `/oauth2/*` on the same host (see [values.yaml](deploy/helm/kubiverse/values.yaml)).
+
+- **Login**: any OIDC proxy that sets the user (and groups) in headers: [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) with ingress-nginx external auth is the chart's default (`X-Auth-Request-Email`, `X-Auth-Request-Groups`; change them with `auth.userHeader` / `auth.groupsHeader`). Without a user header the bridge answers `401`.
+- **The headers are trusted**, so only the proxy may reach the bridge: the chart ships a NetworkPolicy that lets in just the ingress controller's namespace (`networkPolicy.ingressControllerNamespace`). Keep it, or anyone inside the cluster could claim to be an admin.
+- **What the bridge's ServiceAccount can do**: read (pods, logs, nodes, workloads, services, events, ingresses, metrics) to draw the world, and `impersonate` users/groups. It can't change anything as itself.
+- **Production by default** (`production: true`): every change asks for confirmation and lands in the change log with the user's name (kept on a PVC). `readOnly: true` makes it a look-only screen for a wall.
+- **Disabled on a shared bridge**: uploading kubeconfigs (there is one cluster: this one) and port-forward (it would open the port inside the bridge's pod; run a bridge on your own machine for that).
+- The game shows who you are next to PRODUCTION/SANDBOX (`GET /api/whoami`).
+- Kubi's AI: point `llm.url` at an Ollama inside the cluster; secrets are redacted before anything reaches it.
 
 ## Bridge API
 
@@ -439,6 +461,7 @@ The game performs **real** actions with your kubeconfig's credentials.
 | GET · POST · DELETE | `/api/portforward` | list · open `{"kind": "pod"\|"service", "ns", "name", "port", "local_port"}` · close `?id=`. Traffic counters arrive on the WebSocket as `{"type":"forwards"}` every second |
 | GET · POST | `/api/kind` | `?context=` → `{kind, locked}` · `{"context","kind":"prod"\|"sandbox"}` marks it (refused for `--production` contexts) |
 | GET | `/api/audit?limit=&context=` | the change log (newest first) |
+| GET | `/api/whoami` | `{team, user, groups, in_cluster}`: who changes are made as |
 | POST | `/api/action` | `{"action": "delete_pod" \| "scale" \| "restart" \| "cordon" \| "uncordon" \| "create_deployment" \| "delete_workload", "kind", "ns", "name", "replicas", "image", "service"}` |
 
 ## Layout

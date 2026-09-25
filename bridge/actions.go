@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strings"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -50,7 +50,7 @@ func (b *Bridge) handleAction(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	msg, err := b.doAction(ctx, req)
+	msg, err := b.doAction(ctx, req) // ctx carries the player (team mode)
 	log.Printf("action %s %s %s/%s -> %v %s", req.Action, req.Kind, req.NS, req.Name, err, msg)
 	b.audit(r, "action", target, req.Action, err)
 	if err != nil {
@@ -61,9 +61,11 @@ func (b *Bridge) handleAction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Bridge) doAction(ctx context.Context, req ActionRequest) (string, error) {
+	cs := b.clientFor(ctx) // the player, in team mode
+
 	switch req.Action {
 	case "delete_pod":
-		err := b.cs.CoreV1().Pods(req.NS).Delete(ctx, req.Name, metav1.DeleteOptions{})
+		err := cs.CoreV1().Pods(req.NS).Delete(ctx, req.Name, metav1.DeleteOptions{})
 		return "pod " + req.Name + " deleted", err
 
 	case "scale":
@@ -74,9 +76,9 @@ func (b *Bridge) doAction(ctx context.Context, req ActionRequest) (string, error
 		var err error
 		switch req.Kind {
 		case "Deployment":
-			_, err = b.cs.AppsV1().Deployments(req.NS).Patch(ctx, req.Name, types.MergePatchType, patch, metav1.PatchOptions{})
+			_, err = cs.AppsV1().Deployments(req.NS).Patch(ctx, req.Name, types.MergePatchType, patch, metav1.PatchOptions{})
 		case "StatefulSet":
-			_, err = b.cs.AppsV1().StatefulSets(req.NS).Patch(ctx, req.Name, types.MergePatchType, patch, metav1.PatchOptions{})
+			_, err = cs.AppsV1().StatefulSets(req.NS).Patch(ctx, req.Name, types.MergePatchType, patch, metav1.PatchOptions{})
 		default:
 			return "", fmt.Errorf("cannot scale %s", req.Kind)
 		}
@@ -88,11 +90,11 @@ func (b *Bridge) doAction(ctx context.Context, req ActionRequest) (string, error
 		var err error
 		switch req.Kind {
 		case "Deployment":
-			_, err = b.cs.AppsV1().Deployments(req.NS).Patch(ctx, req.Name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+			_, err = cs.AppsV1().Deployments(req.NS).Patch(ctx, req.Name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
 		case "StatefulSet":
-			_, err = b.cs.AppsV1().StatefulSets(req.NS).Patch(ctx, req.Name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+			_, err = cs.AppsV1().StatefulSets(req.NS).Patch(ctx, req.Name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
 		case "DaemonSet":
-			_, err = b.cs.AppsV1().DaemonSets(req.NS).Patch(ctx, req.Name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+			_, err = cs.AppsV1().DaemonSets(req.NS).Patch(ctx, req.Name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
 		default:
 			return "", fmt.Errorf("cannot restart %s", req.Kind)
 		}
@@ -100,7 +102,7 @@ func (b *Bridge) doAction(ctx context.Context, req ActionRequest) (string, error
 
 	case "cordon", "uncordon":
 		patch := []byte(fmt.Sprintf(`{"spec":{"unschedulable":%v}}`, req.Action == "cordon"))
-		_, err := b.cs.CoreV1().Nodes().Patch(ctx, req.Name, types.MergePatchType, patch, metav1.PatchOptions{})
+		_, err := cs.CoreV1().Nodes().Patch(ctx, req.Name, types.MergePatchType, patch, metav1.PatchOptions{})
 		return "node " + req.Name + " " + req.Action + "ed", err
 
 	case "create_deployment":
@@ -114,9 +116,9 @@ func (b *Bridge) doAction(ctx context.Context, req ActionRequest) (string, error
 		if replicas <= 0 || replicas > 20 {
 			replicas = 1
 		}
-		if _, err := b.cs.CoreV1().Namespaces().Get(ctx, req.NS, metav1.GetOptions{}); err != nil {
+		if _, err := cs.CoreV1().Namespaces().Get(ctx, req.NS, metav1.GetOptions{}); err != nil {
 			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: req.NS, Labels: map[string]string{"app.kubernetes.io/created-by": "k8sgame"}}}
-			if _, err := b.cs.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil {
+			if _, err := cs.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil {
 				return "", err
 			}
 		}
@@ -132,7 +134,7 @@ func (b *Bridge) doAction(ctx context.Context, req ActionRequest) (string, error
 				},
 			},
 		}
-		if _, err := b.cs.AppsV1().Deployments(req.NS).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
+		if _, err := cs.AppsV1().Deployments(req.NS).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
 			return "", err
 		}
 		if req.Service {
@@ -143,7 +145,7 @@ func (b *Bridge) doAction(ctx context.Context, req ActionRequest) (string, error
 					Ports:    []corev1.ServicePort{{Port: 80, TargetPort: intstr.FromInt32(80)}},
 				},
 			}
-			if _, err := b.cs.CoreV1().Services(req.NS).Create(ctx, svc, metav1.CreateOptions{}); err != nil {
+			if _, err := cs.CoreV1().Services(req.NS).Create(ctx, svc, metav1.CreateOptions{}); err != nil {
 				return "deployment created, but service failed", err
 			}
 			return "deployment and service " + req.NS + "/" + req.Name + " created", nil
@@ -151,18 +153,18 @@ func (b *Bridge) doAction(ctx context.Context, req ActionRequest) (string, error
 		return "deployment " + req.NS + "/" + req.Name + " created", nil
 
 	case "delete_service":
-		err := b.cs.CoreV1().Services(req.NS).Delete(ctx, req.Name, metav1.DeleteOptions{})
+		err := cs.CoreV1().Services(req.NS).Delete(ctx, req.Name, metav1.DeleteOptions{})
 		return "service " + req.Name + " deleted", err
 
 	case "delete_workload":
 		var err error
 		switch req.Kind {
 		case "Deployment":
-			err = b.cs.AppsV1().Deployments(req.NS).Delete(ctx, req.Name, metav1.DeleteOptions{})
+			err = cs.AppsV1().Deployments(req.NS).Delete(ctx, req.Name, metav1.DeleteOptions{})
 		case "StatefulSet":
-			err = b.cs.AppsV1().StatefulSets(req.NS).Delete(ctx, req.Name, metav1.DeleteOptions{})
+			err = cs.AppsV1().StatefulSets(req.NS).Delete(ctx, req.Name, metav1.DeleteOptions{})
 		case "DaemonSet":
-			err = b.cs.AppsV1().DaemonSets(req.NS).Delete(ctx, req.Name, metav1.DeleteOptions{})
+			err = cs.AppsV1().DaemonSets(req.NS).Delete(ctx, req.Name, metav1.DeleteOptions{})
 		default:
 			return "", fmt.Errorf("cannot delete %s", req.Kind)
 		}

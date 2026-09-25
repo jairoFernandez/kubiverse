@@ -27,12 +27,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	appslisters "k8s.io/client-go/listers/apps/v1"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	networkinglisters "k8s.io/client-go/listers/networking/v1"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 type Bridge struct {
@@ -48,9 +47,11 @@ type Bridge struct {
 	stop           context.CancelFunc // stops this cluster's informers
 	metrics        Metrics
 	ctrUsage       map[string]map[string]Usage // "ns/pod" -> container -> usage
-	restCfg        *rest.Config // for port-forwards (SPDY)
+	restCfg        *rest.Config                // for port-forwards (SPDY)
 	fw             forwards
-	pol            *policy // cluster kinds (prod/sandbox) + audit log, shared by the hub
+	pol            *policy       // cluster kinds (prod/sandbox) + audit log, shared by the hub
+	inCluster      bool          // running inside the cluster with its ServiceAccount
+	imp            impersonators // team mode: clientsets acting as each player
 
 	nodeLister corelisters.NodeLister
 	nsLister   corelisters.NamespaceLister
@@ -70,6 +71,7 @@ type Bridge struct {
 }
 
 type client struct {
+	user  string // team mode: the signed-in player
 	send  chan []byte
 	addr  string
 	ip    string
@@ -91,6 +93,9 @@ func main() {
 		llmModel   = flag.String("llm-model", llm.Model, "Ollama model for the in-game assistant (auto = best installed local model)")
 		audit      = flag.String("audit-dir", auditDir, "directory with API server audit logs (<dir>/<context>/**/audit.log) for WATCHTOWER mode")
 	)
+	inCluster := flag.Bool("in-cluster", false, "run inside the cluster with the pod's ServiceAccount (team mode, see deploy/helm)")
+	userHeader := flag.String("auth-user-header", "", "team mode: header with the signed-in user set by an OIDC proxy (e.g. X-Auth-Request-Email); requests without it are refused and changes impersonate that user")
+	groupsHeader := flag.String("auth-groups-header", "", "team mode: header with the user's groups (comma-separated), e.g. X-Auth-Request-Groups")
 	production := flag.String("production", "", "comma-separated contexts that are PRODUCTION for everyone: changes need a confirmation and the game can't mark them sandbox")
 	lan := flag.Bool("lan", false, "serve on the local network (phones/tablets): listens on all interfaces, requires a token (random if not given) and prints the URLs to open")
 	flag.Parse()
@@ -98,7 +103,7 @@ func main() {
 	if *lan {
 		lanURLs = lanSetup(addr, token, origins)
 	}
-	if exposed(*addr) && *token == "" {
+	if exposed(*addr) && *token == "" && *userHeader == "" {
 		log.Fatalf("refusing to listen on %s without --token: anyone on the network could control your cluster (use --lan for a random token)", *addr)
 	}
 	llm.URL, llm.Model, auditDir = *llmURL, *llmModel, *audit
@@ -111,6 +116,13 @@ func main() {
 
 	hub := newHub(ctx, *kubeconfig, *kubectx, *dataDir, *readOnly, *token)
 	hub.pol = newPolicy(filepath.Dir(*dataDir), strings.Split(*production, ","))
+	hub.inCluster, hub.userHeader, hub.groupsHeader = *inCluster, *userHeader, *groupsHeader
+	if *inCluster {
+		hub.defaultCtx = inClusterName
+	}
+	if *userHeader != "" {
+		log.Printf("team mode: players are identified by %s (groups: %q); changes impersonate them", *userHeader, *groupsHeader)
+	}
 	ai.init(ctx, filepath.Dir(*dataDir))
 	log.Printf("default context %q, extra kubeconfigs in %s", hub.defaultCtx, hub.dir)
 	// Warm up the default cluster so the first client connects instantly.
@@ -132,6 +144,7 @@ func main() {
 	mux.HandleFunc("POST /api/kubectl", hub.cluster((*Bridge).handleKubectl))
 	mux.HandleFunc("POST /api/scenario", hub.cluster((*Bridge).handleScenario))
 	mux.HandleFunc("/api/kind", hub.auth(hub.handleKind))
+	mux.HandleFunc("GET /api/whoami", hub.auth(hub.handleWhoami))
 	mux.HandleFunc("GET /api/audit", hub.auth(hub.handleAudit))
 	mux.HandleFunc("/api/portforward", hub.cluster((*Bridge).handleForwards))
 	mux.HandleFunc("GET /api/pod", hub.cluster((*Bridge).handlePod))
@@ -190,11 +203,7 @@ func main() {
 
 // startBridge connects to one cluster (informers + metrics) and returns it
 // once its caches are synced, or an error if the cluster is unreachable.
-func startBridge(root context.Context, cc clientcmd.ClientConfig, ctxName, kubeconfigPath string, readOnly bool) (*Bridge, error) {
-	cfg, err := cc.ClientConfig()
-	if err != nil {
-		return nil, fmt.Errorf("client config: %w", err)
-	}
+func startBridge(root context.Context, cfg *rest.Config, ctxName, kubeconfigPath string, readOnly bool) (*Bridge, error) {
 	cfg.UserAgent = "k8sgame-bridge"
 	cs, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
@@ -371,7 +380,7 @@ func (b *Bridge) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	conn.SetReadLimit(1 << 20)
 	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-	c := &client{send: make(chan []byte, 16), addr: r.RemoteAddr, ip: ip, agent: shortAgent(r.UserAgent()), since: time.Now()}
+	c := &client{send: make(chan []byte, 16), addr: r.RemoteAddr, ip: ip, agent: shortAgent(r.UserAgent()), since: time.Now(), user: identityFrom(r.Context()).User}
 	b.mu.Lock()
 	b.clients[c] = struct{}{}
 	last := b.last

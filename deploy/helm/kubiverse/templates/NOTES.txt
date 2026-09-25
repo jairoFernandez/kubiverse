@@ -1,0 +1,12 @@
+Kubiverse is running for your team.
+
+  Open: https://{{ .Values.ingress.host }}
+  Sign-in: through the proxy that sets {{ .Values.auth.userHeader }}.
+  {{- if .Values.production }}
+  This cluster is PRODUCTION: every change asks for a confirmation.
+  {{- end }}
+
+Everyone sees the cluster through the bridge's read-only ServiceAccount;
+changes are made as each person (Kubernetes impersonation), so their RBAC
+applies. Change log: VIEW > Change log in the game, or
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "kubiverse.name" . }} -- cat /data/actions.log

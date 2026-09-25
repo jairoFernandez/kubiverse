@@ -15,7 +15,7 @@ func TestForwardValidation(t *testing.T) {
 		{Kind: "service", NS: "a", Name: "b", Port: 70000},
 		{Kind: "pod", NS: "a", Name: "b", Port: 80, Local: -1},
 	} {
-		if _, err := b.startForward(req); err == nil {
+		if _, err := b.startForward(req, identity{}); err == nil {
 			t.Errorf("%+v: expected an error", req)
 		}
 	}

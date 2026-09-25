@@ -15,20 +15,27 @@ import (
 	"strings"
 	"sync"
 
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
+
+// inClusterName is the context name of the cluster the bridge runs in.
+const inClusterName = "in-cluster"
 
 // Hub serves many clusters from one bridge: every kubeconfig context (from
 // the usual kubeconfig plus files added from the game) gets its own Bridge,
 // started on first use. Clients pick one with ?context=NAME.
 type Hub struct {
-	root       context.Context
-	explicit   string // --kubeconfig
-	dir        string // added kubeconfigs (~/.kubecraft/kubeconfigs)
-	defaultCtx string
-	readOnly   bool
-	token      string
-	pol        *policy
+	root         context.Context
+	explicit     string // --kubeconfig
+	dir          string // added kubeconfigs (~/.kubecraft/kubeconfigs)
+	defaultCtx   string
+	readOnly     bool
+	token        string
+	pol          *policy
+	inCluster    bool   // one cluster: the one the bridge runs in
+	userHeader   string // team mode: the proxy's user header
+	groupsHeader string
 
 	mu       sync.Mutex
 	clusters map[string]*Bridge
@@ -83,6 +90,13 @@ type ctxRef struct {
 }
 
 func (h *Hub) contexts() ([]ContextInfo, map[string]ctxRef) {
+	if h.inCluster {
+		h.mu.Lock()
+		_, running := h.clusters[inClusterName]
+		h.mu.Unlock()
+		return []ContextInfo{{Name: inClusterName, Cluster: "in-cluster", Source: "serviceaccount", Default: true, Running: running}},
+			map[string]ctxRef{inClusterName: {"", inClusterName}}
+	}
 	var out []ContextInfo
 	files := map[string]ctxRef{}
 	seen := map[string]bool{}
@@ -183,23 +197,45 @@ func (h *Hub) start(name string) (*Bridge, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown context %q", name)
 	}
-	rules := h.defaultRules()
+	var cfg *rest.Config
+	var err error
 	kubectlPath := h.explicit
-	if ref.path != "" {
-		rules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: ref.path}
-		kubectlPath = ref.path
+	if h.inCluster {
+		cfg, err = rest.InClusterConfig()
+		if err == nil {
+			kubectlPath, err = inClusterKubeconfig(cfg)
+		}
+	} else {
+		rules := h.defaultRules()
+		if ref.path != "" {
+			rules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: ref.path}
+			kubectlPath = ref.path
+		}
+		cfg, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{CurrentContext: ref.ctx}).ClientConfig()
 	}
-	cc := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{CurrentContext: ref.ctx})
-	b, err := startBridge(h.root, cc, name, kubectlPath, h.readOnly)
+	if err != nil {
+		return nil, fmt.Errorf("client config: %w", err)
+	}
+	b, err := startBridge(h.root, cfg, name, kubectlPath, h.readOnly)
 	if b != nil {
 		b.kubectlContext = ref.ctx
 		b.pol = h.pol
+		b.inCluster = h.inCluster
 	}
 	return b, err
 }
 
 func (h *Hub) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Team mode: the OIDC proxy in front signed the player in.
+		if h.userHeader != "" {
+			id := identityFromHeaders(r, h.userHeader, h.groupsHeader)
+			if id.User == "" {
+				http.Error(w, "not signed in: open Kubiverse through your team's login", http.StatusUnauthorized)
+				return
+			}
+			r = withIdentity(r, id)
+		}
 		if h.token != "" {
 			t := r.Header.Get("X-Bridge-Token")
 			if t == "" {
@@ -238,7 +274,18 @@ var fileName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}$`)
 
 // handleAddKubeconfig stores a pasted kubeconfig (0600, in the data dir) so
 // its contexts can be played. Only localhost clients reach this (see guard).
+// teamOrInCluster: adding kubeconfigs from the game is off (a kubeconfig can
+// run exec plugins on the bridge's machine: fine on your laptop, not in a
+// shared pod).
+func (h *Hub) teamOrInCluster() bool {
+	return h.inCluster || h.userHeader != ""
+}
+
 func (h *Hub) handleAddKubeconfig(w http.ResponseWriter, r *http.Request) {
+	if h.teamOrInCluster() {
+		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "adding kubeconfigs is disabled on a shared (team / in-cluster) bridge"})
+		return
+	}
 	var req struct {
 		Name    string `json:"name"`
 		Content string `json:"content"`
@@ -283,6 +330,10 @@ func (h *Hub) handleAddKubeconfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Hub) handleDeleteKubeconfig(w http.ResponseWriter, r *http.Request) {
+	if h.teamOrInCluster() {
+		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "disabled on a shared (team / in-cluster) bridge"})
+		return
+	}
 	name := strings.TrimSuffix(r.URL.Query().Get("name"), ".yaml")
 	if !fileName.MatchString(name) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "invalid name"})

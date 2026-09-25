@@ -12,6 +12,8 @@ const ES := {
 	"The bridge refused: %s": "El bridge lo rechazó: %s",
 	"CHANGE LOG (this bridge)": "REGISTRO DE CAMBIOS (este bridge)",
 	"Change log (what was changed)": "Registro de cambios (qué se cambió)",
+	"Signed in as %s: changes are made as you, with your permissions.": "Sesión de %s: los cambios se hacen como tú, con tus permisos.",
+	"Shared team bridge: you see the whole cluster, and every change is made as %s (your RBAC decides).": "Bridge compartido del equipo: ves todo el cluster y cada cambio se hace como %s (decide tu RBAC).",
 	"Saved on the bridge machine in": "Guardado en la máquina del bridge en",
 	"Nothing changed through this bridge yet.": "Todavía no se ha cambiado nada a través de este bridge.",
 	"unmarked": "sin marcar",

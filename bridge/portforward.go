@@ -123,12 +123,16 @@ func (b *Bridge) handleForwards(w http.ResponseWriter, r *http.Request) {
 		b.broadcast(b.forwardsMessage())
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	case http.MethodPost:
+		if b.inCluster || identityFrom(r.Context()).User != "" {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "port-forward needs the bridge on your own machine: on a shared (team / in-cluster) bridge it would open the port inside the bridge's pod. Run the bridge locally (the command is on the start screen) or use kubectl port-forward."})
+			return
+		}
 		var req forwardRequest
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "bad json"})
 			return
 		}
-		f, err := b.startForward(req)
+		f, err := b.startForward(req, identityFrom(r.Context()))
 		b.audit(r, "portforward", req.NS+"/"+req.Name, fmt.Sprintf("open %s port %d", req.Kind, req.Port), err)
 		if err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
@@ -138,7 +142,7 @@ func (b *Bridge) handleForwards(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (b *Bridge) startForward(req forwardRequest) (*forwarder, error) {
+func (b *Bridge) startForward(req forwardRequest, who identity) (*forwarder, error) {
 	if req.Kind != "pod" && req.Kind != "service" {
 		return nil, errors.New("kind must be pod or service")
 	}
@@ -165,7 +169,8 @@ func (b *Bridge) startForward(req forwardRequest) (*forwarder, error) {
 		return nil, fmt.Errorf("local port %d: %w", local, err)
 	}
 	local = ln.Addr().(*net.TCPAddr).Port
-	ctx, cancel := context.WithCancel(context.Background())
+	// The tunnel lives past this request, but keeps acting as its player.
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), identityKey{}, who))
 	f := &forwarder{ln: ln, cancel: cancel}
 	f.internal.Store("")
 	b.fw.mu.Lock()
@@ -278,11 +283,11 @@ func (b *Bridge) runPortForward(ctx context.Context, f *forwarder, pod *corev1.P
 	if b.restCfg == nil {
 		return errors.New("no REST config for port-forward")
 	}
-	transport, upgrader, err := spdy.RoundTripperFor(b.restCfg)
+	transport, upgrader, err := spdy.RoundTripperFor(b.restFor(ctx))
 	if err != nil {
 		return err
 	}
-	u := b.cs.CoreV1().RESTClient().Post().Resource("pods").Namespace(pod.Namespace).Name(pod.Name).SubResource("portforward").URL()
+	u := b.clientFor(ctx).CoreV1().RESTClient().Post().Resource("pods").Namespace(pod.Namespace).Name(pod.Name).SubResource("portforward").URL()
 	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, u)
 	stop := make(chan struct{})
 	ready := make(chan struct{})
