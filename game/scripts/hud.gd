@@ -436,6 +436,34 @@ func _build_connect_ui() -> void:
 			row.add_child(_button("COPY", _copy.bind(pair[1])))
 			v.add_child(row)
 
+	# ---- native builds (web only, collapsible)
+	if OS.has_feature("web"):
+		var nbox := VBoxContainer.new()
+		nbox.add_theme_constant_override("separation", 6)
+		nbox.visible = false
+		var nh := HBoxContainer.new()
+		nh.add_child(_button("+ NATIVE APP (MACOS, WINDOWS, LINUX)", func(): nbox.visible = not nbox.visible))
+		v.add_child(nh)
+		v.add_child(nbox)
+		var ntext := "Smoother than the browser. It connects to the same bridge: start it with the command above (without --allow-origin), then CONNECT TO CLUSTER."
+		if K8s.served_by_bridge():
+			ntext = "Smoother than the browser. It connects to the bridge serving this page: keep it running and press CONNECT TO CLUSTER in the app."
+		var nn := _label(ntext, 21, Vox.SILVER)
+		nn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		nbox.add_child(nn)
+		for d in K8s.native_downloads():
+			var row := HBoxContainer.new()
+			row.add_theme_constant_override("separation", 8)
+			var os_l := _label(d[0], 21, Vox.PEACH)
+			os_l.custom_minimum_size.x = 110
+			row.add_child(os_l)
+			row.add_child(_button("DOWNLOAD", OS.shell_open.bind(d[1]), "GoButton"))
+			var how := _label(d[2], 19, Vox.SILVER)
+			how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			how.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			row.add_child(how)
+			nbox.add_child(row)
+
 	# ---- new connection
 	v.add_child(_section("NEW CONNECTION"))
 	var g := GridContainer.new()

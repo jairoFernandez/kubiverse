@@ -62,6 +62,20 @@ func bridge_install_commands() -> Array:
 	]
 
 
+const RELEASE_DOWNLOAD := "https://github.com/jairoFernandez/kubiverse/releases/latest/download/"
+
+## Native builds from the latest release: [label, url, how to run it].
+func native_downloads() -> Array:
+	return [
+		["macOS", RELEASE_DOWNLOAD + "kubiverse-macos.zip",
+			"Unzip and move Kubiverse.app to Applications. It is not notarized: the first time, right-click > Open (or System Settings > Privacy & Security > Open Anyway)."],
+		["Windows", RELEASE_DOWNLOAD + "kubiverse-windows-x86_64.zip",
+			"Unzip and run Kubiverse.exe. If SmartScreen stops it: More info > Run anyway."],
+		["Linux", RELEASE_DOWNLOAD + "kubiverse-linux-x86_64.tar.gz",
+			"tar xzf kubiverse-linux-x86_64.tar.gz && ./kubiverse.x86_64"],
+	]
+
+
 ## True for localhost and private-network addresses: the hosts a k8s-bridge
 ## serves the web build from.
 static func _is_local_host(origin: String) -> bool:

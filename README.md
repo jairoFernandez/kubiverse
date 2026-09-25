@@ -33,6 +33,14 @@ curl -fsSL https://raw.githubusercontent.com/jairoFernandez/kubiverse/main/bridg
 
 Then open **http://127.0.0.1:8088**: the bridge carries the game inside. To use the [online version](https://jairofernandez.github.io/kubiverse/) instead, add `--allow-origin https://jairofernandez.github.io` to the command (after `sh -s --` on macOS/Linux). The game's start screen shows these commands ready to copy, with the right origin.
 
+The native apps (smoother than the browser) are in the [latest release](https://github.com/jairoFernandez/kubiverse/releases/latest); the web start screen links them under **+ NATIVE APP**, with how to open each one:
+
+- **macOS** (`kubiverse-macos.zip`): unzip and move Kubiverse.app to Applications. It isn't notarized, so the first time use right-click → Open (or System Settings → Privacy & Security → Open Anyway).
+- **Windows** (`kubiverse-windows-x86_64.zip`): unzip and run Kubiverse.exe; if SmartScreen stops it, More info → Run anyway.
+- **Linux** (`kubiverse-linux-x86_64.tar.gz`): `tar xzf kubiverse-linux-x86_64.tar.gz && ./kubiverse.x86_64`.
+
+They connect to the bridge on `http://127.0.0.1:8088` (started with the command above, no `--allow-origin` needed).
+
 ## Intro
 
 While loading, the web build shows its own screen ([`game/web/shell.html`](game/web/shell.html)): the logo, Kubi, a pixel-art city with requests flying around, a bar with the MB downloaded and rotating tips, in English or Spanish depending on the browser. The native build boots with [`game/assets/splash.png`](game/assets/splash.png).
