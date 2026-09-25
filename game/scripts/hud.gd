@@ -409,6 +409,10 @@ func _build_connect_ui() -> void:
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(sub)
+	var ver := _label("v" + str(ProjectSettings.get_setting("application/config/version", "")), 19, Vox.SILVER)
+	ver.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ver.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	v.add_child(ver)
 
 	# ---- saved clusters
 	v.add_child(_section("SAVED CLUSTERS"))

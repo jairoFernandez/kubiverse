@@ -5,6 +5,7 @@ config_version=5
 
 config/name="Kubiverse"
 config/description="Explore and operate a real Kubernetes cluster as a 3D pixel-art world."
+config/version="0.1.2"
 run/main_scene="res://scenes/main.tscn"
 config/icon="res://icon.png"
 config/features=PackedStringArray("4.7", "GL Compatibility")
