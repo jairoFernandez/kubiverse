@@ -122,6 +122,13 @@ var _pf_remote: LineEdit
 var _pf_local: LineEdit
 var _pf_req := {}
 var _insp_cmds_hdr: Label
+var _log_panel: PanelContainer   # mission log: every track, done or not
+var _log_tabs: HBoxContainer
+var _log_list: VBoxContainer
+var _log_detail: RichTextLabel
+var _log_btns: HBoxContainer
+var _log_track := ""
+var _log_sel := 0
 var _kind_panel: PanelContainer  # asks which kind a new cluster is
 var _confirm_prod: Label         # red "PRODUCTION CLUSTER" line in the confirm dialog
 var _mission_track: HFlowContainer
@@ -953,6 +960,9 @@ func _build_game_ui() -> void:
 		Settings.save())
 	vv.add_child(_view_fastday)
 	vv.add_child(_button("Recenter camera  [HOME]", func(): recenter_requested.emit()))
+	vv.add_child(_button("Mission log (all missions)", func():
+		_view_panel.visible = false
+		open_mission_log()))
 	vv.add_child(_button("Restart missions", func():
 		missions.restart()
 		_mission_panel.visible = true))
@@ -1220,6 +1230,7 @@ func _build_missions_panel() -> void:
 	_mission_hdr = _label("", 22, Vox.GREEN)
 	_mission_hdr.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	h.add_child(_mission_hdr)
+	h.add_child(_button("ALL", open_mission_log))
 	h.add_child(_button("WHY?", _toggle_mission_why))
 	h.add_child(_button("SKIP", func(): missions.skip()))
 	h.add_child(_button("_", toggle_missions))
@@ -1260,6 +1271,8 @@ func _toggle_mission_why() -> void:
 func refresh_missions() -> void:
 	if missions == null:
 		return
+	if _log_panel and _log_panel.visible:
+		_refresh_log()
 	_refresh_mission_track()
 	if missions.all_done():
 		_mission_hdr.text = tr("MISSIONS COMPLETE")
@@ -1302,6 +1315,63 @@ func _scenario(remove: bool) -> void:
 			toast(tr("Scenario removed.") if remove and ok else (tr("Scenario deployed: its breakdowns appear in a minute.") if ok else tr("Scenario failed: %s") % out.strip_edges().left(160)), ok))
 	confirm(tr("Remove the sample scenario's namespaces from this sandbox?") if remove else tr("Deploy the sample scenario (5 namespaces with broken things on purpose) to this sandbox?"), run,
 		"kubectl %s -f bridge/scenarios/complex.yaml" % ("delete" if remove else "apply"))
+
+
+## Mission log: tabs per track, every mission with its state; pick one to
+## read it again or replay it.
+func open_mission_log(t := "") -> void:
+	_log_track = t if t != "" else missions.track()
+	_log_sel = missions.index() if _log_track == missions.track() else 0
+	_log_panel.visible = true
+	_log_panel.move_to_front()
+	_refresh_log()
+
+
+func _refresh_log() -> void:
+	for c in _log_tabs.get_children():
+		c.queue_free()
+	for t in ["prod"] + Missions.LEVELS:
+		var l := Missions.list_of(t)
+		var done := l.filter(func(m): return m.id in Settings.missions_done).size()
+		var name := "%s  %d/%d" % [tr(Missions.TRACK_TITLES[t]), done, l.size()]
+		_log_tabs.add_child(_button(name, func():
+			_log_track = t
+			_log_sel = missions.index() if t == missions.track() else 0
+			_refresh_log(), "GoButton" if t == _log_track else ""))
+	for c in _log_list.get_children():
+		c.queue_free()
+	var list := Missions.list_of(_log_track)
+	_log_sel = clampi(_log_sel, 0, list.size() - 1)
+	var cur := missions.index() if _log_track == missions.track() else -1
+	for i in list.size():
+		var m: Dictionary = list[i]
+		var mark := "✓" if m.id in Settings.missions_done else ("▶" if i == cur else "·")
+		var b := _button("%s %d. %s" % [mark, i + 1, tr(m.title)], func():
+			_log_sel = i
+			_refresh_log(), "GoButton" if i == _log_sel else "")
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		_log_list.add_child(b)
+	var m: Dictionary = list[_log_sel]
+	var state := tr("done") if m.id in Settings.missions_done else (tr("current mission") if _log_sel == cur else tr("pending"))
+	var t := "[color=#ffec27][b]%s[/b][/color]   [color=#83769c]%s[/color]\n\n" % [tr(m.title), state]
+	t += "[color=#fff1e8]%s[/color]\n\n" % tr(m.goal)
+	t += "[color=#29adff]%s[/color]\n[color=#ffccaa]%s[/color]\n\n" % [tr("WHY?"), tr(m.learn)]
+	t += "[color=#83769c]%s[/color]\n" % tr("The same with kubectl (click to put it in the terminal):")
+	for c in str(m.cmd).split(" && "):
+		t += "[color=#ffec27]$[/color] [url=%s]%s[/url]\n" % [c, c]
+	if not missions.playable(_log_track):
+		t += "\n[color=#ff77a8]%s[/color]" % (tr("Production missions: they are played on a cluster marked PRODUCTION.") if _log_track == "prod" \
+			else tr("Sandbox missions: they are played on a sandbox cluster (or the demo), never on production."))
+	_log_detail.text = t
+	for c in _log_btns.get_children():
+		c.queue_free()
+	var play := _button("REPLAY THIS MISSION" if m.id in Settings.missions_done else "PLAY THIS MISSION", func():
+		missions.jump(_log_track, _log_sel)
+		_log_panel.visible = false
+		_mission_panel.visible = true
+		_sync_view(), "GoButton")
+	play.disabled = not missions.playable(_log_track) or _log_sel == cur
+	_log_btns.add_child(play)
 
 
 func toggle_missions() -> void:
@@ -1585,7 +1655,7 @@ func close_top() -> bool:
 
 
 func _anything_to_close() -> bool:
-	for p in [_confirm_panel, _pf_panel, _build_panel, _guide_panel, _map_panel, _logs_panel, _view_panel, _vol_panel, _alarm_panel,
+	for p in [_confirm_panel, _pf_panel, _build_panel, _guide_panel, _log_panel, _map_panel, _logs_panel, _view_panel, _vol_panel, _alarm_panel,
 			_legend, kubi, watch, _menu_panel, stats, _mission_panel, _inspector]:
 		if p.visible:
 			return true
@@ -2677,6 +2747,49 @@ func _build_modals() -> void:
 	pb.add_child(_button("OPEN TUNNEL", _pf_open, "GoButton"))
 	pv.add_child(pb)
 
+	# Mission log: every mission of every track, to review or replay.
+	_log_panel = _modal(50)
+	_log_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	var logv := VBoxContainer.new()
+	logv.add_theme_constant_override("separation", 10)
+	_log_panel.add_child(logv)
+	var logh := HBoxContainer.new()
+	logv.add_child(logh)
+	var logt := _label("MISSION LOG", 30, Vox.GREEN)
+	logt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	logh.add_child(logt)
+	logh.add_child(_button("CLOSE [ESC]", func(): _log_panel.visible = false))
+	_log_tabs = HBoxContainer.new()
+	_log_tabs.add_theme_constant_override("separation", 8)
+	logv.add_child(_log_tabs)
+	var logsplit := HBoxContainer.new()
+	logsplit.add_theme_constant_override("separation", 14)
+	logsplit.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	logv.add_child(logsplit)
+	var logs_sc := ScrollContainer.new()
+	logs_sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	logs_sc.custom_minimum_size = Vector2(330, 0)
+	logsplit.add_child(logs_sc)
+	_log_list = VBoxContainer.new()
+	_log_list.add_theme_constant_override("separation", 6)
+	_log_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	logs_sc.add_child(_log_list)
+	var logr := VBoxContainer.new()
+	logr.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	logr.add_theme_constant_override("separation", 10)
+	logsplit.add_child(logr)
+	_log_detail = _rich(23)
+	_log_detail.fit_content = false
+	_log_detail.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_log_detail.meta_underlined = false
+	_log_detail.meta_clicked.connect(func(m):
+		_term_fill(str(m))
+		toast(tr("Complete the <...> parts and press Enter"), true))
+	logr.add_child(_log_detail)
+	_log_btns = HBoxContainer.new()
+	_log_btns.add_theme_constant_override("separation", 10)
+	logr.add_child(_log_btns)
+
 	# Control-plane guide
 	_guide_panel = _modal(60)
 	_guide_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -3103,7 +3216,7 @@ func _layout() -> void:
 			var ps: Vector2 = p.get_combined_minimum_size().min(full - Vector2(20, 20))
 			p.size = ps
 			p.position = ((full - ps) * 0.5).floor()
-	for p in [_logs_panel, _map_panel, _guide_panel]:
+	for p in [_logs_panel, _map_panel, _guide_panel, _log_panel]:
 		var m: float = p.get_meta("margin")
 		p.offset_left = m
 		p.offset_top = m

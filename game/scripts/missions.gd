@@ -246,6 +246,32 @@ func set_level(level: String) -> void:
 	progress_changed.emit()
 
 
+## Missions of a track, for the mission log.
+static func list_of(t: String) -> Array:
+	match t:
+		"prod": return PROD
+		"intermediate": return INTERMEDIATE
+		"advanced": return ADVANCED
+	return LIST
+
+
+## Tracks you can play on this cluster: production only gets its own.
+func playable(t: String) -> bool:
+	return t == "prod" if K8s.is_prod() else t in LEVELS
+
+
+## Mission log: make mission i of track t the current one (to replay it).
+func jump(t: String, i: int) -> void:
+	if not playable(t):
+		return
+	if t in LEVELS:
+		Settings.mission_level = t
+	Settings.mission_progress[t] = clampi(i, 0, list_of(t).size() - 1)
+	_flags.clear()
+	Settings.save()
+	progress_changed.emit()
+
+
 ## Called when the cluster kind is set or changes (prod <-> sandbox).
 func kind_changed() -> void:
 	_flags.clear()

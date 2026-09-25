@@ -322,6 +322,9 @@ func _screenshot_and_quit(path: String) -> void:
 		if arg.begins_with("--level="):
 			_go_level(arg.substr(8))
 			await get_tree().create_timer(2.5).timeout
+	if "--mission-log" in OS.get_cmdline_user_args():
+		hud.open_mission_log("intermediate")
+		await get_tree().create_timer(0.5).timeout
 	if "--pf-demo" in OS.get_cmdline_user_args():
 		# Frame the tubes: panels away, stand where they are visible.
 		hud._terminal.visible = false

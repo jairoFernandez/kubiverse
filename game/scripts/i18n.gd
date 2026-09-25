@@ -9,6 +9,16 @@ signal lang_changed
 const LANGS := {"en": "English", "es": "Español"}
 
 const ES := {
+	"ALL": "TODAS",
+	"MISSION LOG": "BITÁCORA DE MISIONES",
+	"Mission log (all missions)": "Bitácora de misiones (todas)",
+	"current mission": "misión actual",
+	"pending": "pendiente",
+	"The same with kubectl (click to put it in the terminal):": "Lo mismo con kubectl (clic para ponerlo en la terminal):",
+	"Production missions: they are played on a cluster marked PRODUCTION.": "Misiones de producción: se juegan en un cluster marcado como PRODUCCIÓN.",
+	"Sandbox missions: they are played on a sandbox cluster (or the demo), never on production.": "Misiones de sandbox: se juegan en un cluster sandbox (o la demo), nunca en producción.",
+	"REPLAY THIS MISSION": "REPETIR ESTA MISIÓN",
+	"PLAY THIS MISSION": "JUGAR ESTA MISIÓN",
 	"(no shell in the game terminal: running 'kubectl %s' without '%s'; ask Kubi to filter the output)": "(la terminal del juego no tiene shell: se ejecuta 'kubectl %s' sin '%s'; pide a Kubi que filtre la salida)",
 	"(stopped: the previous command failed)": "(detenido: el comando anterior falló)",
 	"open": "abierto",
