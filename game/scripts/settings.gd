@@ -6,8 +6,10 @@ signal changed
 
 const PATH := "user://settings.cfg"
 const UI_SCALES := [1.0, 1.25, 1.5, 1.75, 2.0, 2.5]
+# Bump when a default changes and saved settings should pick it up once.
+const VERSION := 2
 
-var ui_scale := 1.25
+var ui_scale := 1.0
 var lines_all := false
 var terminal := true
 var legend_seen := false
@@ -55,6 +57,11 @@ func _ready() -> void:
 		touch = cf.get_value("controls", "touch", touch)
 		show_finished = cf.get_value("ui", "show_finished", show_finished)
 		intro = cf.get_value("ui", "intro", intro)
+		if int(cf.get_value("meta", "version", 1)) < 2:
+			# v2: click-to-move on and 100% text by default for everyone.
+			click_to_move = true
+			ui_scale = 1.0
+			save()
 	apply_audio()
 
 
@@ -73,6 +80,7 @@ func master_gain() -> float:
 
 func save() -> void:
 	var cf := ConfigFile.new()
+	cf.set_value("meta", "version", VERSION)
 	cf.set_value("ui", "scale", ui_scale)
 	cf.set_value("ui", "lines_all", lines_all)
 	cf.set_value("ui", "terminal", terminal)
