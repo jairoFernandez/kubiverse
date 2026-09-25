@@ -25,7 +25,8 @@ var sfx_volume := 0.8
 var master_volume := 1.0
 var muted := false
 var click_to_move := true
-var touch := "auto"   # on-screen touch controls: auto | on | off
+var touch := "auto"
+var show_finished := false   # draw every Completed pod (they can be thousands)   # on-screen touch controls: auto | on | off
 
 
 func _ready() -> void:
@@ -50,6 +51,7 @@ func _ready() -> void:
 		muted = cf.get_value("audio", "muted", muted)
 		click_to_move = cf.get_value("controls", "click_to_move", click_to_move)
 		touch = cf.get_value("controls", "touch", touch)
+		show_finished = cf.get_value("ui", "show_finished", show_finished)
 	apply_audio()
 
 
@@ -87,6 +89,7 @@ func save() -> void:
 	cf.set_value("audio", "muted", muted)
 	cf.set_value("controls", "click_to_move", click_to_move)
 	cf.set_value("controls", "touch", touch)
+	cf.set_value("ui", "show_finished", show_finished)
 	cf.save(PATH)
 	apply_audio()
 	changed.emit()

@@ -619,7 +619,8 @@ func _clear_acts() -> void:
 ## input for you to review (their output can be sent back with "-> Kubi").
 ## A command with its RUN and COPY buttons (links in the rich text).
 func cmd_line(c: String) -> String:
-	return "[color=#ffec27]$ %s[/color]\n   %s\n" % [hud._esc(c), _buttons(c)]
+	# Only kubectl runs in the game terminal; other tools (argo, docker...) are copy-only.
+	return "[color=#ffec27]$ %s[/color]\n   %s\n" % [hud._esc(c), _buttons(c, c.begins_with("kubectl "))]
 
 
 func _buttons(c: String, runnable := true) -> String:

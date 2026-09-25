@@ -51,6 +51,16 @@ func start() -> void:
 	_wl("Deployment", "ml", "giant-experiment", 1, "busybox", "unschedulable")
 	_wl("StatefulSet", "data", "broker", 3, "busybox", "ok")
 	_svc("data", "broker", "ClusterIP", "broker", ["9092/TCP"], true)
+	# CI namespace full of finished Argo Workflow steps (they pile up in real clusters).
+	namespaces.append("ci")
+	var steps := ["checkout", "build", "test", "push-image", "deploy"]
+	for i in 45:
+		var wf := "release-%d" % (100 + i / 5)
+		var n := "%s-%s-%d" % [wf, steps[i % 5], 1400000000 + i * 7919]
+		pods["ci/" + n] = {"ns": "ci", "name": n, "node": ["worker-a", "worker-b", "worker-c"][i % 3], "phase": "Succeeded",
+			"status": "Completed", "ready": 0, "total": 2, "restarts": 0, "owner_kind": "Workflow", "owner_name": wf,
+			"containers": ["wait", "main"], "images": ["quay.io/argoproj/argoexec:v3.5", "alpine:3.20"], "ip": "",
+			"age": 3600.0 * (45 - i), "deleting": false, "_t": 0.0, "_wl": "", "_want_node": "", "cpu_req_m": 100, "mem_req": 64 * 1024 * 1024, "message": ""}
 	_svc("kube-system", "kube-dns", "ClusterIP", "coredns", ["53/UDP", "53/TCP"])
 	_svc("shop", "frontend", "LoadBalancer", "frontend", ["80/TCP"])
 	_svc("shop", "cart", "ClusterIP", "cart", ["8080/TCP"])
@@ -441,6 +451,14 @@ func kubectl(line: String) -> Dictionary:
 	var ns: String = c.ns if c.ns != "" else "default"
 	var all_ns: bool = c.all_ns
 	var wide: bool = c.flags.get("o", c.flags.get("output", "")) == "wide"
+	if c.verb == "delete" and str(c.flags.get("field-selector", "")).contains("status.phase==Succeeded"):
+		var gone := []
+		for k in pods.keys():
+			if pods[k].ns == ns and pods[k].status == "Completed":
+				gone.append("pod \"%s\" deleted" % pods[k].name)
+				pods.erase(k)
+		_dirty = true
+		return {"ok": true, "output": "\n".join(gone) if gone else "No resources found"}
 	var act := Kubectl.to_action(line, ns)
 	if not act.is_empty():
 		var res := action(act)

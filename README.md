@@ -84,6 +84,13 @@ Al norte de la planta está **EL INTERNET**: una ciudad de rascacielos bajo un g
 
 `make scenario` crea tres Ingress de ejemplo en el cluster kind, uno roto a propósito.
 
+## Pods terminados (Completed)
+
+Argo Workflows, los Jobs y los CronJobs dejan pods **Completed**. Kubernetes solo los recoge cuando el cluster supera los 12.500 pods terminados (`--terminated-pod-gc-threshold`), así que se acumulan.
+
+- En el juego solo se dibujan los **8 más recientes por nave** (2 por nodo en la sala de energía); el resto va a una **pila de ARCHIVO** con contador. Para verlos todos: VISTA > Mostrar todos los pods terminados.
+- Con 30 o más en un namespace, **Kubi** avisa ("Muchos pods terminados"): explica por qué pasa, da la configuración para que se limpien solos (Argo `podGC` / `ttlStrategy`, Jobs `ttlSecondsAfterFinished`, CronJobs `*HistoryLimit`) y ofrece **Limpiar pods terminados** (`kubectl delete pods --field-selector=status.phase==Succeeded`, con confirmación; los pods en marcha no se tocan).
+
 ## Misiones (J)
 
 11 misiones guiadas para entender Kubernetes haciendo: namespaces, pods, nodos, crear un Deployment, autorreparación, escalar, Services/endpoints, depurar un CrashLoop con logs, rollout, cordon/uncordon y limpieza. Cada una explica el concepto (**WHY?**) y el comando `kubectl` equivalente. Se validan contra el estado real del cluster. Las que modifican cosas usan el namespace **`academia`**, para no tocar tus aplicaciones.

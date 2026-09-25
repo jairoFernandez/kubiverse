@@ -36,15 +36,55 @@ static func problems(state: Dictionary) -> Array:
 		if not n.get("ready", true) or n.get("unschedulable", false):
 			var d := node(n, state)
 			out.append(d)
+	var finished := {}   # ns -> {count, owners}
 	for p in state.get("pods", []):
 		var cat := PodBot.categorize(p)
+		if cat == "done":
+			var f: Dictionary = finished.get(p.ns, {"count": 0, "owners": {}})
+			f.count += 1
+			var ok: String = p.get("owner_kind", "")
+			f.owners[ok] = f.owners.get(ok, 0) + 1
+			finished[p.ns] = f
 		if cat in ["ok", "done"]:
 			continue
 		if cat == "term" and float(p.get("age", 0)) < 60:
 			continue
 		out.append(pod(p, state))
+	for ns in finished:
+		if finished[ns].count >= FINISHED_WARN:
+			out.append(too_many_finished(ns, finished[ns].count, finished[ns].owners))
 	out.sort_custom(func(a, b): return a.sev > b.sev if a.sev != b.sev else a.name < b.name)
 	return out
+
+
+const FINISHED_WARN := 30
+
+
+## Housekeeping (severity 0): finished pods nobody cleans up.
+static func too_many_finished(ns: String, n: int, owners: Dictionary) -> Dictionary:
+	var d := _base("Namespace", ns, ns)
+	d.sev = 0
+	d.title = _t("Many finished pods (%d)") % n
+	var argo: bool = owners.has("Workflow")
+	var jobs: bool = owners.has("Job")
+	d.why = _t("%d pods in %s already finished (Completed). It's normal that they stay: Kubernetes only garbage-collects finished pods when the whole cluster has more than 12,500 (kube-controller-manager --terminated-pod-gc-threshold). They use no CPU or memory, but they clutter kubectl and the API and slow down tools.") % [n, ns]
+	if argo:
+		d.why += "\n" + _t("They come from Argo Workflows: Argo keeps the pod of every step while its Workflow exists, unless podGC or a TTL is configured.")
+	d.steps = []
+	if argo:
+		d.steps.append(_t("Argo, for every workflow: in the workflow-controller-configmap set workflowDefaults.spec.podGC.strategy: OnPodSuccess (deletes each step's pod when it succeeds; failed ones stay for debugging) and ttlStrategy.secondsAfterCompletion: 86400 (deletes finished workflows after a day)."))
+		d.steps.append(_t("Or per workflow template: spec.podGC.strategy: OnPodCompletion / OnWorkflowSuccess."))
+		d.steps.append(_t("Want to keep the history? Enable the Argo workflow archive (a database) and let the pods go."))
+	if jobs or not argo:
+		d.steps.append(_t("Jobs: set spec.ttlSecondsAfterFinished (e.g. 3600). CronJobs: successfulJobsHistoryLimit / failedJobsHistoryLimit (defaults 3 and 1)."))
+	d.steps.append(_t("Clean up what is there now (running pods are not touched)."))
+	d.cmds = ["kubectl -n %s get pods --field-selector=status.phase==Succeeded --no-headers" % ns,
+		"kubectl -n %s delete pods --field-selector=status.phase==Succeeded" % ns]
+	if argo:
+		d.cmds.append("kubectl -n %s get configmap workflow-controller-configmap -o yaml" % ns)
+		d.cmds.append("argo -n %s delete --completed --older 7d" % ns)
+	d.acts = [{"label": "Clean finished pods", "id": "clean_finished"}]
+	return d
 
 
 static func _base(kind: String, ns: String, name: String) -> Dictionary:

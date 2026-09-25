@@ -69,6 +69,7 @@ var watch: WatchPanel
 var flying := false
 var _view_jet: CheckBox
 var _view_click: CheckBox
+var _view_finished: CheckBox
 var _view_touch: Button
 var _vol_panel: PanelContainer
 var _vol_mute: CheckBox
@@ -814,6 +815,12 @@ func _build_game_ui() -> void:
 		Settings.click_to_move = not Settings.click_to_move
 		Settings.save())
 	vv.add_child(_view_click)
+	_view_finished = _check("Show every finished pod (Completed)", func():
+		Settings.show_finished = not Settings.show_finished
+		Settings.save()
+		if world:
+			world.apply_state(K8s.state))  # redraw with / without them
+	vv.add_child(_view_finished)
 	_view_touch = _button("", func():
 		Settings.touch = {"auto": "on", "on": "off", "off": "auto"}[Settings.touch]
 		Settings.save()
@@ -1272,6 +1279,8 @@ func _sync_view() -> void:
 		_view_jet.set_pressed_no_signal(flying)
 	if _view_click:
 		_view_click.set_pressed_no_signal(Settings.click_to_move)
+	if _view_finished:
+		_view_finished.set_pressed_no_signal(Settings.show_finished)
 	if _view_touch:
 		_view_touch.text = tr("Touch controls: %s") % tr({"auto": "automatic", "on": "on", "off": "off"}[Settings.touch])
 	if _vol_mute:

@@ -795,6 +795,18 @@ func _screenshot_and_quit(path: String) -> void:
 		if "--inspect-gate" in OS.get_cmdline_user_args():
 			hud.inspect(world.gate)
 			await get_tree().create_timer(0.6).timeout
+	if "--clean-finished-test" in OS.get_cmdline_user_args():
+		var count := func(): return K8s.state.pods.filter(func(p): return p.ns == "ci" and PodBot.categorize(p) == "done").size()
+		var probs := Diagnose.problems(K8s.state).filter(func(d): return d.sev == 0)
+		print("HYG items=", probs.map(func(d): return d.title), " done_before=", count.call())
+		hud._clean_finished("ci")
+		await get_tree().process_frame
+		hud._confirm_cb.call()
+		hud._confirm_panel.visible = false
+		await get_tree().create_timer(1.0).timeout
+		print("HYG done_after=", count.call(), " problems_left=", Diagnose.problems(K8s.state).filter(func(d): return d.sev == 0).size())
+		get_tree().quit()
+		return
 	if "--menu-open" in OS.get_cmdline_user_args():
 		hud.toggle_menu()
 		await get_tree().create_timer(0.4).timeout
@@ -1845,7 +1857,7 @@ func _workload_of(pod: Dictionary) -> Dictionary:
 
 ## New snapshot: count problems, refresh the panel, speak up when it gets worse.
 func _kubi_state(s: Dictionary) -> void:
-	var probs := Diagnose.problems(s)
+	var probs := Diagnose.problems(s).filter(func(d): return d.sev > 0)  # housekeeping isn't an alarm
 	var sig := ",".join(probs.map(func(d): return "%s/%s/%s/%s" % [d.kind, d.ns, d.name, d.title]))
 	if sig != _kubi_sig:
 		_kubi_sig = sig
@@ -1871,7 +1883,7 @@ func _kubi_tick(delta: float) -> void:
 	var best := Vector3.INF
 	var best_d := 1e9
 	var me := player.global_position
-	for d in Diagnose.problems(K8s.state):
+	for d in Diagnose.problems(K8s.state).filter(func(x): return x.sev > 0):
 		var e: Entity = null
 		match world.level:
 			"plant": e = world.buildings.get(d.ns) if d.ns != "" else null
@@ -1923,6 +1935,9 @@ func _kubi_act(id: String, d: Dictionary) -> void:
 			hud.open_editor("Node", "", d.name, "unschedulable")
 		else:
 			hud.open_editor(d.kind, d.ns, d.name, focus)
+		return
+	if id == "clean_finished":
+		hud._clean_finished(d.ns)
 		return
 	match id:
 		"goto":

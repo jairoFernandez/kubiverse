@@ -50,6 +50,8 @@ var _tops: Array[float] = []
 var _tops_frame := -1
 var limbo_center := Vector3.ZERO
 var workshop := {}
+const FINISHED_SHOWN := 8
+var _archive: Node3D                # finished pods drawn per hall (the rest are archived)
 var internet: InternetCity             # plant: the Internet city (Ingress, LoadBalancers)
 var gate: IngressGate                     # hall: row of pods without a line {pos, count, done, owners}
 
@@ -489,6 +491,20 @@ func _apply_hall(s: Dictionary, ns: String) -> void:
 	var wls: Array = s.workloads.filter(func(w): return w.ns == ns)
 	wls.sort_custom(func(a, b): return a.kind + a.name < b.kind + b.name)
 	var ns_pods: Array = s.pods.filter(func(p): return p.ns == ns)
+	# Finished pods can pile up by thousands (Argo, Jobs): draw only the newest.
+	var archived := 0
+	var archived_owners := {}
+	if not _show_finished():
+		var done: Array = ns_pods.filter(func(p): return PodBot.categorize(p) == "done")
+		if done.size() > FINISHED_SHOWN:
+			done.sort_custom(func(a, b): return float(a.get("age", 0)) < float(b.get("age", 0)))
+			var drop := {}
+			for p in done.slice(FINISHED_SHOWN):
+				drop[p.name] = true
+				var ok: String = p.get("owner_kind", "")
+				archived_owners[ok if ok != "" else "Pod"] = archived_owners.get(ok if ok != "" else "Pod", 0) + 1
+			archived = drop.size()
+			ns_pods = ns_pods.filter(func(p): return not drop.has(p.name))
 	var svcs: Array = s.services.filter(func(sv): return sv.ns == ns)
 	var wkeys := {}
 	for w in wls:
@@ -530,14 +546,14 @@ func _apply_hall(s: Dictionary, ns: String) -> void:
 	# The workshop row: pods of Jobs, Workflows, bare pods... explained by a sign.
 	workshop = {}
 	if not loose.is_empty():
-		var owners := {}
+		var owners := archived_owners.duplicate()
 		var done := 0
 		for p in loose:
 			var ok: String = p.get("owner_kind", "")
 			owners[ok if ok != "" else "Pod"] = owners.get(ok if ok != "" else "Pod", 0) + 1
 			if PodBot.categorize(p) == "done":
 				done += 1
-		workshop = {"pos": Vector3(1.0, 1.6, loose_z + 1.2), "count": loose.size(), "done": done, "owners": owners}
+		workshop = {"pos": Vector3(1.0, 1.6, loose_z + 1.2), "count": loose.size() + archived, "done": done + archived, "owners": owners, "archived": archived}
 	# Docks (Services) along the right side
 	var dock_x := max_len + 4.0
 	seen = {}
@@ -568,6 +584,19 @@ func _apply_hall(s: Dictionary, ns: String) -> void:
 			_place_pod(list[i], lines[k].station_position(i), pseen)
 	for i in loose.size():
 		_place_pod(loose[i], Vector3(2.0 + i * 1.8, 0, loose_z + 1.2), pseen)
+	# The archive: a pile of boxes standing for the finished pods not drawn.
+	if _archive and is_instance_valid(_archive):
+		_archive.queue_free()
+	_archive = null
+	if archived > 0:
+		_archive = Node3D.new()
+		_entities.add_child(_archive)
+		var ax := 2.0 + loose.size() * 1.8 + 1.0
+		var n := clampi(ceili(log(float(archived)) / log(2.0)), 1, 12)
+		for i in n:
+			var bx := Vox.box(_archive, Vector3(0.7, 0.5, 0.7), Vector3(ax + (i % 3) * 0.75, 0.25 + (i / 3) * 0.52, loose_z + 1.2 + ((i / 3) % 2) * 0.3), Vox.SLATE.lightened(0.1))
+			bx.rotation.y = (i * 0.37)
+		workshop["archive_pos"] = Vector3(ax + 0.75, 0.6 + ceilf(n / 3.0) * 0.52, loose_z + 1.2)
 	_drop_missing_pods(pseen)
 	var depth := maxf(rows * LINE_GAP, svcs.size() * DOCK_GAP) + 6.0
 	var width := dock_x + 6.0
@@ -778,9 +807,16 @@ func _apply_power(s: Dictionary) -> void:
 			var sz := Vector3(cr.randf_range(2.0, 3.4), cr.randf_range(0.6, 1.0), cr.randf_range(1.6, 2.6))
 			Vox.box(cloud, sz, limbo_center + Vector3(-4.0 + i * 1.0, -0.4 - cr.randf() * 0.3, cr.randf_range(-1.0, 1.0)), Vox.WHITE, 0.3, false)
 	var pseen := {}
+	var finished_per_node := {}
+	var show_all := _show_finished()
 	for d in s.pods:
 		if not ns_visible(d.ns):
 			continue
+		if not show_all and PodBot.categorize(d) == "done":
+			var c: int = finished_per_node.get(d.node, 0)
+			if c >= 2:
+				continue
+			finished_per_node[d.node] = c + 1
 		var k: String = d.ns + "/" + d.name
 		var prev: PodBot = pods.get(k)
 		var old := prev.node_name if prev else ""
@@ -1387,8 +1423,11 @@ func labels(player_pos: Vector3) -> Array:
 			parts.append("%s %d" % [k, workshop.owners[k]])
 		var sub := tr("pods without an assembly line (%s)") % ", ".join(parts)
 		if workshop.done > 0:
-			sub += "\n" + tr("%d finished (Completed): grey, eyes closed") % workshop.done
+			sub += "  ·  " + tr("%d finished (Completed): grey, eyes closed") % workshop.done
 		out.append({"pos": workshop.pos, "text": tr("WORKSHOP"), "sub": sub, "color": Vox.LAVENDER, "big": true})
+		if workshop.get("archived", 0) > 0:
+			out.append({"pos": workshop.archive_pos, "text": tr("ARCHIVE: %d finished pods") % workshop.archived,
+				"sub": tr("not drawn (VIEW > show finished pods). Ask Kubi how to clean them"), "color": Vox.SILVER, "big": false})
 	var dn := door_near(player_pos, 3.0)
 	if not dn.is_empty():
 		out.append({"pos": dn.pos + Vector3(0, 1.2, 0), "text": "E: " + _door_text(dn), "sub": "", "color": Vox.YELLOW, "big": false})
@@ -1402,3 +1441,9 @@ func labels(player_pos: Vector3) -> Array:
 	if level == "power" and pending > 0:
 		out.append({"pos": limbo_center + Vector3(0, 1.5, 0), "text": tr("scheduler queue"), "sub": tr("%d pods waiting for a node") % pending, "color": Vox.WHITE, "big": true})
 	return out
+
+
+## Settings "show every finished pod" (read without the autoload in tests).
+func _show_finished() -> bool:
+	var st := get_node_or_null("/root/Settings")
+	return st != null and bool(st.get("show_finished"))
