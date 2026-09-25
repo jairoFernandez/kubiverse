@@ -274,6 +274,8 @@ func _ready() -> void:
 				world.set_level("power"))
 	_apply_scale()
 
+	if K8s.web_query_param("vol") != "":  # dev: ?vol=0 sets the master volume
+		Settings.master_volume = float(K8s.web_query_param("vol"))
 	# Web: ?demo=1 jumps straight into demo mode; ?bridge=... auto-connects.
 	if K8s.web_query_param("demo") == "1" or "--demo" in OS.get_cmdline_user_args():
 		K8s.start_demo()
@@ -655,6 +657,18 @@ func _screenshot_and_quit(path: String) -> void:
 		print("FMT ", f.contains("run:"), " ", f.contains("copy:"), " refs=", hud.kubi._cmd_refs)
 		hud.kubi._on_cmd("copy:1")
 		print("CLIP ", DisplayServer.clipboard_get())
+		get_tree().quit()
+		return
+	if "--vol-slider-test" in OS.get_cmdline_user_args():
+		hud.toggle_volume()
+		await get_tree().process_frame
+		var sliders := hud._vol_panel.find_children("*", "HSlider", true, false)
+		print("SLIDERS ", sliders.size(), " values ", sliders.map(func(x): return x.value))
+		var gen: HSlider = sliders[0]
+		gen.value = 0.0
+		await get_tree().process_frame
+		print("AFTER master=", Settings.master_volume, " gain=", Settings.master_gain(), " music_db=", Sfx._music_day.volume_db)
+		gen.value = 1.0
 		get_tree().quit()
 		return
 	if "--vol-test" in OS.get_cmdline_user_args():

@@ -716,6 +716,7 @@ func ask(q: String) -> void:
 		"ns": _sel.get("ns", ""), "name": _sel.get("name", ""),
 		"diagnosis": Diagnose.as_text(_sel) if not _sel.is_empty() else "",
 		"history": _history.slice(maxi(0, _history.size() - 10)), "attachments": atts}
+	req.merge(_location())
 	# The outputs go with this question (and a short copy stays in the memory).
 	var remembered := q
 	for a in atts:
@@ -736,6 +737,25 @@ func ask(q: String) -> void:
 			_chat.append_text("[color=#ff004d]Kubi:[/color] %s\n" % _offline_answer(q))
 		_scroll_down())
 	_scroll_down()
+
+
+## Where the player is in the game, so Kubi can answer "where am I?".
+func _location() -> Dictionary:
+	var w = hud.world
+	var level: String = w.level if w else ""
+	var here := ""
+	var loc_ns := ""
+	if level.begins_with("ns:"):
+		loc_ns = level.substr(3)
+		here = "inside the hall (factory building) of namespace %s" % loc_ns
+	elif level == "power":
+		here = "in the energy room, where every island is a node"
+	else:
+		here = "in the factory yard, where every building is a namespace"
+	var e = hud.inspected()
+	if e != null and is_instance_valid(e) and e.has_method("label_text"):
+		here += "; inspecting %s" % e.label_text()
+	return {"location": here, "location_ns": loc_ns}
 
 
 ## Markdown-ish answer -> BBCode; `kubectl ...` commands become clickable.
