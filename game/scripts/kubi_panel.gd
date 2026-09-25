@@ -6,7 +6,7 @@ extends PanelContainer
 ##    problem or the whole cluster.
 ##  - settings: AI engine (Ollama / built-in llama.cpp), model, answer
 ##    length, and downloads of llama.cpp and models with progress.
-## Drag the title bar to move it, the corner grip to resize it, "_" to fold it.
+## Drag the title bar to move it, any border or corner to resize it, "_" to fold it.
 ## Commands that only read run straight away in the terminal; commands that
 ## change things are only typed in (you press Enter).
 
@@ -161,6 +161,55 @@ func _drag_input(e: InputEvent, what: String) -> void:
 			custom_rect.position += rel
 		else:
 			custom_rect.size = (custom_rect.size + rel).max(MIN_SIZE)
+		accept_event()
+
+
+const EDGE := 12.0
+var _edge := ""   # edges being dragged: any of "l", "r", "t", "b"
+
+
+func _edge_at(p: Vector2) -> String:
+	var e := ""
+	if p.x < EDGE: e += "l"
+	elif p.x > size.x - EDGE: e += "r"
+	if p.y < EDGE: e += "t"
+	elif p.y > size.y - EDGE and not collapsed: e += "b"
+	return e
+
+
+## Resize from any border or corner (the frame around the content).
+func _gui_input(e: InputEvent) -> void:
+	if e is InputEventMouseMotion and _drag == "":
+		var ed := _edge_at(e.position)
+		mouse_default_cursor_shape = {"l": CURSOR_HSIZE, "r": CURSOR_HSIZE, "t": CURSOR_VSIZE, "b": CURSOR_VSIZE,
+			"lt": CURSOR_FDIAGSIZE, "rb": CURSOR_FDIAGSIZE, "rt": CURSOR_BDIAGSIZE, "lb": CURSOR_BDIAGSIZE}.get(ed, CURSOR_ARROW)
+	elif e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+		if e.pressed:
+			_edge = _edge_at(e.position)
+			if _edge != "":
+				_drag = "edge"
+				if custom_rect.size == Vector2.ZERO:
+					custom_rect = Rect2(position, size)
+				accept_event()
+		elif _drag == "edge":
+			_drag = ""
+			accept_event()
+	elif e is InputEventMouseMotion and _drag == "edge":
+		var rel: Vector2 = e.relative * get_global_transform().get_scale()
+		var r := custom_rect
+		if _edge.contains("r"):
+			r.size.x += rel.x
+		if _edge.contains("b"):
+			r.size.y += rel.y
+		if _edge.contains("l"):
+			var w := maxf(MIN_SIZE.x, r.size.x - rel.x)
+			r.position.x += r.size.x - w
+			r.size.x = w
+		if _edge.contains("t"):
+			var h := maxf(MIN_SIZE.y, r.size.y - rel.y)
+			r.position.y += r.size.y - h
+			r.size.y = h
+		custom_rect = Rect2(r.position, r.size.max(MIN_SIZE))
 		accept_event()
 
 

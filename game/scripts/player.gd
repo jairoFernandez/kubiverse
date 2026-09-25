@@ -32,6 +32,9 @@ var _ground := 0.0
 var coins := 0
 var last_safe := Vector3.ZERO   # where to respawn after falling
 var frozen := false             # scripted animation (warp) in control
+var auto_dir := Vector3.ZERO    # click-to-move: direction to the next waypoint
+var auto_run := false
+var manual := false             # keys pressed this frame (cancels click-to-move)
 var _coyote := 0.0              # can still jump shortly after leaving an edge
 var _jump_buffer := 0.0         # a jump pressed just before landing still counts
 
@@ -223,10 +226,15 @@ func _process(delta: float) -> void:
 		if Input.is_physical_key_pressed(KEY_W): v.y -= 1
 		v = v.limit_length(1.0)
 		dir = Vector3(v.x, 0, v.y).rotated(Vector3.UP, cam_yaw)
+	manual = dir.length() > 0.05
+	var auto := false
+	if not manual and auto_dir != Vector3.ZERO and input_enabled:
+		dir = auto_dir
+		auto = true
 	moving = dir.length() > 0.05
 	# Running shoes: SHIFT inverts the "always run" setting.
 	var shift := input_enabled and Input.is_physical_key_pressed(KEY_SHIFT)
-	running = moving and (shift != Settings.always_run)
+	running = moving and ((shift != Settings.always_run) or (auto and auto_run))
 	var speed := RUN_SPEED if running else WALK_SPEED
 	if flying and not _grounded:
 		speed = FLY_RUN_SPEED if running else FLY_SPEED

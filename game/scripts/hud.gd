@@ -46,11 +46,16 @@ var _view_minimap: CheckBox
 var _view_fpv: CheckBox
 var fpv := false
 var kubi: KubiPanel
+var editor: ManifestEditor
 var term_log := []     # last terminal outputs [{id, cmd, out, ok}]
 var _term_seq := 0
 var watch: WatchPanel
 var flying := false
 var _view_jet: CheckBox
+var _view_click: CheckBox
+var _vol_panel: PanelContainer
+var _vol_mute: CheckBox
+var _vol_btn: Button
 var map_mini: MapView
 var stats: StatsPanel
 var _perf_label: Label
@@ -666,6 +671,8 @@ func _build_game_ui() -> void:
 	_stats_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_stats_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	h.add_child(_stats_label)
+	_vol_btn = _button("VOL", toggle_volume)
+	h.add_child(_vol_btn)
 	h.add_child(_button("Y KUBI", toggle_kubi))
 	h.add_child(_button("O WATCH", toggle_watch))
 	h.add_child(_button("G LEGEND", toggle_legend))
@@ -674,6 +681,29 @@ func _build_game_ui() -> void:
 	h.add_child(_chaos_btn)
 	h.add_child(_button("V VIEW", toggle_view))
 	h.add_child(_button("EXIT", func(): disconnect_requested.emit()))
+
+	# ---- Volume panel (drops down under the bar)
+	_vol_panel = PanelContainer.new()
+	_vol_panel.anchor_left = 1.0
+	_vol_panel.anchor_right = 1.0
+	_vol_panel.offset_left = -470
+	_vol_panel.offset_right = -10
+	_vol_panel.offset_top = TOP
+	_vol_panel.visible = false
+	_vol_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_game_root.add_child(_vol_panel)
+	var volv := VBoxContainer.new()
+	volv.add_theme_constant_override("separation", 10)
+	_vol_panel.add_child(volv)
+	volv.add_child(_section("SOUND"))
+	volv.add_child(_volume_row("General", "master_volume"))
+	volv.add_child(_volume_row("Music", "music_volume"))
+	volv.add_child(_volume_row("Effects", "sfx_volume"))
+	_vol_mute = _check("Mute everything", func():
+		Settings.muted = not Settings.muted
+		Settings.save()
+		_sync_view())
+	volv.add_child(_vol_mute)
 
 	# ---- View menu (drops down under the bar)
 	_view_panel = PanelContainer.new()
@@ -705,8 +735,10 @@ func _build_game_ui() -> void:
 	sh.add_child(_button(" + ", func(): Settings.step_scale(1)))
 	vv.add_child(sh)
 	vv.add_child(_lang_row())
-	vv.add_child(_volume_row("Music", "music_volume"))
-	vv.add_child(_volume_row("Effects", "sfx_volume"))
+	_view_click = _check("Click to move (click the ground)", func():
+		Settings.click_to_move = not Settings.click_to_move
+		Settings.save())
+	vv.add_child(_view_click)
 	_view_run = _check("Always run  [X]", func():
 		Settings.always_run = not Settings.always_run
 		Settings.save())
@@ -1147,6 +1179,11 @@ func _sync_view() -> void:
 	_view_run.set_pressed_no_signal(Settings.always_run)
 	if _view_jet:
 		_view_jet.set_pressed_no_signal(flying)
+	if _view_click:
+		_view_click.set_pressed_no_signal(Settings.click_to_move)
+	if _vol_mute:
+		_vol_mute.set_pressed_no_signal(Settings.muted)
+		_vol_btn.text = tr("MUTED") if Settings.muted else "VOL"
 	_view_minimap.set_pressed_no_signal(Settings.minimap)
 	_view_fpv.set_pressed_no_signal(fpv)
 	_view_stats.set_pressed_no_signal(stats.visible)
@@ -1156,6 +1193,11 @@ func _sync_view() -> void:
 		map_mini.get_parent().visible = Settings.minimap and not stats.visible and not fpv
 	for b in _lang_btns:
 		b.theme_type_variation = "GoButton" if b.get_meta("lang") == Settings.lang else ""
+
+
+## Opens the Matrix-style YAML editor on an object (focus = a key to jump to).
+func open_editor(kind: String, ns: String, name: String, focus := "") -> void:
+	editor.open(kind, ns, name, focus)
 
 
 func toggle_kubi() -> void:
@@ -1173,7 +1215,14 @@ func toggle_watch() -> void:
 	watch_toggled.emit(watch.visible)
 
 
+func toggle_volume() -> void:
+	_vol_panel.visible = not _vol_panel.visible
+	_view_panel.visible = false
+	_sync_view()
+
+
 func toggle_view() -> void:
+	_vol_panel.visible = false
 	_view_panel.visible = not _view_panel.visible
 	_alarm_panel.visible = false
 	_sync_view()
@@ -1468,7 +1517,47 @@ func _term_submit(line: String) -> void:
 		return
 	if _term_history.is_empty() or _term_history[-1] != line:
 		_term_history.append(line)
+	if line.begins_with("edit ") or line.contains(" edit "):
+		_term_edit(line)
+		return
 	term_run(line)
+
+
+## `kubectl edit` would need a text editor on the bridge host: open the
+## in-game one instead. Accepts "edit deploy/web -n shop" or "edit deploy web".
+func _term_edit(line: String) -> void:
+	var parts := line.split(" ", false)
+	var ns := ""
+	var rest := []
+	var i := 0
+	while i < parts.size():
+		if parts[i] in ["-n", "--namespace"] and i + 1 < parts.size():
+			ns = parts[i + 1]
+			i += 2
+			continue
+		if not parts[i].begins_with("-") and parts[i] != "edit":
+			rest.append(parts[i])
+		i += 1
+	var kind := ""
+	var name := ""
+	if rest.size() >= 1 and str(rest[0]).contains("/"):
+		kind = str(rest[0]).get_slice("/", 0)
+		name = str(rest[0]).get_slice("/", 1)
+	elif rest.size() >= 2:
+		kind = rest[0]
+		name = rest[1]
+	var kinds := {"deploy": "Deployment", "deployment": "Deployment", "deployments": "Deployment", "sts": "StatefulSet",
+		"statefulset": "StatefulSet", "ds": "DaemonSet", "daemonset": "DaemonSet", "svc": "Service", "service": "Service",
+		"po": "Pod", "pod": "Pod", "pods": "Pod", "no": "Node", "node": "Node", "cm": "ConfigMap", "configmap": "ConfigMap",
+		"job": "Job", "cj": "CronJob", "cronjob": "CronJob", "ns": "Namespace", "namespace": "Namespace"}
+	var k: String = kinds.get(kind.to_lower(), "")
+	if k == "" or name == "":
+		_term_text.append_text("[color=#ff4d6d]%s[/color]\n" % tr("usage: edit <kind>/<name> [-n namespace]  (opens the in-game editor)"))
+		return
+	if ns == "" and not k in ["Node", "Namespace"]:
+		ns = "default"
+	_term_text.append_text("[color=#00e436]%s[/color]\n" % (tr("opening the in-game editor for %s %s...") % [k, name]))
+	open_editor(k, ns, name)
 
 
 ## Runs a kubectl line in the terminal. Every output gets a "-> Kubi" link
@@ -1610,6 +1699,7 @@ func _refresh_inspector() -> void:
 			for i in usage.size():
 				lines.insert(3 + i, usage[i])
 			buttons.append(["LOGS [L]", func(): open_logs(d), "", false, Kubectl.logs(d.ns, d.name, "", false, true)])
+			buttons.append(["EDIT YAML", func(): open_editor("Pod", d.ns, d.name), "", false, "kubectl -n %s edit pod %s" % [d.ns, d.name]])
 			var del := {"action": "delete_pod", "ns": d.ns, "name": d.name}
 			buttons.append(["DELETE POD", func(): _delete_pod(d), "DangerButton", ro, Kubectl.for_action(del)])
 			var ok: String = d.get("owner_kind", "")
@@ -1626,6 +1716,7 @@ func _refresh_inspector() -> void:
 			lines.append(_kv("image", "[color=#83769c]%s[/color]" % d.get("image", "")))
 			lines.append_array(_usage_lines(K8s.state.get("pods", []).filter(func(p): return p.ns == d.ns and p.get("owner_kind") == d.kind and p.get("owner_name") == d.name)))
 			buttons.append_array(_workload_buttons(d, ro))
+			buttons.append(["EDIT YAML", func(): open_editor(d.kind, d.ns, d.name), "", false, "kubectl -n %s edit %s %s" % [d.ns, str(d.kind).to_lower(), d.name]])
 			var req := {"action": "delete_workload", "kind": d.kind, "ns": d.ns, "name": d.name}
 			buttons.append(["DELETE", func(): _delete_workload(d), "DangerButton", ro, Kubectl.for_action(req)])
 		"service":
@@ -1644,6 +1735,7 @@ func _refresh_inspector() -> void:
 			lines.append(_kv("endpoints", tr("%d pods get its traffic (the lines)") % backs.size()))
 			for pn in backs.slice(0, 8):
 				lines.append("             - " + pn)
+			buttons.append(["EDIT YAML", func(): open_editor("Service", d.ns, d.name), "", false, "kubectl -n %s edit service %s" % [d.ns, d.name]])
 		"namespace":
 			var st: Dictionary = _insp_target.stats
 			if _insp_target.is_power:
@@ -1671,6 +1763,7 @@ func _refresh_inspector() -> void:
 			lines.append(_kv("kubelet", "%s %s/%s" % [d.kubelet, d.os, d.arch]))
 			lines.append(_kv("pods here", str(_insp_target.slots.size())))
 			lines.append(_kv("age", _age(d.get("age", 0))))
+			buttons.append(["EDIT YAML", func(): open_editor("Node", "", d.name), "", false, "kubectl edit node %s" % d.name])
 			if _insp_target.is_control_plane():
 				var add := {"action": "add_control_plane"}
 				buttons.append(["+ CONTROL-PLANE", func(): add_cp_requested.emit(), "GoButton", false, Kubectl.for_action(add)])
@@ -1841,6 +1934,9 @@ func _build_modals() -> void:
 	watch.visible = false
 	watch.build(self)
 	_modal_layer.add_child(watch)
+	editor = ManifestEditor.new()
+	_modal_layer.add_child(editor)
+	editor.build(self)
 
 	# Toast
 	_toast = _label("", 28, Vox.GREEN)
@@ -2039,11 +2135,17 @@ func toggle_minimap() -> void:
 
 
 func is_modal_open() -> bool:
-	return _guide_panel.visible or _map_panel.visible or _logs_panel.visible or _confirm_panel.visible or _build_panel.visible or _connect_root.visible
+	return editor.visible or _guide_panel.visible or _map_panel.visible or _logs_panel.visible or _confirm_panel.visible or _build_panel.visible or _connect_root.visible
 
 
 func close_modals() -> bool:
-	for p in [_confirm_panel, _build_panel, _guide_panel, _map_panel, _logs_panel, _view_panel, _alarm_panel, _legend, kubi, watch]:
+	if _confirm_panel.visible:
+		_confirm_panel.visible = false
+		return true
+	if editor.visible:
+		editor.request_close()
+		return true
+	for p in [_confirm_panel, _build_panel, _guide_panel, _map_panel, _logs_panel, _view_panel, _vol_panel, _alarm_panel, _legend, kubi, watch]:
 		if p.visible:
 			p.visible = false
 			_sync_view()
@@ -2057,6 +2159,7 @@ func confirm(text: String, cb: Callable, cmd := "") -> void:
 	_confirm_cmd.visible = cmd != ""
 	_confirm_cb = cb
 	_confirm_panel.visible = true
+	_confirm_panel.move_to_front()  # above the editor / Kubi
 
 
 func _confirm_yes() -> void:

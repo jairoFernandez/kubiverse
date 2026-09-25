@@ -85,6 +85,8 @@ static func pod(p: Dictionary, state: Dictionary) -> Dictionary:
 				d.cmds.append("kubectl %sset image %s %s=<image>:<tag>" % [nsf, owner, container])
 			d.cmds.append("kubectl %screate secret docker-registry regcred --docker-server=<registry> --docker-username=<user> --docker-password=<password>" % nsf)
 			d.acts.append({"label": "Describe", "id": "describe"})
+			if owner != "":
+				d.acts.append({"label": "Fix in the YAML", "id": "edit:image"})
 		"crash":
 			d.sev = 3
 			if st == "OOMKilled":
@@ -96,6 +98,7 @@ static func pod(p: Dictionary, state: Dictionary) -> Dictionary:
 				d.cmds = ["kubectl %stop pod %s" % [nsf, name], describe]
 				if owner != "":
 					d.cmds.append("kubectl %sset resources %s --limits=memory=256Mi" % [nsf, owner])
+					d.acts.append({"label": "Fix in the YAML", "id": "edit:resources"})
 			else:
 				d.title = _t("The app starts and crashes")
 				d.why = _t("The container keeps exiting (%d restarts) and Kubernetes restarts it with longer and longer waits (CrashLoopBackOff). The reason is inside the app: read the logs of the crashed container.") % restarts
@@ -177,6 +180,9 @@ static func _pending(d: Dictionary, p: Dictionary, state: Dictionary, describe: 
 			_t("Or free room by scaling down other workloads.")]
 		if owner != "":
 			d.cmds.append("kubectl %sset resources %s --requests=cpu=100m,memory=128Mi" % [nsf, owner])
+			d.acts.append({"label": "Fix in the YAML", "id": "edit:resources"})
+		else:
+			d.acts.append({"label": "See the YAML", "id": "edit:resources"})
 		d.cmds.append("kubectl describe nodes")
 	if msg.contains("taint"):
 		lines.append(_t("Some nodes have taints (like the GPU island) that this pod does not tolerate."))

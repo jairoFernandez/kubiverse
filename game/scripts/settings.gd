@@ -22,6 +22,9 @@ var fast_day := false
 var servers: Array = []   # [{name, url, token, context}]
 var music_volume := 0.5
 var sfx_volume := 0.8
+var master_volume := 1.0
+var muted := false
+var click_to_move := true
 
 
 func _ready() -> void:
@@ -42,6 +45,16 @@ func _ready() -> void:
 		servers = cf.get_value("servers", "list", servers)
 		music_volume = cf.get_value("audio", "music", music_volume)
 		sfx_volume = cf.get_value("audio", "sfx", sfx_volume)
+		master_volume = cf.get_value("audio", "master", master_volume)
+		muted = cf.get_value("audio", "muted", muted)
+		click_to_move = cf.get_value("controls", "click_to_move", click_to_move)
+	apply_audio()
+
+
+## Master volume / mute on the audio bus (music and effects scale under it).
+func apply_audio() -> void:
+	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(master_volume, 0.0001)))
+	AudioServer.set_bus_mute(0, muted)
 
 
 func save() -> void:
@@ -61,7 +74,11 @@ func save() -> void:
 	cf.set_value("servers", "list", servers)
 	cf.set_value("audio", "music", music_volume)
 	cf.set_value("audio", "sfx", sfx_volume)
+	cf.set_value("audio", "master", master_volume)
+	cf.set_value("audio", "muted", muted)
+	cf.set_value("controls", "click_to_move", click_to_move)
 	cf.save(PATH)
+	apply_audio()
 	changed.emit()
 
 

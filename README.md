@@ -87,6 +87,7 @@ Por defecto, **puentes de tablones** con escalones suaves llevan a cada isla sin
 | Tecla | Acción |
 |---|---|
 | WASD / flechas | andar |
+| clic en el suelo | ir allí andando (esquiva obstáculos, corre si está lejos; clic en un objeto = inspeccionar e ir). Se desactiva en VISTA |
 | SHIFT (mantener) / X (alternar) | correr con "zapatillas" estilo Pokémon: más rápido, inclinado y levantando polvo |
 | ESPACIO | saltar |
 | Z · ESPACIO dos veces | jetpack: mantén ESPACIO para subir, CTRL para bajar, sin tocar nada flota |
@@ -144,6 +145,19 @@ Todo el sonido se **genera por código** con un pequeño sintetizador chiptune (
 
 Cada isla tiene dos medidores (CPU azul y memoria rosa) que muestran lo **reservado por los requests** de sus pods frente a lo asignable del nodo: verde, amarillo o rojo según la presión. Su letrero dice, por ejemplo, "cpu 700m/4.0, mem 896 MiB/8 GiB". El panel del nodo separa lo reservado (lo único que mira el scheduler), lo libre y el uso real (metrics-server). Un pod Pending muestra el mensaje del scheduler con el motivo exacto, por ejemplo "0/4 nodes are available: 2 Insufficient cpu, 2 node(s) had untolerated taint(s)", y lo que pide.
 
+## Sonido (VOL)
+
+El botón **VOL** de la barra superior abre volumen general, música y efectos, y **silenciar todo**. Se guarda en los ajustes.
+
+## Editor de manifiestos estilo Matrix
+
+**EDITAR YAML** en el inspector (pods, workloads, services, nodos), `kubectl edit <tipo>/<nombre> -n <ns>` en la terminal, o **Arreglar en el YAML** desde Kubi abren un editor retro: lluvia de código verde, el manifiesto se "descifra" línea a línea y aparece con resaltado. La columna **DECODER** explica cada línea (qué hace `replicas`, `requests.cpu`, `tolerations`...) y avisa de valores peligrosos: imagen `latest`, 1 réplica, contenedor `privileged`, límite de memoria muy bajo, secretos en texto plano. `~` marca las líneas cambiadas.
+
+- **VALIDAR** = `kubectl replace --dry-run=server`: el API server comprueba el cambio sin aplicarlo.
+- **APLICAR** reemplaza el objeto, con confirmación. No se puede cambiar el tipo, el nombre ni el namespace, y los Secrets no se pueden editar aquí (sus valores saldrían en pantalla). Se ocultan `status`, `managedFields` y la anotación last-applied, que se conserva al guardar.
+- **PREGUNTAR A KUBI POR ESTA LÍNEA** y **pregúntale a Kubi por este error** le pasan el YAML o el error a Kubi.
+- En modo demo, cambiar la imagen rota de `fraud-ai` o la CPU de `giant-experiment` arregla los pods de verdad.
+
 ## Jetpack (Z)
 
 Z (o ESPACIO dos veces) enciende el jetpack: dos tanques con llamas en la mochila y sonido de motor. Mantén ESPACIO para subir, CTRL para bajar; soltando todo flota. Vuela por encima de naves, consolas y tuberías y se puede **aterrizar en los tejados**. Tiene un techo por nivel (más bajo dentro de las naves). Apagarlo en el aire = caer.
@@ -155,7 +169,7 @@ Un dron tipo "Pokédex" que te sigue, mira hacia el problema más cercano (con u
 - **Problemas** del cluster, peor primero, con un **diagnóstico integrado** (funciona siempre, también en web/demo): por qué pasa (ImagePullBackOff, CrashLoopBackOff, OOMKilled, sin sitio en ningún nodo con los números de CPU/memoria, taints, selectores, PVC, readiness, nodos NotReady o acordonados...), pasos para arreglarlo y comandos. Los comandos de lectura se ejecutan en la terminal al hacer clic; los que cambian algo solo se escriben para que los revises y pulses Enter. Botones: ir allí, logs del contenedor que falló, reiniciar el workload, borrar el pod, uncordon (siempre con confirmación).
 - **Chat libre** con memoria de la conversación: pregunta lo que quieras del cluster o de Kubernetes. El *tema* es el problema seleccionado o "todo el cluster" (el bridge le pasa estado, eventos, últimas líneas de log y el diagnóstico integrado). NUEVO CHAT borra la memoria. Lo que dice el modelo nunca se ejecuta solo.
 - **Salidas de comandos en el chat**: los comandos de lectura que sugiere Kubi se ejecutan y su salida se **adjunta** sola a la siguiente pregunta (etiqueta `[x]` para quitarla, botón "¿Qué significa esta salida?"). Cualquier salida de la terminal, también de comandos que escribas tú, trae el enlace **-> enviar esta salida a Kubi**.
-- El panel se **arrastra** por la barra de título, se **redimensiona** con la esquina ◢ y se **pliega** con `_` (o doble clic en el título).
+- El panel se **arrastra** por la barra de título, se **redimensiona** desde cualquier borde o esquina y se **pliega** con `_` (o doble clic en el título).
 - **AJUSTES**: motor (automático / Ollama / llama.cpp integrado / apagado), modelo, largo de las respuestas y estilo (preciso/creativo). Se guardan en `~/.kubecraft/assistant.json`.
 
 ### Motores de IA (todo local)
@@ -263,6 +277,7 @@ El juego ejecuta acciones **reales** con las credenciales de tu kubeconfig.
 | GET · POST | `/api/assistant` | estado de los motores, modelos, catálogo y descargas · `{"question","kind","ns","name","lang","diagnosis","history"}` → `{"ok","answer","model"}` |
 | POST | `/api/assistant/config` · `/api/assistant/download` | ajustes de Kubi · descargar `{"kind":"llamacpp"\|"gguf"\|"ollama","id"}` |
 | DELETE | `/api/assistant/model?id=` | borrar un modelo GGUF descargado |
+| GET · POST | `/api/manifest` | YAML de un objeto (`?kind=&ns=&name=`) · reemplazarlo `{"kind","ns","name","yaml","dry_run"}` |
 | GET | `/api/state` | Snapshot actual en JSON |
 | GET | `/api/logs?ns=&pod=&container=&tail=&previous=1` | Logs de un contenedor |
 | POST | `/api/kubectl` | `{"line": "get pods -A"}` → `{"ok", "exit_code", "output"}` (kubectl real con las restricciones de arriba) |

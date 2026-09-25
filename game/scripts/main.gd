@@ -42,6 +42,11 @@ var _kubi_count := 0
 var _kubi_t := 0.0
 var _kubi_seen: Entity        # last inspected entity Kubi commented on
 var _ghosts := {}             # visitor key -> VisitorGhost
+# Click-to-move
+var _path: Array[Vector3] = []
+var _path_stuck := 0.0
+var _path_prev := Vector3.ZERO
+var _click_marker: Node3D
 # Day/night cycle driven by the cluster clock
 var _env: Environment
 var _sun: DirectionalLight3D
@@ -442,9 +447,95 @@ func _screenshot_and_quit(path: String) -> void:
 	if "--build" in OS.get_cmdline_user_args():
 		hud.open_build()
 		await get_tree().create_timer(0.5).timeout
+	for x in OS.get_cmdline_user_args():
+		if x.begins_with("--edit="):
+			# Dev: --edit=Kind/ns/name[/focus], shots of the boot animation.
+			var p := x.substr(7).split("/")
+			hud.open_editor(p[0], p[1], p[2], p[3] if p.size() > 3 else "")
+			var base := ""
+			for y in OS.get_cmdline_user_args():
+				if y.begins_with("--shot="):
+					base = y.substr(7)
+			for t in [[0.5, "_rain"], [0.9, "_decode"], [2.0, "_edit"]]:
+				await get_tree().create_timer(t[0]).timeout
+				await RenderingServer.frame_post_draw
+				get_viewport().get_texture().get_image().save_png(base.replace(".png", t[1] + ".png"))
+			if "--edit-apply" in OS.get_cmdline_user_args():
+				var line := hud.editor._code.text.find("registry.invalid/fraud-ai:v9")
+				hud.editor._code.text = hud.editor._code.text.replace("registry.invalid/fraud-ai:v9", "nginx:1.27")
+				hud.editor._annotate()
+				hud.editor._submit(true)
+				await get_tree().create_timer(0.5).timeout
+				print("DRY: ", hud.editor._result.get_parsed_text())
+				hud.editor._submit(false)
+				await get_tree().create_timer(0.3).timeout
+				hud._confirm_cb.call()
+				hud._confirm_panel.visible = false
+				await get_tree().create_timer(0.5).timeout
+				print("APPLY: ", hud.editor._result.get_parsed_text(), " found=", line >= 0)
+				await get_tree().create_timer(4.0).timeout
+				print("PODS: ", K8s.state.pods.filter(func(q): return q.ns == "payments" and str(q.name).begins_with("fraud")).map(func(q): return q.status))
+	if "--click-test" in OS.get_cmdline_user_args():
+		var center := get_viewport().get_visible_rect().size * 0.5 * _ui
+		var gp := _ground_point(center)
+		print("GROUND under screen centre ", gp.round(), " player ", player.global_position.round(), " focus ", (player.global_position + _pan).round())
+		for lvl in ["plant", "power", "ns:shop"]:
+			if world.level != lvl:
+				_go_level(lvl)
+				await get_tree().create_timer(0.6).timeout
+			var goal: Vector3
+			if lvl == "plant":
+				goal = world.buildings["data"].door_position() + Vector3(0, 0, 1.0)
+			elif lvl == "power":
+				goal = world.islands["worker-c"].target
+			else:
+				goal = world.spawn + Vector3(-8, 0, -6)
+			goal = _standable_near(goal)
+			var t0 := Time.get_ticks_msec()
+			var cpath := _find_path(player.global_position, goal)
+			print("  pts ", cpath)
+			print("PATH %s: %d points in %d ms, start=%s goal=%s" % [lvl, cpath.size(), Time.get_ticks_msec() - t0, player.global_position.round(), goal.round()])
+			_path = cpath
+			_show_click_marker(goal)
+			var t1 := Time.get_ticks_msec()
+			for i in 900:
+				await get_tree().process_frame
+				if i == 20:
+					print("  running=", player.running)
+				if _path.is_empty():
+					break
+			print("  took %.1f s" % ((Time.get_ticks_msec() - t1) / 1000.0))
+			print("  ARRIVED %s dist=%.2f" % [lvl, Vector2(player.global_position.x - goal.x, player.global_position.z - goal.z).length()])
+		get_tree().quit()
+		return
 	if "--kubi" in OS.get_cmdline_user_args():
 		hud.toggle_kubi()
 		await get_tree().create_timer(1.0).timeout
+		if "--kubi-resize" in OS.get_cmdline_user_args():
+			var k: KubiPanel = hud.kubi
+			var before := k.size
+			var ev := InputEventMouseButton.new()
+			ev.button_index = MOUSE_BUTTON_LEFT
+			ev.pressed = true
+			ev.position = Vector2(k.size.x - 4, k.size.y * 0.5)
+			k._gui_input(ev)
+			var mv := InputEventMouseMotion.new()
+			mv.position = ev.position
+			mv.relative = Vector2(120, 0)
+			k._gui_input(mv)
+			ev = ev.duplicate()
+			ev.pressed = false
+			k._gui_input(ev)
+			ev = ev.duplicate()
+			ev.pressed = true
+			ev.position = Vector2(k.size.x * 0.5, 3)
+			k._gui_input(ev)
+			mv = mv.duplicate()
+			mv.relative = Vector2(0, -60)
+			k._gui_input(mv)
+			await get_tree().process_frame
+			await get_tree().process_frame
+			print("RESIZE before=", before, " after=", k.size, " pos=", k.position)
 		if "--kubi-attach" in OS.get_cmdline_user_args():
 			for d in Diagnose.problems(K8s.state):
 				if d.name.begins_with("giant"):
@@ -610,6 +701,7 @@ func _process(delta: float) -> void:
 	_auto_doors()
 	_update_zone()
 	_kubi_tick(delta)
+	_follow_path(delta)
 	var busy := hud.is_modal_open() or get_viewport().gui_get_focus_owner() is LineEdit
 	player.input_enabled = not busy
 	if _fpv and busy and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
@@ -885,6 +977,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				elif event.button_index == _press_button:
 					if not _dragging and _press_button == MOUSE_BUTTON_LEFT and not hud.is_modal_open():
 						hud.inspect(_hovered)
+						if Settings.click_to_move and not _fpv:
+							_click_move(event.position * _ui, _hovered)
 					_dragging = false
 					_press_button = 0
 			MOUSE_BUTTON_WHEEL_UP:
@@ -1472,6 +1566,16 @@ func _kubi_act(id: String, d: Dictionary) -> void:
 	for p in K8s.state.get("pods", []):
 		if p.ns == d.ns and p.name == d.name:
 			pod = p
+	if id.begins_with("edit:"):
+		var focus := id.substr(5)
+		var ok_kind: String = pod.get("owner_kind", "")
+		if d.kind == "Pod" and ok_kind in ["Deployment", "StatefulSet", "DaemonSet"]:
+			hud.open_editor(ok_kind, d.ns, pod.get("owner_name", ""), focus)
+		elif d.kind == "Node":
+			hud.open_editor("Node", "", d.name, "unschedulable")
+		else:
+			hud.open_editor(d.kind, d.ns, d.name, focus)
+		return
 	match id:
 		"goto":
 			if d.kind == "Node":
@@ -1591,3 +1695,174 @@ func _first_bad_pod() -> String:
 		if PodBot.categorize(p) == "crash":
 			return p.ns + "/" + p.name
 	return ""
+
+
+# ------------------------------------------------------------ click-to-move
+
+## Point of the walkable ground under the mouse (INF if none): the ray is
+## tested against every floor height, highest first (islands, bridges...).
+func _ground_point(mouse: Vector2) -> Vector3:
+	var cam := _active_cam()
+	var vp_mouse := mouse / _px
+	var from := cam.project_ray_origin(vp_mouse)
+	var dir := cam.project_ray_normal(vp_mouse)
+	if absf(dir.y) < 0.001:
+		return Vector3.INF
+	var hs := {0.0: true}
+	for h in world.walk_heights:
+		hs[snappedf(h, 0.01)] = true
+	var keys := hs.keys()
+	keys.sort()
+	keys.reverse()
+	for h in keys:
+		var t: float = (float(h) - from.y) / dir.y
+		if t < 0.0:
+			continue
+		var p := from + dir * t
+		var f := world.floor_y(Vector2(p.x, p.z))
+		if f != -INF and absf(f - float(h)) < 0.06:
+			return Vector3(p.x, f, p.z)
+	return Vector3.INF
+
+
+func _click_move(mouse: Vector2, target: Entity) -> void:
+	var goal := Vector3.INF
+	if target != null and not target.is_area():
+		goal = _standable_near(target.target + (player.global_position - target.target).normalized() * 1.2)
+	else:
+		goal = _ground_point(mouse)
+	if goal == Vector3.INF:
+		return
+	var path := _find_path(player.global_position, goal)
+	if path.is_empty():
+		hud.toast(tr("Can't walk there from here"), false)
+		return
+	_path = path
+	_path_stuck = 0.0
+	_show_click_marker(path[-1])
+
+
+## True if you can walk in a straight line from a to b (floor all along,
+## nothing solid, no step up higher than a stair).
+func _walkable_line(a: Vector3, b: Vector3) -> bool:
+	var d := Vector2(b.x - a.x, b.z - a.z)
+	var n := int(ceilf(d.length() / 0.25))
+	var prev := a.y
+	for i in range(1, n + 1):
+		var q := Vector2(a.x, a.z) + d * (float(i) / n)
+		var f := world.floor_y(q)
+		if f == -INF or f > prev + World.STEP or world._blocked(q, f):
+			return false
+		prev = f
+	return true
+
+
+## Path on a small grid around both points (A*); straight line if clear.
+func _find_path(from: Vector3, to: Vector3) -> Array[Vector3]:
+	var out: Array[Vector3] = []
+	if _walkable_line(from, to):
+		out.append(to)
+		return out
+	const C := 0.6
+	for margin in [8.0, 24.0]:
+		var lo := Vector2(minf(from.x, to.x), minf(from.z, to.z)) - Vector2(margin, margin)
+		var hi := Vector2(maxf(from.x, to.x), maxf(from.z, to.z)) + Vector2(margin, margin)
+		var w := int((hi.x - lo.x) / C) + 1
+		var h := int((hi.y - lo.y) / C) + 1
+		if w * h > 40000:
+			break
+		var g := AStarGrid2D.new()
+		g.region = Rect2i(0, 0, w, h)
+		g.cell_size = Vector2(C, C)
+		g.diagonal_mode = AStarGrid2D.DIAGONAL_MODE_ONLY_IF_NO_OBSTACLES
+		g.update()
+		var fy := PackedFloat32Array()
+		fy.resize(w * h)
+		for x in w:
+			for y in h:
+				var q := lo + Vector2(x, y) * C
+				var f := world.floor_y(q)
+				fy[y * w + x] = f
+				if f == -INF or world._blocked(q, f):
+					g.set_point_solid(Vector2i(x, y))
+		var a := Vector2i(roundi((from.x - lo.x) / C), roundi((from.z - lo.y) / C))
+		var b := Vector2i(roundi((to.x - lo.x) / C), roundi((to.z - lo.y) / C))
+		g.set_point_solid(a, false)
+		if g.is_point_solid(b):
+			continue
+		var ids := g.get_id_path(a, b)
+		if ids.is_empty():
+			continue
+		# Keep only the corners: skip points reachable in a straight line.
+		var pts: Array[Vector3] = []
+		for id in ids:
+			var y := fy[id.y * w + id.x]
+			pts.append(Vector3(lo.x + id.x * C, y if y != -INF else from.y, lo.y + id.y * C))
+		pts[-1] = to
+		var cur := from
+		var i := 0
+		while i < pts.size():
+			var j := pts.size() - 1
+			while j > i and not _walkable_line(cur, pts[j]):
+				j -= 1
+			out.append(pts[j])
+			cur = pts[j]
+			i = j + 1
+		return out
+	return out
+
+
+func _follow_path(delta: float) -> void:
+	if _path.is_empty():
+		player.auto_dir = Vector3.ZERO
+		return
+	if player.manual or _fpv or _warping or hud.is_modal_open():
+		_cancel_path()
+		return
+	var p := player.global_position
+	var nxt: Vector3 = _path[0]
+	var d := Vector3(nxt.x - p.x, 0, nxt.z - p.z)
+	if d.length() < 0.3:
+		_path.pop_front()
+		if _path.is_empty():
+			_cancel_path()
+		return
+	var left := d.length()
+	for i in range(1, _path.size()):
+		left += _path[i - 1].distance_to(_path[i])
+	player.auto_dir = d.normalized()
+	player.auto_run = left > 7.0
+	# Stuck against something: hop once, then give up.
+	if p.distance_to(_path_prev) < 0.5 * delta:
+		_path_stuck += delta
+		if _path_stuck > 0.5 and _path_stuck - delta <= 0.5:
+			player.jump()
+		elif _path_stuck > 1.4:
+			_cancel_path()
+	else:
+		_path_stuck = 0.0
+	_path_prev = p
+
+
+func _cancel_path() -> void:
+	if "--click-test" in OS.get_cmdline_user_args() and not _path.is_empty():
+		print("  CANCEL at ", player.global_position, " next ", _path[0], " stuck ", _path_stuck, " manual ", player.manual)
+	_path.clear()
+	player.auto_dir = Vector3.ZERO
+	if _click_marker:
+		_click_marker.visible = false
+
+
+func _show_click_marker(at: Vector3) -> void:
+	if _click_marker == null:
+		_click_marker = Node3D.new()
+		_vp.add_child(_click_marker)
+		for i in 8:
+			var a := TAU * i / 8.0
+			var m := Vox.box(_click_marker, Vector3(0.16, 0.06, 0.16), Vector3(cos(a), 0.04, sin(a)) * 0.45, Vox.GREEN, 3.0, false)
+			m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_click_marker.global_position = at
+	_click_marker.visible = true
+	_click_marker.scale = Vector3.ONE * 1.6
+	create_tween().tween_property(_click_marker, "scale", Vector3.ONE, 0.25).set_trans(Tween.TRANS_BACK)
+	world.poof(at + Vector3(0, 0.1, 0), Vox.GREEN)

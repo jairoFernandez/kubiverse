@@ -591,3 +591,114 @@ func _visitor_action(user: String) -> Dictionary:
 		"unknown":
 			return {"verb": "list", "resource": "secrets", "ns": ["payments", "kube-system", "default"].pick_random(), "name": "", "code": 403, "write": false}
 	return {"verb": ["get", "list"].pick_random(), "resource": ["pods", "nodes", "deployments"].pick_random(), "ns": "", "name": "", "code": 200, "write": false}
+
+
+# ------------------------------------------------------------ manifests
+
+## YAML of an object, like `kubectl get -o yaml` without the noise.
+func manifest(kind: String, ns: String, n: String) -> Dictionary:
+	match kind:
+		"Deployment", "StatefulSet", "DaemonSet":
+			var wl = workloads.get(ns + "/" + kind + "/" + n)
+			if wl == null:
+				return {"ok": false, "error": "%s %s not found" % [kind, n]}
+			var cpu := "64" if wl.behaviour == "unschedulable" else "100m"
+			var lines := ["apiVersion: apps/v1", "kind: " + kind, "metadata:", "  labels:", "    app: " + n,
+				"  name: " + n, "  namespace: " + ns, "spec:"]
+			if kind != "DaemonSet":
+				lines.append("  replicas: %d" % wl.desired)
+			lines.append_array(["  selector:", "    matchLabels:", "      app: " + n, "  template:", "    metadata:",
+				"      labels:", "        app: " + n, "    spec:", "      containers:"])
+			for c in wl.containers:
+				lines.append_array(["      - image: " + wl.image, "        name: " + c, "        resources:", "          requests:",
+					"            cpu: " + cpu, "            memory: 128Mi", "          limits:", "            memory: 256Mi"])
+			if wl.behaviour == "gpu":
+				lines.append_array(["      nodeSelector:", "        accelerator: gpu", "      tolerations:", "      - effect: NoSchedule",
+					"        key: gpu", "        operator: Equal", "        value: \"true\""])
+			return {"ok": true, "yaml": "\n".join(lines) + "\n"}
+		"Service":
+			var sv = services.get(ns + "/" + n)
+			if sv == null:
+				return {"ok": false, "error": "service %s not found" % n}
+			var lines := ["apiVersion: v1", "kind: Service", "metadata:", "  name: " + n, "  namespace: " + ns, "spec:",
+				"  clusterIP: " + sv.cluster_ip, "  ports:"]
+			for pt in sv.ports:
+				lines.append_array(["  - port: %s" % str(pt).get_slice("/", 0), "    protocol: " + str(pt).get_slice("/", 1),
+					"    targetPort: %s" % str(pt).get_slice("/", 0)])
+			lines.append_array(["  selector:", "    app: " + sv.app, "  type: " + sv.type])
+			return {"ok": true, "yaml": "\n".join(lines) + "\n"}
+		"Pod":
+			var p = pods.get(ns + "/" + n)
+			if p == null:
+				return {"ok": false, "error": "pod %s not found" % n}
+			var lines := ["apiVersion: v1", "kind: Pod", "metadata:", "  name: " + n, "  namespace: " + ns, "spec:", "  containers:"]
+			for i in p.containers.size():
+				lines.append_array(["  - image: " + p.images[i], "    name: " + p.containers[i]])
+			lines.append("  nodeName: " + p.node)
+			return {"ok": true, "yaml": "\n".join(lines) + "\n"}
+		"Node":
+			var nd = nodes.get(n)
+			if nd == null:
+				return {"ok": false, "error": "node %s not found" % n}
+			var lines := ["apiVersion: v1", "kind: Node", "metadata:", "  labels:", "    kubernetes.io/hostname: " + n]
+			if nd.get("gpu", false):
+				lines.append("    accelerator: gpu")
+			lines.append_array(["  name: " + n, "spec:", "  unschedulable: %s" % str(nd.unschedulable).to_lower()])
+			if nd.get("gpu", false):
+				lines.append_array(["  taints:", "  - effect: NoSchedule", "    key: gpu", "    value: \"true\""])
+			return {"ok": true, "yaml": "\n".join(lines) + "\n"}
+	return {"ok": false, "error": "%s can't be edited in demo mode" % kind}
+
+
+## Applies an edited manifest: the demo understands replicas, image, CPU
+## requests and unschedulable (fixing the image or the CPU fixes the pods).
+func apply_manifest(kind: String, ns: String, n: String, yaml: String, dry: bool) -> Dictionary:
+	var get_val := func(key: String) -> String:
+		var re := RegEx.new()
+		re.compile("(?m)^\\s*-?\\s*" + key + ":\\s*(.+)$")
+		var m := re.search(yaml)
+		return m.get_string(1).strip_edges().trim_prefix("\"").trim_suffix("\"") if m else ""
+	if get_val.call("kind") != kind or get_val.call("name") != n:
+		return {"ok": false, "error": "kind and metadata.name must stay %s %s" % [kind, n]}
+	var label := "%s/%s" % [kind.to_lower(), n]
+	match kind:
+		"Deployment", "StatefulSet", "DaemonSet":
+			var wkey := ns + "/" + kind + "/" + n
+			var wl = workloads.get(wkey)
+			if wl == null:
+				return {"ok": false, "error": "not found"}
+			var reps: String = get_val.call("replicas")
+			if reps != "" and not reps.is_valid_int():
+				return {"ok": false, "error": "spec.replicas: Invalid value: \"%s\": must be an integer" % reps}
+			var image: String = get_val.call("image")
+			if image == "":
+				return {"ok": false, "error": "spec.template.spec.containers[0].image: Required value"}
+			if dry:
+				return {"ok": true, "message": label + " (server dry run)"}
+			var changed := false
+			if reps != "" and kind != "DaemonSet":
+				wl.desired = int(reps)
+			if image != wl.image:
+				wl.image = image
+				changed = true
+				if wl.behaviour == "pullfail" and not image.contains("invalid"):
+					wl.behaviour = "ok"
+			var cpu: String = get_val.call("cpu")
+			if wl.behaviour == "unschedulable" and cpu != "" and cpu != "64":
+				wl.behaviour = "ok"
+				changed = true
+			if changed:
+				wl.gen += 1
+				for p in pods.values():
+					if p._wl == wkey:
+						_kill(p)
+			_ev(ns, kind, n, "Replaced", "%s replaced from the in-game editor" % label, "Normal")
+			_dirty = true
+			return {"ok": true, "message": label + " replaced"}
+		"Node":
+			if dry:
+				return {"ok": true, "message": label + " (server dry run)"}
+			nodes[n].unschedulable = get_val.call("unschedulable") == "true"
+			_dirty = true
+			return {"ok": true, "message": label + " replaced"}
+	return {"ok": dry, "message": label + " (server dry run)", "error": "the demo can't apply %s changes" % kind}

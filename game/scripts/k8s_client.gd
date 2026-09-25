@@ -245,6 +245,34 @@ func ask_assistant(req: Dictionary, cb: Callable) -> void:
 			cb.call(false, str(data.get("error", "unknown error"))), 150.0)
 
 
+## YAML of an object for the in-game editor. cb(ok, yaml_or_error, readonly)
+func get_manifest(kind: String, ns: String, name: String, cb: Callable) -> void:
+	if mode == Mode.DEMO:
+		var r: Dictionary = _mock.manifest(kind, ns, name)
+		cb.call(r.ok, r.get("yaml", r.get("error", "")), false)
+		return
+	var path := "/api/manifest?kind=%s&ns=%s&name=%s" % [kind.uri_encode(), ns.uri_encode(), name.uri_encode()] + _q(false)
+	_http(HTTPClient.METHOD_GET, path, "", func(ok: bool, data):
+		if not ok:
+			cb.call(false, str(data), true)
+		else:
+			cb.call(bool(data.get("ok", false)), str(data.get("yaml", data.get("error", ""))), bool(data.get("readonly", false))))
+
+
+## Replaces an object with edited YAML (dry = server-side dry run). cb(ok, message)
+func put_manifest(kind: String, ns: String, name: String, yaml: String, dry: bool, cb: Callable) -> void:
+	if mode == Mode.DEMO:
+		var r: Dictionary = _mock.apply_manifest(kind, ns, name, yaml, dry)
+		cb.call(r.ok, r.get("message", "") if r.ok else r.get("error", ""))
+		return
+	var body := JSON.stringify({"kind": kind, "ns": ns, "name": name, "yaml": yaml, "dry_run": dry})
+	_http(HTTPClient.METHOD_POST, "/api/manifest" + _q(), body, func(ok: bool, data):
+		if not ok:
+			cb.call(false, str(data))
+		else:
+			cb.call(bool(data.get("ok", false)), str(data.get("output", data.get("error", "")))))
+
+
 ## cb(ok: bool, text: String)
 func fetch_logs(ns: String, pod: String, container: String, previous: bool, cb: Callable) -> void:
 	if mode == Mode.DEMO:
