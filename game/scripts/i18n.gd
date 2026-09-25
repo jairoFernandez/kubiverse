@@ -9,6 +9,15 @@ signal lang_changed
 const LANGS := {"en": "English", "es": "Español"}
 
 const ES := {
+	"The bridge refused: %s": "El bridge lo rechazó: %s",
+	"CHANGE LOG (this bridge)": "REGISTRO DE CAMBIOS (este bridge)",
+	"Change log (what was changed)": "Registro de cambios (qué se cambió)",
+	"Saved on the bridge machine in": "Guardado en la máquina del bridge en",
+	"Nothing changed through this bridge yet.": "Todavía no se ha cambiado nada a través de este bridge.",
+	"unmarked": "sin marcar",
+	"confirmed": "confirmado",
+	"from": "desde",
+	"This cluster is marked PRODUCTION by the bridge (--production): it can't be changed from the game.": "Este cluster está marcado como PRODUCCIÓN por el bridge (--production): no se puede cambiar desde el juego.",
 	"demo: built-in guide only (start a bridge on this machine to use AI)": "demo: solo la guía integrada (arranca un bridge en esta máquina para usar la IA)",
 	"Needs a bridge: start one on this machine (the command is on the start screen) and Kubi's AI works in the demo too.": "Necesita un bridge: arranca uno en esta máquina (el comando está en la pantalla de inicio) y la IA de Kubi funciona también en la demo.",
 	"Factory": "Fábrica",

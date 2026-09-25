@@ -38,6 +38,14 @@ func (b *Bridge) handleScenario(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "bridge is in read-only mode"})
 		return
 	}
+	if b.pol != nil {
+		if kind, _ := b.pol.kind(b.contextName); kind != "sandbox" {
+			err := errors.New("the sample scenario is only deployed on clusters marked sandbox")
+			b.audit(r, "scenario", req.Name, "apply", err)
+			writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+	}
 	manifest, err := scenarios.ReadFile("scenarios/" + req.Name + ".yaml")
 	if err != nil || req.Name == "" {
 		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "unknown scenario"})
@@ -70,5 +78,6 @@ func (b *Bridge) handleScenario(w http.ResponseWriter, r *http.Request) {
 		out.WriteString(runErr.Error())
 	}
 	log.Printf("scenario %s (remove=%v) -> %v", req.Name, req.Remove, runErr)
+	b.audit(r, "scenario", req.Name, map[bool]string{true: "delete", false: "apply"}[req.Remove], runErr)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": runErr == nil, "output": out.String()})
 }

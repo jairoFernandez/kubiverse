@@ -119,6 +119,7 @@ func (b *Bridge) handleForwards(w http.ResponseWriter, r *http.Request) {
 		f.cancel()
 		f.ln.Close()
 		log.Printf("port-forward %s closed", f.info.URL)
+		b.audit(r, "portforward", f.info.NS+"/"+f.info.Name, "close "+f.info.URL, nil)
 		b.broadcast(b.forwardsMessage())
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	case http.MethodPost:
@@ -128,6 +129,7 @@ func (b *Bridge) handleForwards(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f, err := b.startForward(req)
+		b.audit(r, "portforward", req.NS+"/"+req.Name, fmt.Sprintf("open %s port %d", req.Kind, req.Port), err)
 		if err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 			return

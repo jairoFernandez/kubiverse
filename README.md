@@ -405,6 +405,7 @@ There are two ways to play in the browser:
 --llm-url URL        Ollama for Kubi (defaults to http://127.0.0.1:11434; "" disables it; warns if not local)
 --llm-model NAME     Ollama model (auto = best locally installed, never ":cloud")
 --audit-dir DIR      audit logs for the watchtower (defaults to ~/.kubecraft/audit)
+--production CTXS    comma-separated contexts that are PRODUCTION for everyone (changes need a confirmation)
 --lan                local network (phones): self-signed HTTPS + all interfaces + random token + prints the URLs
 ```
 
@@ -415,6 +416,9 @@ Web build URL parameters: `?bridge=http://host:8088`, `?token=...`, `?demo=1`.
 The game performs **real** actions with your kubeconfig's credentials.
 
 - The bridge only listens on `127.0.0.1` and **rejects browser requests from other origins** and non-localhost hosts (so a random website you visit can't delete your pods via `localhost:8088`, and DNS rebinding is blocked).
+- **Production is enforced by the bridge, not only by the game.** Each context is marked PRODUCTION or SANDBOX (asked the first time a cluster connects, shared by every client of the bridge in `~/.kubecraft/cluster-kinds.json`; an unmarked context counts as production). On production, every change (`/api/action`, applying YAML, kubectl commands that modify, the sample scenario never) is refused unless it carries `X-Kubiverse-Confirm: <context>`, which the game sends only after you say yes in a dialog that says PRODUCTION. `--production ctx1,ctx2` marks contexts as production for everyone; the game can't change them.
+- **Audit log**: every change made through the bridge (and every refused one) goes to `~/.kubecraft/actions.log` (JSON lines: time, context, cluster kind, client IP, what, target, command, result, confirmed). VIEW → Change log shows it; `GET /api/audit?limit=&context=`.
+- **Nothing secret reaches the AI**: tokens, passwords, API keys, AWS keys, JWTs, private keys and credentials in URLs are redacted from the context, logs, command outputs and chat before they go to the model (and from the audit log).
 - For important clusters use `--readonly`, or a kubeconfig/ServiceAccount with limited RBAC (`get/list/watch` + only the verbs you want to allow: `pods/delete`, `deployments/scale`, `nodes/patch`...).
 - If you expose the bridge beyond localhost (`--addr 0.0.0.0:8088`), **always** use `--token` and `--allow-origin`.
 
@@ -433,6 +437,8 @@ The game performs **real** actions with your kubeconfig's credentials.
 | POST | `/api/scenario` | `{"name": "complex", "remove": false}`: applies (or deletes) a bundled sample scenario with kubectl |
 | GET | `/api/pod?ns=&name=` | everything inside a pod: containers and init containers (state, resources, usage, probes, ports, mounts), volumes and recent events |
 | GET · POST · DELETE | `/api/portforward` | list · open `{"kind": "pod"\|"service", "ns", "name", "port", "local_port"}` · close `?id=`. Traffic counters arrive on the WebSocket as `{"type":"forwards"}` every second |
+| GET · POST | `/api/kind` | `?context=` → `{kind, locked}` · `{"context","kind":"prod"\|"sandbox"}` marks it (refused for `--production` contexts) |
+| GET | `/api/audit?limit=&context=` | the change log (newest first) |
 | POST | `/api/action` | `{"action": "delete_pod" \| "scale" \| "restart" \| "cordon" \| "uncordon" \| "create_deployment" \| "delete_workload", "kind", "ns", "name", "replicas", "image", "service"}` |
 
 ## Layout

@@ -161,17 +161,18 @@ func answerAssistant(ctx context.Context, w http.ResponseWriter, req assistantRe
 			ctxText += fmt.Sprintf("\n$ %s\n%s\n", clip(a.Cmd, 200), out)
 		}
 	}
-	msgs = append(msgs, chatMsg{Role: "system", Content: ctxText})
+	// Credentials never leave for the model (logs and outputs often carry them).
+	msgs = append(msgs, chatMsg{Role: "system", Content: redact(ctxText)})
 	hist := req.History
 	if len(hist) > 10 {
 		hist = hist[len(hist)-10:]
 	}
 	for _, m := range hist {
 		if m.Role == "user" || m.Role == "assistant" {
-			msgs = append(msgs, chatMsg{Role: m.Role, Content: clip(m.Content, 1500)})
+			msgs = append(msgs, chatMsg{Role: m.Role, Content: redact(clip(m.Content, 1500))})
 		}
 	}
-	msgs = append(msgs, chatMsg{Role: "user", Content: q})
+	msgs = append(msgs, chatMsg{Role: "user", Content: redact(q)})
 	answer, model, err := ai.chat(ctx, msgs)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})

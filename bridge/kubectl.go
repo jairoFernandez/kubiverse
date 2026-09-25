@@ -156,6 +156,16 @@ func (b *Bridge) handleKubectl(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "output": "error: " + err.Error()})
 		return
 	}
+	// Commands that change the cluster: production needs the confirmation,
+	// and every one of them goes to the audit log.
+	mutating := validateArgs(args, true) != nil
+	if mutating {
+		if perr := b.pol.check(r, b.contextName); perr != nil {
+			b.audit(r, "kubectl", strings.Join(args, " "), "kubectl "+strings.Join(args, " "), perr)
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "output": "error: " + perr.Error()})
+			return
+		}
+	}
 	bin, err := exec.LookPath("kubectl")
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "output": "error: kubectl is not installed on the bridge host"})
@@ -182,6 +192,13 @@ func (b *Bridge) handleKubectl(w http.ResponseWriter, r *http.Request) {
 		out.WriteString(runErr.Error())
 	}
 	log.Printf("terminal: kubectl %s -> exit %d", strings.Join(args, " "), code)
+	if mutating {
+		var aerr error
+		if code != 0 {
+			aerr = fmt.Errorf("exit %d: %s", code, clip(out.String(), 200))
+		}
+		b.audit(r, "kubectl", strings.Join(args, " "), "kubectl "+strings.Join(args, " "), aerr)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": code == 0, "exit_code": code, "output": out.String()})
 }
 

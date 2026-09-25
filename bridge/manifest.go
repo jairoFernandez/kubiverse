@@ -137,6 +137,13 @@ func (b *Bridge) handleManifestPut(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "the bridge is read-only"})
 		return
 	}
+	if !req.DryRun {
+		if err := b.pol.check(r, b.contextName); err != nil {
+			b.audit(r, "manifest", req.Kind+" "+req.NS+"/"+req.Name, "replace", err)
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+	}
 	kind, ns, err := manifestTarget(req.Kind, req.NS, req.Name)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
@@ -157,6 +164,13 @@ func (b *Bridge) handleManifestPut(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := b.kubectlRun(r.Context(), js, args...)
 	msg := strings.TrimSpace(string(out))
+	if !req.DryRun {
+		var aerr error
+		if err != nil {
+			aerr = errors.New(msg)
+		}
+		b.audit(r, "manifest", req.Kind+" "+req.NS+"/"+req.Name, "replace (in-game YAML editor)", aerr)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": msg})
 		return

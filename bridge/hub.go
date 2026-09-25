@@ -28,6 +28,7 @@ type Hub struct {
 	defaultCtx string
 	readOnly   bool
 	token      string
+	pol        *policy
 
 	mu       sync.Mutex
 	clusters map[string]*Bridge
@@ -192,6 +193,7 @@ func (h *Hub) start(name string) (*Bridge, error) {
 	b, err := startBridge(h.root, cc, name, kubectlPath, h.readOnly)
 	if b != nil {
 		b.kubectlContext = ref.ctx
+		b.pol = h.pol
 	}
 	return b, err
 }

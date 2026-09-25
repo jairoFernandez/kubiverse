@@ -86,6 +86,8 @@ var _view_fastday: CheckBox
 var clock_text := ""
 var weather_why := ""   # what the weather means (tooltip of the clock)
 var _look_btn: Button
+var _audit_panel: PanelContainer   # what changed through the bridge
+var _audit_text: RichTextLabel
 var _top_bar: PanelContainer
 var _level_strip: PanelContainer
 var _fade: ColorRect
@@ -279,6 +281,7 @@ func _ready() -> void:
 	K8s.connection_changed.connect(_on_connection)
 	K8s.state_updated.connect(_on_state)
 	K8s.cluster_kind_needed.connect(ask_cluster_kind)
+	K8s.kind_refused.connect(func(msg: String): toast(tr("The bridge refused: %s") % msg, false))
 	K8s.cluster_kind_changed.connect(_on_kind_changed)
 	K8s.prod_confirm_requested.connect(func(req: Dictionary):
 		confirm(tr("This changes a PRODUCTION cluster: %s") % Kubectl.for_action(req), func(): K8s.action(req), Kubectl.for_action(req)))
@@ -995,6 +998,9 @@ func _build_game_ui() -> void:
 	wrow.add_child(city)
 	vv.add_child(wrow)
 	vv.add_child(_button("Recenter camera  [HOME]", func(): recenter_requested.emit()))
+	vv.add_child(_button("Change log (what was changed)", func():
+		_view_panel.visible = false
+		open_audit()))
 	vv.add_child(_button("Mission log (all missions)", func():
 		_view_panel.visible = false
 		open_mission_log()))
@@ -1782,7 +1788,7 @@ func close_top() -> bool:
 
 
 func _anything_to_close() -> bool:
-	for p in [_confirm_panel, _pf_panel, _build_panel, _guide_panel, _log_panel, _map_panel, _logs_panel, _view_panel, _vol_panel, _alarm_panel,
+	for p in [_confirm_panel, _pf_panel, _build_panel, _guide_panel, _log_panel, _audit_panel, _map_panel, _logs_panel, _view_panel, _vol_panel, _alarm_panel,
 			_legend, kubi, watch, _menu_panel, stats, _mission_panel, _inspector]:
 		if p.visible:
 			return true
@@ -3028,6 +3034,25 @@ func _build_modals() -> void:
 	_log_btns.add_theme_constant_override("separation", 10)
 	logr.add_child(_log_btns)
 
+	# Change log: everything clients changed through this bridge.
+	_audit_panel = _modal(60)
+	_audit_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	var av := VBoxContainer.new()
+	av.add_theme_constant_override("separation", 10)
+	_audit_panel.add_child(av)
+	var ah := HBoxContainer.new()
+	av.add_child(ah)
+	var at := _label("CHANGE LOG (this bridge)", 30, Vox.YELLOW)
+	at.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ah.add_child(at)
+	ah.add_child(_button("REFRESH", open_audit))
+	ah.add_child(_button("CLOSE [ESC]", func(): _audit_panel.visible = false))
+	_audit_text = _rich(21)
+	_audit_text.fit_content = false
+	_audit_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_audit_text.selection_enabled = true
+	av.add_child(_audit_text)
+
 	# Control-plane guide
 	_guide_panel = _modal(60)
 	_guide_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -3204,10 +3229,38 @@ func _fw_status(f: Dictionary) -> String:
 	return "[color=#ff004d]● %s[/color]" % tr("lost")
 
 
+## Change log: every change made through this bridge, newest first (who,
+## from where, what, on which kind of cluster, confirmed or refused).
+func open_audit() -> void:
+	_audit_panel.visible = true
+	_audit_panel.move_to_front()
+	_audit_text.text = tr("loading...")
+	K8s.audit(func(ok: bool, data):
+		if not ok:
+			_audit_text.text = "[color=#83769c]%s[/color]" % _esc(str(data))
+			return
+		var rows := ["[color=#83769c]%s %s[/color]\n" % [tr("Saved on the bridge machine in"), _esc(str(data.get("file", "")))]]
+		var entries: Array = data.get("entries", []) if data.get("entries") != null else []
+		if entries.is_empty():
+			rows.append("[color=#83769c]%s[/color]" % tr("Nothing changed through this bridge yet."))
+		for e in entries:
+			var col := "#00e436" if e.get("ok", false) else "#ff004d"
+			var kind: String = {"prod": "[color=#ff004d]PROD[/color]", "sandbox": "[color=#00e436]SANDBOX[/color]"}.get(str(e.get("cluster_kind", "")), "[color=#ffa300]%s[/color]" % tr("unmarked"))
+			var conf := "  [color=#ffec27]%s[/color]" % tr("confirmed") if e.get("confirmed", false) else ""
+			rows.append("[color=#83769c]%s[/color]  %s  [color=#29adff]%s[/color]  [color=%s]%s %s[/color]  [color=#c2c3c7]%s[/color]%s  [color=#83769c]%s %s[/color]%s" % [
+				str(e.get("time", "")).replace("T", " ").left(19), kind, _esc(str(e.get("context", ""))), col, e.get("what", ""), _esc(str(e.get("target", ""))),
+				_esc(str(e.get("detail", ""))), conf, tr("from"), _esc(str(e.get("client", ""))),
+				("\n      [color=#ff004d]%s[/color]" % _esc(str(e.error))) if str(e.get("error", "")) != "" else ""])
+		_audit_text.text = "\n".join(rows))
+
+
 ## Prod or sandbox? (first connection to a cluster, or the top-bar badge)
 func ask_cluster_kind() -> void:
 	if K8s.mode != K8s.Mode.BRIDGE:
 		toast(tr("The demo cluster is always a sandbox."), true)
+		return
+	if K8s.kind_locked:
+		toast(tr("This cluster is marked PRODUCTION by the bridge (--production): it can't be changed from the game."), false)
 		return
 	_kind_panel.visible = true
 	_kind_panel.move_to_front()
@@ -3476,7 +3529,7 @@ func _layout() -> void:
 			var ps: Vector2 = p.get_combined_minimum_size().min(full - Vector2(20, 20))
 			p.size = ps
 			p.position = ((full - ps) * 0.5).floor()
-	for p in [_logs_panel, _map_panel, _guide_panel, _log_panel]:
+	for p in [_logs_panel, _map_panel, _guide_panel, _log_panel, _audit_panel]:
 		var m: float = p.get_meta("margin")
 		p.offset_left = m
 		p.offset_top = m

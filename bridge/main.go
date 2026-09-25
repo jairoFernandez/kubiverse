@@ -50,6 +50,7 @@ type Bridge struct {
 	ctrUsage       map[string]map[string]Usage // "ns/pod" -> container -> usage
 	restCfg        *rest.Config // for port-forwards (SPDY)
 	fw             forwards
+	pol            *policy // cluster kinds (prod/sandbox) + audit log, shared by the hub
 
 	nodeLister corelisters.NodeLister
 	nsLister   corelisters.NamespaceLister
@@ -90,6 +91,7 @@ func main() {
 		llmModel   = flag.String("llm-model", llm.Model, "Ollama model for the in-game assistant (auto = best installed local model)")
 		audit      = flag.String("audit-dir", auditDir, "directory with API server audit logs (<dir>/<context>/**/audit.log) for WATCHTOWER mode")
 	)
+	production := flag.String("production", "", "comma-separated contexts that are PRODUCTION for everyone: changes need a confirmation and the game can't mark them sandbox")
 	lan := flag.Bool("lan", false, "serve on the local network (phones/tablets): listens on all interfaces, requires a token (random if not given) and prints the URLs to open")
 	flag.Parse()
 	var lanURLs []string
@@ -108,6 +110,7 @@ func main() {
 	defer stop()
 
 	hub := newHub(ctx, *kubeconfig, *kubectx, *dataDir, *readOnly, *token)
+	hub.pol = newPolicy(filepath.Dir(*dataDir), strings.Split(*production, ","))
 	ai.init(ctx, filepath.Dir(*dataDir))
 	log.Printf("default context %q, extra kubeconfigs in %s", hub.defaultCtx, hub.dir)
 	// Warm up the default cluster so the first client connects instantly.
@@ -128,6 +131,8 @@ func main() {
 	mux.HandleFunc("POST /api/action", hub.cluster((*Bridge).handleAction))
 	mux.HandleFunc("POST /api/kubectl", hub.cluster((*Bridge).handleKubectl))
 	mux.HandleFunc("POST /api/scenario", hub.cluster((*Bridge).handleScenario))
+	mux.HandleFunc("/api/kind", hub.auth(hub.handleKind))
+	mux.HandleFunc("GET /api/audit", hub.auth(hub.handleAudit))
 	mux.HandleFunc("/api/portforward", hub.cluster((*Bridge).handleForwards))
 	mux.HandleFunc("GET /api/pod", hub.cluster((*Bridge).handlePod))
 	mux.HandleFunc("GET /api/manifest", hub.cluster((*Bridge).handleManifestGet))

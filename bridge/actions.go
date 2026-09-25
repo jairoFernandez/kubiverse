@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -41,10 +42,17 @@ func (b *Bridge) handleAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "bridge is in read-only mode"})
 		return
 	}
+	target := strings.Trim(req.Kind+" "+req.NS+"/"+req.Name, " /")
+	if err := b.pol.check(r, b.contextName); err != nil {
+		b.audit(r, "action", target, req.Action, err)
+		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	msg, err := b.doAction(ctx, req)
 	log.Printf("action %s %s %s/%s -> %v %s", req.Action, req.Kind, req.NS, req.Name, err, msg)
+	b.audit(r, "action", target, req.Action, err)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return

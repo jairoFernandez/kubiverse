@@ -11,6 +11,7 @@ signal watch_updated(data: Dictionary)   # WATCHTOWER: visitors + recent actions
 signal cluster_kind_needed               # a cluster seen for the first time: ask prod or sandbox
 signal cluster_kind_changed(kind: String)
 signal prod_confirm_requested(req: Dictionary)  # a change on a production cluster needs a yes
+signal kind_refused(message: String)     # the bridge didn't accept a kind change
 signal forwards_updated(list: Array)    # port-forwards open on the bridge (with traffic counters)
 
 enum Mode { OFFLINE, BRIDGE, DEMO }
@@ -28,6 +29,8 @@ var cluster_kind := ""
 var _kind_key := ""
 ## Set while a confirmed change runs, so the production guard lets it through.
 var prod_ok := false
+## The bridge marked this context PRODUCTION (--production): not changeable.
+var kind_locked := false
 
 ## Port-forwards: [{id, kind, ns, name, port, pod, target, local, url,
 ## bytes_in, bytes_out, conns, total, status, error}]
@@ -264,21 +267,64 @@ func _resolve_kind() -> void:
 	if key == _kind_key:
 		return
 	_kind_key = key
+	kind_locked = false
 	if mode == Mode.DEMO:
 		cluster_kind = "sandbox"
-	else:
-		cluster_kind = str(Settings.cluster_kinds.get(key, ""))
-	cluster_kind_changed.emit(cluster_kind)
-	if cluster_kind == "":
-		cluster_kind_needed.emit()
+		cluster_kind_changed.emit(cluster_kind)
+		return
+	# The bridge keeps the kind for everyone who uses it (and enforces it);
+	# the local copy only answers until it replies.
+	cluster_kind = str(Settings.cluster_kinds.get(key, ""))
+	if cluster_kind != "":
+		cluster_kind_changed.emit(cluster_kind)
+	var ctx := str(state.get("context", context))
+	_http(HTTPClient.METHOD_GET, "/api/kind?context=" + ctx.uri_encode() + _q(false), "", func(ok: bool, data):
+		if kind_key() != key:
+			return
+		var remote := str(data.get("kind", "")) if ok and typeof(data) == TYPE_DICTIONARY else ""
+		kind_locked = ok and typeof(data) == TYPE_DICTIONARY and bool(data.get("locked", false))
+		if remote != "":
+			if remote != cluster_kind:
+				cluster_kind = remote
+				Settings.cluster_kinds[key] = remote
+				Settings.save()
+				cluster_kind_changed.emit(remote)
+		elif cluster_kind != "":
+			_post_kind(cluster_kind)  # tell a bridge that didn't know it yet
+		else:
+			cluster_kind_changed.emit("")
+			cluster_kind_needed.emit())
 
 
 func set_cluster_kind(k: String) -> void:
+	if kind_locked and k != "prod":
+		kind_refused.emit("this cluster is marked PRODUCTION by the bridge (--production): it can't be changed from the game")
+		return
 	cluster_kind = k
 	if mode != Mode.DEMO:
 		Settings.cluster_kinds[kind_key()] = k
 		Settings.save()
+		_post_kind(k)
 	cluster_kind_changed.emit(k)
+
+
+func _post_kind(k: String) -> void:
+	var ctx := str(state.get("context", context))
+	_http(HTTPClient.METHOD_POST, "/api/kind" + _q(), JSON.stringify({"context": ctx, "kind": k}), func(ok: bool, data):
+		if ok and typeof(data) == TYPE_DICTIONARY and not data.get("ok", false):
+			kind_refused.emit(str(data.get("error", ""))))
+
+
+## What changed through the bridge (audit log). cb(ok, entries)
+func audit(cb: Callable, limit := 100) -> void:
+	if mode != Mode.BRIDGE:
+		cb.call(false, "the demo has no audit log (it changes nothing real)")
+		return
+	_http(HTTPClient.METHOD_GET, "/api/audit?limit=%d" % limit + _q(false), "", func(ok: bool, data):
+		if ok and typeof(data) == TYPE_DICTIONARY:
+			cb.call(true, data)
+		else:
+			cb.call(false, str(data)))
 
 
 func is_prod() -> bool:
@@ -567,6 +613,9 @@ func _http_to(url: String, tok: String, method: int, path: String, body: String,
 	var headers := PackedStringArray(["Content-Type: application/json"])
 	if tok != "":
 		headers.append("X-Bridge-Token: " + tok)
+	# The player said yes in the PRODUCTION dialog: the bridge checks this.
+	if prod_ok and mode == Mode.BRIDGE and str(state.get("context", "")) != "":
+		headers.append("X-Kubiverse-Confirm: " + str(state.context))
 	var err := req.request(url + path, headers, method, body)
 	if err != OK:
 		req.queue_free()
