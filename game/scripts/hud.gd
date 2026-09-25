@@ -724,20 +724,41 @@ func _pick_kubeconfig_web() -> void:
 	})()""", true)
 
 
+## The OS file picker, called straight on the DisplayServer: a FileDialog node
+## freed from its own native callback crashed the macOS build.
 func _pick_kubeconfig_file() -> void:
+	var dir := OS.get_environment("HOME").path_join(".kube")
+	if not DirAccess.dir_exists_absolute(dir):
+		dir = OS.get_environment("HOME")
+	if DisplayServer.has_feature(DisplayServer.FEATURE_NATIVE_DIALOG_FILE):
+		DisplayServer.file_dialog_show(tr("Choose a kubeconfig"), dir, "", false,
+			DisplayServer.FILE_DIALOG_MODE_OPEN_FILE, PackedStringArray(),
+			func(ok: bool, paths: PackedStringArray, f: int): _on_kubeconfig_picked.call_deferred(ok, paths, f))
+		return
 	var fd := FileDialog.new()
 	fd.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	fd.access = FileDialog.ACCESS_FILESYSTEM
-	fd.use_native_dialog = true
-	fd.current_dir = OS.get_environment("HOME") + "/.kube"
-	fd.file_selected.connect(func(path: String):
-		_kc_text.text = FileAccess.get_file_as_string(path)
-		if _kc_name.text == "":
-			_kc_name.text = path.get_file().get_basename().replace(" ", "-")
-		fd.queue_free())
-	fd.canceled.connect(fd.queue_free)
+	fd.current_dir = dir
+	fd.file_selected.connect(func(path: String): _on_kubeconfig_picked(true, PackedStringArray([path]), 0))
+	fd.visibility_changed.connect(func():
+		if not fd.visible:
+			fd.queue_free.call_deferred())
 	add_child(fd)
 	fd.popup_centered(Vector2i(900, 600))
+
+
+func _on_kubeconfig_picked(ok: bool, paths: PackedStringArray, _filter: int) -> void:
+	if not ok or paths.is_empty():
+		return
+	var path := paths[0]
+	var text := FileAccess.get_file_as_string(path)
+	if text == "":
+		_status(tr("Could not read %s") % path, Vox.RED)
+		return
+	_kc_text.text = text
+	if _kc_name.text == "":
+		_kc_name.text = path.get_file().get_basename().replace(" ", "-")
+	_status(tr("File loaded: %s. Now press ADD CLUSTER.") % path.get_file(), Vox.GREEN)
 
 
 func show_connect(v: bool) -> void:
@@ -826,7 +847,7 @@ func _build_game_ui() -> void:
 	volv.add_child(_volume_row("Music", "music_volume"))
 	volv.add_child(_volume_row("Effects", "sfx_volume"))
 	_vol_mute = _check("Mute everything", func():
-		Settings.muted = not Settings.muted
+		Settings.muted = _vol_mute.button_pressed
 		Settings.save()
 		_sync_view())
 	volv.add_child(_vol_mute)

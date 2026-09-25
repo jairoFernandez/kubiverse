@@ -490,6 +490,8 @@ const ES := {
 	"Cluster %s added. Connecting...": "Cluster %s añadido. Conectando...",
 	"File loaded: %s. Now press ADD CLUSTER.": "Archivo cargado: %s. Ahora pulsa AÑADIR CLUSTER.",
 	"ADD CLUSTER": "AÑADIR CLUSTER",
+	"Choose a kubeconfig": "Elige un kubeconfig",
+	"Could not read %s": "No se pudo leer %s",
 	"Drag to move, double-click to dock": "Arrastra para mover, doble clic para devolverla a su sitio",
 	"TO TERMINAL": "A LA TERMINAL",
 	"Complete the <...> parts and press Enter": "Completa las partes <...> y pulsa Enter",

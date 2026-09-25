@@ -7,7 +7,7 @@ signal changed
 const PATH := "user://settings.cfg"
 const UI_SCALES := [1.0, 1.25, 1.5, 1.75, 2.0, 2.5]
 # Bump when a default changes and saved settings should pick it up once.
-const VERSION := 2
+const VERSION := 3
 
 var ui_scale := 1.0
 var lines_all := false
@@ -57,10 +57,17 @@ func _ready() -> void:
 		touch = cf.get_value("controls", "touch", touch)
 		show_finished = cf.get_value("ui", "show_finished", show_finished)
 		intro = cf.get_value("ui", "intro", intro)
-		if int(cf.get_value("meta", "version", 1)) < 2:
+		var version := int(cf.get_value("meta", "version", 1))
+		if version < 2:
 			# v2: click-to-move on and 100% text by default for everyone.
 			click_to_move = true
+		if version < 3:
+			# v3: native builds now size the UI for big 1x screens too, so a
+			# text size raised to compensate would be huge; and sound back on
+			# (the macOS build could end up muted).
 			ui_scale = 1.0
+			muted = false
+		if version < VERSION:
 			save()
 	apply_audio()
 
@@ -115,9 +122,15 @@ func step_scale(dir: int) -> void:
 	save()
 
 
-## Physical pixels per logical pixel (2 on Retina / HiDPI browsers).
+## Physical pixels per logical pixel (2 on Retina / HiDPI browsers). Natively
+## also big screens at 1x (a 1440p ultrawide, 4K "more space") count as dense,
+## so the world and the UI look the same size as on a ~1100 px tall screen.
 func dpi() -> float:
-	return maxf(1.0, DisplayServer.screen_get_scale())
+	var s := maxf(1.0, DisplayServer.screen_get_scale())
+	if OS.has_feature("web") or OS.has_feature("mobile"):
+		return s
+	var screen := DisplayServer.window_get_current_screen()
+	return clampf(maxf(s, DisplayServer.screen_get_size(screen).y / 1100.0), 1.0, 4.0)
 
 
 ## Final UI zoom: DPI times the user's preference, but never so big that the

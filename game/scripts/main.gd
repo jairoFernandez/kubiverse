@@ -73,17 +73,14 @@ var _pan := Vector3.ZERO     # camera offset from the player (mouse drag)
 var _press_pos := Vector2.ZERO
 var _press_button := 0
 var _dragging := false
+var _screen := -1             # monitor the window is on
 
 
 func _ready() -> void:
-	# On HiDPI screens the default 1280x720 px window is tiny: grow it.
-	var dpi := Settings.dpi()
-	if not OS.has_feature("web") and dpi > 1.0 and DisplayServer.window_get_size().x <= 1280 and not "--shot" in " ".join(OS.get_cmdline_user_args()):
-		var want := Vector2i(Vector2(1280, 760) * dpi)
-		var screen := DisplayServer.screen_get_usable_rect()
-		want = want.min(screen.size * 9 / 10)
-		DisplayServer.window_set_size(want)
-		DisplayServer.window_set_position(screen.position + (screen.size - want) / 2)
+	# The project's 1280x720 px window is tiny on Retina and on big screens:
+	# open at a comfortable size of the screen the window is on, centered.
+	if not OS.has_feature("web") and not OS.has_feature("mobile") and not "--shot" in " ".join(OS.get_cmdline_user_args()):
+		_fit_window.call_deferred()
 	_world_layer = CanvasLayer.new()
 	_world_layer.layer = -1
 	add_child(_world_layer)
@@ -937,6 +934,18 @@ func _screenshot_and_quit(path: String) -> void:
 
 ## UI canvas = window / ui factor (crisp fonts at any size); the 3D layer is
 ## counter-scaled so its pixel size only depends on the screen DPI.
+func _fit_window() -> void:
+	if DisplayServer.window_get_mode() != DisplayServer.WINDOW_MODE_WINDOWED:
+		return
+	var screen := DisplayServer.window_get_current_screen()
+	var area := DisplayServer.screen_get_usable_rect(screen)
+	var want := Vector2i(Vector2(1280, 760) * Settings.dpi())
+	want = want.min(Vector2i(Vector2(area.size) * 0.9))
+	DisplayServer.window_set_size(want)
+	DisplayServer.window_set_position(area.position + (area.size - want) / 2)
+	_apply_scale()
+
+
 func _apply_scale() -> void:
 	var root := get_tree().root
 	var win := Vector2(root.size)
@@ -1045,6 +1054,11 @@ func _add_stars() -> void:
 
 func _process(delta: float) -> void:
 	_cooldown = maxf(0.0, _cooldown - delta)
+	# Dragged to another monitor (Retina <-> 1x): its density changes the scale.
+	var screen := DisplayServer.window_get_current_screen()
+	if screen != _screen:
+		_screen = screen
+		_apply_scale()
 	# Camera shake (explosions, hammer)
 	_shake = move_toward(_shake, 0.0, delta * 2.0)
 	var sh := Vector2(randf_range(-1, 1), randf_range(-1, 1)) * _shake * 0.4
@@ -1381,6 +1395,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			MOUSE_BUTTON_WHEEL_DOWN:
 				if event.pressed:
 					_zoom_target = clampf(_zoom_target * 1.1, ZOOM_MIN, _zoom_max())
+	# Native trackpads (macOS) send gestures, not wheel clicks: two-finger
+	# scroll zooms like the wheel, pinch zooms like on a phone. Browsers turn
+	# both into wheel events, so the web build never sees these.
+	elif event is InputEventPanGesture:
+		_zoom_target = clampf(_zoom_target * pow(1.1, clampf(event.delta.y, -4.0, 4.0) * 0.5), ZOOM_MIN, _zoom_max())
+	elif event is InputEventMagnifyGesture:
+		_zoom_target = clampf(_zoom_target / maxf(0.2, event.factor), ZOOM_MIN, _zoom_max())
 	elif event is InputEventMouseMotion and _press_button != 0:
 		var px_pos: Vector2 = event.position * _ui
 		if not _dragging and px_pos.distance_to(_press_pos) > DRAG_THRESHOLD:
