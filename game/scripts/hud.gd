@@ -47,6 +47,7 @@ var _view_minimap: CheckBox
 var _view_fpv: CheckBox
 var fpv := false
 var kubi: KubiPanel
+var _term_drag: DragResize   # the terminal can float: moved and resized
 var _connect_v: VBoxContainer
 var _connect_title: Label
 var _connect_grid: GridContainer
@@ -902,6 +903,7 @@ func _build_game_ui() -> void:
 	tl.clip_text = true
 	th.add_child(tl)
 	th.add_child(_button("T HIDE", toggle_terminal))
+	_term_drag = DragResize.new().attach(_terminal, th)
 	_term_text = _rich(20)
 	_term_text.fit_content = false
 	_term_text.scroll_active = true
@@ -2503,11 +2505,18 @@ func _layout() -> void:
 		_close_fab.position = Vector2(sz.x - fs.x - 8.0, clampf(lowest + 8.0, top, sz.y * 0.62))
 	var bottom := (_help_bar.size.y + 6.0) if _help_bar.visible else 6.0
 	# Terminal and feed sit above the help bar.
-	_term_text.custom_minimum_size.y = 300 if _term_input.has_focus() else 120
-	_terminal.offset_bottom = -bottom
-	_terminal.offset_top = -bottom - _terminal.get_combined_minimum_size().y
+	var term_floating := _term_drag.place(sz)
+	if term_floating:
+		# Floating: its size is the player's; the text fills it.
+		_term_text.custom_minimum_size.y = 40
+		_term_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	else:
+		_term_text.size_flags_vertical = Control.SIZE_FILL
+		_term_text.custom_minimum_size.y = 300 if _term_input.has_focus() else 120
+		_terminal.offset_bottom = -bottom
+		_terminal.offset_top = -bottom - _terminal.get_combined_minimum_size().y
 	_feed.offset_bottom = -bottom
-	var low := bottom + (_terminal.size.y + 6.0 if _terminal.visible else 0.0)
+	var low := bottom + (_terminal.size.y + 6.0 if _terminal.visible and not term_floating else 0.0)
 	# Inspector on the right, legend on the left: scroll when too tall.
 	var w := clampf(sz.x * 0.42, 340.0, 560.0)
 	_inspector.offset_left = -w - 10
@@ -2520,7 +2529,8 @@ func _layout() -> void:
 	stats.size = Vector2.ZERO
 	stats.offset_top = TOP + ((_mission_panel.size.y + 8) if _mission_panel.visible else 0.0)
 	# The terminal grows wider while you type in it.
-	_terminal.anchor_left = (0.34 if stats.visible else 0.25) if _term_input.has_focus() else 0.5
+	if not term_floating:
+		_terminal.anchor_left = (0.34 if stats.visible else 0.25) if _term_input.has_focus() else 0.5
 	var lw := clampf(sz.x * 0.4, 320.0, 560.0)
 	var scroll: ScrollContainer = _legend.get_node("Scroll")
 	var lwant: float = scroll.get_child(0).get_combined_minimum_size().y
@@ -2548,8 +2558,9 @@ func _layout() -> void:
 		_inspector.offset_right = -8
 		_insp_scroll.custom_minimum_size = Vector2(pw - 36, clampf(want - 36, 60, maxf(120.0, sz.y * 0.5 - top)))
 		_inspector.size.y = 0
-		_terminal.anchor_left = 0.0
-		_terminal.offset_left = 8
+		if not term_floating:
+			_terminal.anchor_left = 0.0
+			_terminal.offset_left = 8
 		_mission_panel.get_child(0).custom_minimum_size.x = minf(380.0, sz.x - 40.0)
 		mm.offset_left = 8
 		mm.offset_right = 8 + msz.x

@@ -617,12 +617,14 @@ func cmd_line(c: String) -> String:
 	return "[color=#ffec27]$ %s[/color]\n   %s\n" % [hud._esc(c), _buttons(c)]
 
 
-func _buttons(c: String) -> String:
+func _buttons(c: String, runnable := true) -> String:
 	# Links carry an index (commands may contain "]", which would end the tag).
 	var i := _cmd_refs.size()
 	_cmd_refs.append(c)
 	var out := ""
-	if not c.contains("<"):
+	if not runnable:  # not kubectl: the game terminal can't run it
+		pass
+	elif not c.contains("<"):
 		out += "[url=run:%d][bgcolor=#123a1d][color=#00e436] %s [/color][/bgcolor][/url] " % [i, tr("RUN")]
 	else:  # has <placeholders>: typed in the terminal for you to complete
 		out += "[url=fill:%d][bgcolor=#3a3212][color=#ffec27] %s [/color][/bgcolor][/url] " % [i, tr("TO TERMINAL")]
@@ -758,24 +760,74 @@ func _location() -> Dictionary:
 	return {"location": here, "location_ns": loc_ns}
 
 
-## Markdown-ish answer -> BBCode; `kubectl ...` commands become clickable.
+## Markdown-ish answer -> BBCode. Commands become clickable: fenced
+## ``` blocks line by line and `inline` code; kubectl ones get RUN + COPY,
+## other commands (docker, journalctl...) only COPY.
+const KUBECTL_VERBS := ["get", "describe", "logs", "top", "apply", "delete", "scale", "rollout", "edit", "create",
+	"set", "label", "annotate", "cordon", "uncordon", "drain", "taint", "exec", "explain", "events", "patch", "auth"]
+
+
 func _format(text: String) -> String:
 	var out: String = hud._esc(text)
+	var slots := []   # rendered code, kept out of the bold/italic pass
+	var hold := func(bb: String) -> String:
+		slots.append(bb)
+		return "\u0001%d\u0001" % (slots.size() - 1)
+	# ``` fenced blocks (optional language tag)
+	var fence := RegEx.new()
+	fence.compile("(?s)```[a-zA-Z0-9_-]*\\n?(.*?)```")
+	for m in fence.search_all(out):
+		var bb := ""
+		for line in m.get_string(1).split("\n"):
+			if line.strip_edges() == "":
+				continue
+			bb += _code_line(line)
+		out = out.replace(m.get_string(0), hold.call(bb))
+	# `inline` code
 	var re := RegEx.new()
 	re.compile("`([^`\\n]+)`")
 	for m in re.search_all(out):
-		var raw := m.get_string(1).replace("[lb]", "[")
-		if raw.begins_with("kubectl "):
-			out = out.replace(m.get_string(0), "[color=#ffec27]%s[/color] %s" % [m.get_string(1), _buttons(raw)])
+		var raw := m.get_string(1).replace("[lb]", "[").strip_edges()
+		var cmd := _as_kubectl(raw)
+		if cmd != "":
+			out = out.replace(m.get_string(0), hold.call("[color=#ffec27]%s[/color] %s" % [m.get_string(1), _buttons(cmd)]))
 		else:
-			out = out.replace(m.get_string(0), "[color=#ffa300]%s[/color]" % m.get_string(1))
+			out = out.replace(m.get_string(0), hold.call("[color=#ffa300]%s[/color]" % m.get_string(1)))
 	var bold := RegEx.new()
 	bold.compile("\\*\\*([^*]+)\\*\\*")
 	out = bold.sub(out, "[b]$1[/b]", true)
 	var ital := RegEx.new()
 	ital.compile("\\*([^*\\n]+)\\*")
 	out = ital.sub(out, "[i]$1[/i]", true)
+	for i in slots.size():
+		out = out.replace("\u0001%d\u0001" % i, slots[i])
 	return out
+
+
+## One line of a fenced block, with its buttons.
+func _code_line(esc_line: String) -> String:
+	var raw := esc_line.replace("[lb]", "[").strip_edges()
+	if raw.begins_with("#"):  # comment inside the block
+		return "\n[color=#5f574f]%s[/color]" % esc_line.strip_edges()
+	raw = raw.trim_prefix("$ ").strip_edges()
+	var cmd := _as_kubectl(raw)
+	if cmd != "":
+		return "\n[color=#ffec27]$ %s[/color]\n   %s" % [hud._esc(cmd), _buttons(cmd)]
+	return "\n[color=#ffa300]$ %s[/color]\n   %s" % [hud._esc(raw), _buttons(raw, false)]
+
+
+## "kubectl get pods", "k get pods" or a bare "get pods" -> kubectl command;
+## anything else -> "".
+func _as_kubectl(raw: String) -> String:
+	var s := raw.trim_prefix("$ ").strip_edges()
+	if s.begins_with("kubectl "):
+		return s
+	if s.begins_with("k "):
+		return "kubectl " + s.substr(2)
+	var first := s.get_slice(" ", 0)
+	if first in KUBECTL_VERBS and s.contains(" "):
+		return "kubectl " + s
+	return ""
 
 
 func _offline_answer(_q: String) -> String:

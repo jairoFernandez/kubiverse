@@ -653,6 +653,9 @@ func _screenshot_and_quit(path: String) -> void:
 			print("CLEAN '%s' -> '%s'" % [t.c_escape(), Hud.clean_kubectl(t)])
 		# RUN / COPY links in a Kubi answer
 		hud.toggle_kubi()
+		var f2: String = hud.kubi._format("Haz esto:\n```bash\n# ver el pod\nkubectl -n ml describe pod giant-experiment\n$ kubectl get nodes -o wide\ndocker ps\n```\nY luego `get pods -A` o `kubectl logs x`. Es **importante** y *fácil*.")
+		print("FENCE refs=", hud.kubi._cmd_refs, " runs=", f2.count("run:"), " copies=", f2.count("copy:"), " bold=", f2.contains("[b]importante[/b]"), " raw_fences=", f2.contains("```"))
+		hud.kubi._cmd_refs.clear()
 		var f: String = hud.kubi._format("Try `kubectl -n ml describe pod giant-experiment` then `kubectl get nodes`.")
 		print("FMT ", f.contains("run:"), " ", f.contains("copy:"), " refs=", hud.kubi._cmd_refs)
 		hud.kubi._on_cmd("copy:1")
@@ -685,12 +688,64 @@ func _screenshot_and_quit(path: String) -> void:
 		Settings.muted = old[1]
 		get_tree().quit()
 		return
+	if "--term-drag-test" in OS.get_cmdline_user_args():
+		var d: DragResize = hud._term_drag
+		var t: Control = hud._terminal
+		var before := Rect2(t.position, t.size)
+		var ev := InputEventMouseButton.new()
+		ev.button_index = MOUSE_BUTTON_LEFT
+		ev.pressed = true
+		d._handle_input(ev)
+		var mv := InputEventMouseMotion.new()
+		mv.relative = Vector2(-500, -300)
+		d._handle_input(mv)
+		ev = ev.duplicate()
+		ev.pressed = false
+		d._handle_input(ev)
+		await get_tree().process_frame
+		await get_tree().process_frame
+		var moved := Rect2(t.position, t.size)
+		# resize from the bottom-right corner
+		var ep := InputEventMouseButton.new()
+		ep.button_index = MOUSE_BUTTON_LEFT
+		ep.pressed = true
+		ep.position = t.size - Vector2(4, 4)
+		d._panel_input(ep)
+		var m2 := InputEventMouseMotion.new()
+		m2.relative = Vector2(150, 220)
+		d._panel_input(m2)
+		ep = ep.duplicate()
+		ep.pressed = false
+		d._panel_input(ep)
+		await get_tree().process_frame
+		await get_tree().process_frame
+		print("TERM before=", before, " moved=", moved, " resized=", Rect2(t.position, t.size))
+		var shot := ""
+		for x in OS.get_cmdline_user_args():
+			if x.begins_with("--shot="):
+				shot = x.substr(7)
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png(shot)
+		var dc := InputEventMouseButton.new()
+		dc.button_index = MOUSE_BUTTON_LEFT
+		dc.pressed = true
+		dc.double_click = true
+		d._handle_input(dc)
+		await get_tree().process_frame
+		await get_tree().process_frame
+		print("TERM docked=", Rect2(t.position, t.size), " floating=", d.is_floating())
+		get_tree().quit()
+		return
 	if "--menu-open" in OS.get_cmdline_user_args():
 		hud.toggle_menu()
 		await get_tree().create_timer(0.4).timeout
 	if "--kubi" in OS.get_cmdline_user_args():
 		hud.toggle_kubi()
 		await get_tree().create_timer(1.0).timeout
+		if "--kubi-fence" in OS.get_cmdline_user_args():
+			hud.kubi.custom_rect = Rect2(20, 100, 700, 600)
+			hud.kubi._chat.append_text("[color=#ff004d]Kubi:[/color] " + hud.kubi._format("Para ver por qué no arranca:\n```bash\n# eventos del pod\nkubectl -n ml describe pod giant-experiment\nkubectl get nodes -o wide\ndocker ps\n```\nO en corto: `get pods -A`."))
+			await get_tree().create_timer(0.5).timeout
 		if "--kubi-cmds" in OS.get_cmdline_user_args():
 			hud.kubi.custom_rect = Rect2(20, 100, 700, 600)
 			hud.kubi.select(Diagnose.problems(K8s.state)[0])

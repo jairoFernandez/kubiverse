@@ -385,6 +385,7 @@ const ES := {
 	"this bridge": "este bridge",
 	"touched Secrets": "tocó Secrets",
 	"writes": "escrituras",
+	"Drag to move, double-click to dock": "Arrastra para mover, doble clic para devolverla a su sitio",
 	"TO TERMINAL": "A LA TERMINAL",
 	"Complete the <...> parts and press Enter": "Completa las partes <...> y pulsa Enter",
 	"RUN": "EJECUTAR",
