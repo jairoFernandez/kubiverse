@@ -343,6 +343,8 @@ func _submit(dry: bool) -> void:
 					_orig = _code.text
 					_annotate()
 					hud.toast(tr("Applied: %s") % msg, true)
+					if hud.missions:
+						hud.missions.notify("manifest", {"kind": kind, "ns": ns, "name": obj_name}, true)
 			else:
 				Sfx.play("error")
 				_last_error = msg

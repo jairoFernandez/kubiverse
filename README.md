@@ -87,7 +87,7 @@ With 2 or more control-planes the energy room shows the **etcd plaza**: one crys
 
 A control-plane's inspector has a **+ CONTROL-PLANE** button. In demo mode it adds one instantly; on a real cluster it opens a guide with the steps for kind, managed clusters (EKS/GKE/AKS: the provider manages them) and kubeadm (`kubeadm token create --print-join-command` + `kubeadm init phase upload-certs --upload-certs` + `kubeadm join ... --control-plane`). Adding a control-plane is an infrastructure operation: the Kubernetes API can't do it, so the game doesn't pretend to.
 
-[`deploy/complex.yaml`](deploy/complex.yaml) creates five namespaces:
+[`bridge/scenarios/complex.yaml`](bridge/scenarios/complex.yaml) creates five namespaces:
 
 - **ecommerce**: a shop with replicas spread across nodes, an API with a sidecar, workers, Postgres with a volume, and Redis.
 - **data**: a 3-broker StatefulSet, a CronJob every 2 min (Completed pods) and a Job.
@@ -132,9 +132,17 @@ Argo Workflows, Jobs and CronJobs leave **Completed** pods behind. Kubernetes on
 - The game only draws the **8 most recent per hall** (2 per node in the energy room); the rest go to an **ARCHIVE pile** with a counter. To see them all: VIEW > Show every finished pod.
 - With 30 or more in a namespace, **Kubi** warns you ("Many finished pods"): explains why it happens, gives the config to clean them up automatically (Argo `podGC` / `ttlStrategy`, Jobs `ttlSecondsAfterFinished`, CronJobs `*HistoryLimit`) and offers **Clean finished pods** (`kubectl delete pods --field-selector=status.phase==Succeeded`, with confirmation; running pods are left alone).
 
-## Missions (J)
+## Missions (J): production or sandbox
 
-11 guided missions to learn Kubernetes by doing: namespaces, pods, nodes, creating a Deployment, self-healing, scaling, Services/endpoints, debugging a CrashLoop with logs, rollouts, cordon/uncordon and cleanup. Each one explains the concept (**WHY?**) and the equivalent `kubectl` command. They're validated against the real cluster state. The ones that change things use the **`academia`** namespace, so your apps are never touched.
+The first time you connect to a cluster the game asks **what kind of cluster it is**, and remembers it per bridge + context. A badge in the top bar always shows it (**PRODUCTION** in red, **SANDBOX** in green); click it to change it. The demo is always a sandbox.
+
+- **Production**: read-only missions to know the cluster, hunt bottlenecks and anomalies, respond to incidents and check observability: census (F3), the machines, the node with the most CPU reserved, Pending pods, the pod with the most restarts (logs `--previous`), incident response with Kubi, hot spots (`top`, events), the Ingress front door and the watchtower. Nothing in them changes the cluster. Every change you make anyway (buttons, terminal, YAML editor, Kubi) asks first in a dialog that says **PRODUCTION**; chaos mode and weapons are off.
+- **Sandbox**, in three levels:
+  - **Basic**: the 11-mission tour (namespaces, pods, nodes, create a Deployment, self-healing, scaling, Services, logs, rollouts, cordon, cleanup). Changes happen in the **`academia`** namespace. It also unlocks the weapons.
+  - **Intermediate**: fix the breakdowns of the sample scenario: a wrong image, a pod with no room, a crash loop, a Service with no endpoints and a broken Ingress route. The demo has them built in; on a real sandbox, **DEPLOY SCENARIO** applies [`bridge/scenarios/complex.yaml`](bridge/scenarios/complex.yaml) through the bridge (`POST /api/scenario`, refused with `--readonly`) and **REMOVE** deletes it.
+  - **Advanced**: break things on purpose and recover: chaos monkey, a drain drill, scale to zero and back, a bad deploy and its fix, nuke and rebuild.
+
+Each mission explains the concept (**WHY?**) and the equivalent `kubectl` command, and is checked against the real cluster state. Progress is kept per track.
 
 ## Monitoring
 
@@ -383,6 +391,7 @@ The game performs **real** actions with your kubeconfig's credentials.
 | GET | `/api/state` | current Snapshot as JSON |
 | GET | `/api/logs?ns=&pod=&container=&tail=&previous=1` | container logs |
 | POST | `/api/kubectl` | `{"line": "get pods -A"}` → `{"ok", "exit_code", "output"}` (real kubectl with the restrictions above) |
+| POST | `/api/scenario` | `{"name": "complex", "remove": false}`: applies (or deletes) a bundled sample scenario with kubectl |
 | POST | `/api/action` | `{"action": "delete_pod" \| "scale" \| "restart" \| "cordon" \| "uncordon" \| "create_deployment" \| "delete_workload", "kind", "ns", "name", "replicas", "image", "service"}` |
 
 ## Layout

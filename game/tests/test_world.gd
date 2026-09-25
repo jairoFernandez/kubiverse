@@ -8,11 +8,10 @@ func _init() -> void:
 	for c in ["kubectl -n ml delete pod x", "kubectl -n get delete pod x", "kubectl rollout restart deploy/a", "kubectl -n shop set image deploy/a a=b"]:
 		assert(not Diagnose.is_read_only(c), c)
 	# Web build: same-origin bridge only on local hosts, not on a public static host.
-	var client := preload("res://scripts/k8s_client.gd")
 	for o in ["http://127.0.0.1:8088", "http://localhost:8088", "https://192.168.1.20:8088", "https://10.0.0.5:8088", "http://[::1]:8088", "http://mac.local:8088"]:
-		assert(client._is_local_host(o), o)
+		assert(WebHost.is_local(o), o)
 	for o in ["https://jairo.github.io", "https://kubiverse.dev", "https://172.32.0.1", "https://8.8.8.8"]:
-		assert(not client._is_local_host(o), o)
+		assert(not WebHost.is_local(o), o)
 	await process_frame
 	var fails := 0
 	var mock := MockCluster.new()

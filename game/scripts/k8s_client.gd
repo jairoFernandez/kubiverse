@@ -8,6 +8,9 @@ signal connection_changed(status: String, detail: String)
 signal action_started(req: Dictionary)
 signal action_done(ok: bool, message: String, req: Dictionary)
 signal watch_updated(data: Dictionary)   # WATCHTOWER: visitors + recent actions
+signal cluster_kind_needed               # a cluster seen for the first time: ask prod or sandbox
+signal cluster_kind_changed(kind: String)
+signal prod_confirm_requested(req: Dictionary)  # a change on a production cluster needs a yes
 
 enum Mode { OFFLINE, BRIDGE, DEMO }
 
@@ -16,6 +19,14 @@ var base_url := ""
 var token := ""
 var context := ""   # kubeconfig context on the bridge ("" = bridge default)
 var state: Dictionary = {}
+
+## What kind of cluster this is, chosen by the player the first time:
+## "prod" (look, diagnose, careful changes) or "sandbox" (break things).
+## Unknown counts as production until they answer.
+var cluster_kind := ""
+var _kind_key := ""
+## Set while a confirmed change runs, so the production guard lets it through.
+var prod_ok := false
 
 var _ws: WebSocketPeer
 var _ws_last_state := -1
@@ -32,7 +43,7 @@ func default_bridge_url() -> String:
 		# From a public static host (the GitHub Pages demo) the bridge runs
 		# on the player's machine instead.
 		var origin = JavaScriptBridge.eval("window.location.origin", true)
-		if origin != null and str(origin).begins_with("http") and _is_local_host(str(origin)):
+		if origin != null and str(origin).begins_with("http") and WebHost.is_local(str(origin)):
 			return str(origin)
 	return "http://127.0.0.1:8088"
 
@@ -43,7 +54,7 @@ func served_by_bridge() -> bool:
 	if not OS.has_feature("web"):
 		return false
 	var origin = JavaScriptBridge.eval("window.location.origin", true)
-	return origin != null and _is_local_host(str(origin))
+	return origin != null and WebHost.is_local(str(origin))
 
 
 const GET_BRIDGE := "https://raw.githubusercontent.com/jairoFernandez/kubiverse/main/bridge/get-bridge"
@@ -74,24 +85,6 @@ func native_downloads() -> Array:
 		["Linux", RELEASE_DOWNLOAD + "kubiverse-linux-x86_64.tar.gz",
 			"tar xzf kubiverse-linux-x86_64.tar.gz && ./kubiverse.x86_64"],
 	]
-
-
-## True for localhost and private-network addresses: the hosts a k8s-bridge
-## serves the web build from.
-static func _is_local_host(origin: String) -> bool:
-	var host := origin.get_slice("://", 1).get_slice("/", 0)
-	if host.begins_with("["):
-		host = host.get_slice("]", 0).trim_prefix("[")
-	else:
-		host = host.get_slice(":", 0)
-	if host == "localhost" or host == "::1" or host.ends_with(".local"):
-		return true
-	var p := host.split(".")
-	if p.size() != 4 or not host.replace(".", "").is_valid_int():
-		return false
-	var a := int(p[0])
-	var b := int(p[1])
-	return a == 127 or a == 10 or (a == 192 and b == 168) or (a == 172 and b >= 16 and b <= 31)
 
 
 func web_query_param(name: String) -> String:
@@ -173,6 +166,8 @@ func disconnect_all() -> void:
 	_ws_last_state = -1
 	mode = Mode.OFFLINE
 	state = {}
+	_kind_key = ""
+	cluster_kind = ""
 
 
 func is_readonly() -> bool:
@@ -240,11 +235,53 @@ func _on_state(s: Dictionary) -> void:
 		if s.get(k) == null:
 			s[k] = []
 	state = s
+	_resolve_kind()
 	state_updated.emit(s)
+
+
+## Saved choice for this bridge + context; the demo is always a sandbox.
+func kind_key() -> String:
+	if mode == Mode.DEMO:
+		return "demo"
+	return "%s|%s" % [base_url, state.get("context", context)]
+
+
+func _resolve_kind() -> void:
+	var key := kind_key()
+	if key == _kind_key:
+		return
+	_kind_key = key
+	if mode == Mode.DEMO:
+		cluster_kind = "sandbox"
+	else:
+		cluster_kind = str(Settings.cluster_kinds.get(key, ""))
+	cluster_kind_changed.emit(cluster_kind)
+	if cluster_kind == "":
+		cluster_kind_needed.emit()
+
+
+func set_cluster_kind(k: String) -> void:
+	cluster_kind = k
+	if mode != Mode.DEMO:
+		Settings.cluster_kinds[kind_key()] = k
+		Settings.save()
+	cluster_kind_changed.emit(k)
+
+
+func is_prod() -> bool:
+	return cluster_kind != "sandbox"
+
+
+func is_demo() -> bool:
+	return mode == Mode.DEMO
 
 
 ## Performs a mutating action. req = {action, kind?, ns?, name, replicas?, image?}
 func action(req: Dictionary) -> void:
+	# Production: every change goes through a confirmation that says so.
+	if is_prod() and not prod_ok:
+		prod_confirm_requested.emit(req)
+		return
 	action_started.emit(req)
 	if mode == Mode.DEMO:
 		var res: Dictionary = _mock.action(req)
@@ -340,6 +377,22 @@ func put_manifest(kind: String, ns: String, name: String, yaml: String, dry: boo
 		return
 	var body := JSON.stringify({"kind": kind, "ns": ns, "name": name, "yaml": yaml, "dry_run": dry})
 	_http(HTTPClient.METHOD_POST, "/api/manifest" + _q(), body, func(ok: bool, data):
+		if not ok:
+			cb.call(false, str(data))
+		else:
+			cb.call(bool(data.get("ok", false)), str(data.get("output", data.get("error", "")))))
+
+
+## Deploys (or removes) the sample scenario the sandbox missions use: broken
+## images, pods with no room, crash loops, OOM... cb(ok, message)
+func scenario(remove: bool, cb: Callable) -> void:
+	if mode != Mode.BRIDGE:
+		cb.call(false, "the demo cluster already has it")
+		return
+	if is_prod():
+		cb.call(false, "only on a sandbox cluster")
+		return
+	_http(HTTPClient.METHOD_POST, "/api/scenario" + _q(), JSON.stringify({"name": "complex", "remove": remove}), func(ok: bool, data):
 		if not ok:
 			cb.call(false, str(data))
 		else:

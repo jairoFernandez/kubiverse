@@ -14,7 +14,10 @@ var lines_all := false
 var terminal := true
 var legend_seen := false
 var missions_done: Array = []
-var mission_idx := 0
+var mission_idx := 0          # legacy: progress of the single track, now "basic"
+var mission_progress := {}    # track id -> index of the current mission
+var mission_level := "basic"  # sandbox track: basic | intermediate | advanced
+var cluster_kinds := {}       # "bridge url|context" -> "prod" | "sandbox"
 var lang := ""
 var always_run := false
 var minimap := true
@@ -42,6 +45,9 @@ func _ready() -> void:
 		legend_seen = cf.get_value("ui", "legend_seen", legend_seen)
 		missions_done = cf.get_value("missions", "done", missions_done)
 		mission_idx = cf.get_value("missions", "idx", mission_idx)
+		mission_progress = cf.get_value("missions", "progress", {"basic": mission_idx})
+		mission_level = cf.get_value("missions", "level", mission_level)
+		cluster_kinds = cf.get_value("clusters", "kinds", cluster_kinds)
 		lang = cf.get_value("ui", "lang", lang)
 		always_run = cf.get_value("ui", "always_run", always_run)
 		minimap = cf.get_value("ui", "minimap", minimap)
@@ -94,6 +100,9 @@ func save() -> void:
 	cf.set_value("ui", "legend_seen", legend_seen)
 	cf.set_value("missions", "done", missions_done)
 	cf.set_value("missions", "idx", mission_idx)
+	cf.set_value("missions", "progress", mission_progress)
+	cf.set_value("missions", "level", mission_level)
+	cf.set_value("clusters", "kinds", cluster_kinds)
 	cf.set_value("ui", "lang", lang)
 	cf.set_value("ui", "always_run", always_run)
 	cf.set_value("ui", "minimap", minimap)

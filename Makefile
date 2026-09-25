@@ -95,10 +95,10 @@ cluster-ha-delete:
 	kind delete cluster --name kubecraft-ha
 
 scenario:
-	kubectl --context $(KIND_CTX) apply -f deploy/complex.yaml
+	kubectl --context $(KIND_CTX) apply -f bridge/scenarios/complex.yaml
 
 scenario-delete:
-	kubectl --context $(KIND_CTX) delete -f deploy/complex.yaml --ignore-not-found
+	kubectl --context $(KIND_CTX) delete -f bridge/scenarios/complex.yaml --ignore-not-found
 
 ## Bridge + web build for the kind cluster on :8089 (open http://127.0.0.1:8089)
 serve-web-kind: bridge web

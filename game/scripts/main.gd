@@ -694,6 +694,35 @@ func _screenshot_and_quit(path: String) -> void:
 		gen.value = 1.0
 		get_tree().quit()
 		return
+	if "--missions-test" in OS.get_cmdline_user_args():
+		# Demo: sandbox tracks, fix the broken image for real, production guard.
+		print("MT kind=%s track=%s sizes=%s" % [K8s.cluster_kind, missions.track(),
+			[Missions.LIST.size(), Missions.PROD.size(), Missions.INTERMEDIATE.size(), Missions.ADVANCED.size()]])
+		Settings.mission_progress["intermediate"] = 0
+		missions.set_level("intermediate")
+		await get_tree().create_timer(2.0).timeout
+		print("MT current=%s target=%s" % [missions.current().get("id", ""), missions.target()])
+		var t := missions.target().split("/")
+		K8s.get_manifest(t[1], t[0], t[2], func(ok: bool, yaml: String, _ro: bool):
+			var re := RegEx.create_from_string("(?m)^(\\s*-?\\s*image:\\s*).+$")
+			var fixed := re.sub(yaml, "$1busybox:1.36")
+			K8s.prod_ok = true
+			K8s.put_manifest(t[1], t[0], t[2], fixed, false, func(ok2: bool, msg: String): print("MT fix ok=%s %s" % [ok2, msg]))
+			K8s.prod_ok = false)
+		for i in 60:
+			await get_tree().create_timer(0.5).timeout
+			if missions.current().get("id", "") != "i_image":
+				break
+		print("MT after fix current=%s" % missions.current().get("id", ""))
+		var asked := [false]
+		K8s.prod_confirm_requested.connect(func(_r): asked[0] = true)
+		K8s.cluster_kind = "prod"
+		missions.kind_changed()
+		K8s.action({"action": "delete_pod", "ns": "shop", "name": "x"})
+		hud.toggle_chaos()
+		print("MT prod track=%s guard_asked=%s confirm_visible=%s chaos=%s" % [missions.track(), asked[0], hud._confirm_panel.visible, hud.chaos])
+		get_tree().quit()
+		return
 	if "--vol-test" in OS.get_cmdline_user_args():
 		var old := [Settings.master_volume, Settings.muted]
 		for mv in [1.0, 0.3, 0.0]:

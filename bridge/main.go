@@ -123,6 +123,7 @@ func main() {
 	mux.HandleFunc("GET /api/logs", hub.cluster((*Bridge).handleLogs))
 	mux.HandleFunc("POST /api/action", hub.cluster((*Bridge).handleAction))
 	mux.HandleFunc("POST /api/kubectl", hub.cluster((*Bridge).handleKubectl))
+	mux.HandleFunc("POST /api/scenario", hub.cluster((*Bridge).handleScenario))
 	mux.HandleFunc("GET /api/manifest", hub.cluster((*Bridge).handleManifestGet))
 	mux.HandleFunc("POST /api/manifest", hub.cluster((*Bridge).handleManifestPut))
 	mux.HandleFunc("GET /api/assistant", hub.auth(hub.handleAIStatus))

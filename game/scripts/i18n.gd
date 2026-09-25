@@ -9,6 +9,39 @@ signal lang_changed
 const LANGS := {"en": "English", "es": "Español"}
 
 const ES := {
+	"Cluster kind: click to change it": "Tipo de cluster: clic para cambiarlo",
+	"This changes a PRODUCTION cluster: %s": "Esto cambia un cluster de PRODUCCIÓN: %s",
+	"This changes a PRODUCTION cluster:": "Esto cambia un cluster de PRODUCCIÓN:",
+	"PRODUCTION CLUSTER: this is real, people depend on it.": "CLUSTER DE PRODUCCIÓN: esto es real, hay gente que depende de él.",
+	"Chaos mode and weapons are off on a PRODUCTION cluster. Use a sandbox (or the demo) to break things.": "El modo caos y las armas están desactivados en un cluster de PRODUCCIÓN. Usa un sandbox (o la demo) para romper cosas.",
+	"WHAT KIND OF CLUSTER IS THIS?": "¿QUÉ TIPO DE CLUSTER ES ESTE?",
+	"It decides the missions and how careful the game is. You can change it later from the badge in the top bar.": "Decide las misiones y cuánto cuidado tiene el juego. Puedes cambiarlo luego desde la etiqueta de la barra superior.",
+	"PRODUCTION": "PRODUCCIÓN",
+	"SANDBOX": "SANDBOX",
+	"Real apps and users. Missions to know the cluster, find bottlenecks and anomalies, respond to incidents and check observability. Nothing is changed without a confirmation that says PRODUCTION; chaos mode and weapons are off.": "Apps y usuarios reales. Misiones para conocer el cluster, encontrar cuellos de botella y anomalías, responder a incidentes y revisar la observabilidad. Nada cambia sin una confirmación que diga PRODUCCIÓN; el modo caos y las armas están desactivados.",
+	"Local, test or throwaway cluster (kind, minikube, a lab). Missions in three levels to break and fix things without fear, with a sample scenario full of breakdowns.": "Cluster local, de pruebas o desechable (kind, minikube, un laboratorio). Misiones en tres niveles para romper y arreglar cosas sin miedo, con un escenario de ejemplo lleno de averías.",
+	"The demo cluster is always a sandbox.": "El cluster demo siempre es un sandbox.",
+	"DEMO · SANDBOX": "DEMO · SANDBOX",
+	"KIND?": "¿TIPO?",
+	"PRODUCTION cluster: missions are read-only and every change asks first.": "Cluster de PRODUCCIÓN: las misiones son de solo lectura y cada cambio pide confirmación.",
+	"SANDBOX cluster: break and fix things without fear.": "Cluster SANDBOX: rompe y arregla cosas sin miedo.",
+	"DEPLOY SCENARIO": "DESPLEGAR ESCENARIO",
+	"REMOVE": "QUITAR",
+	"You completed every mission of this track.": "Completaste todas las misiones de esta ruta.",
+	"On a sandbox you can try another level.": "En un sandbox puedes probar otro nivel.",
+	"Production missions are done: keep an eye on ALARMS and Kubi.": "Misiones de producción completadas: vigila las ALARMAS y a Kubi.",
+	"PRODUCTION · read-only missions": "PRODUCCIÓN · misiones de solo lectura",
+	"SANDBOX · level:": "SANDBOX · nivel:",
+	"BASIC": "BÁSICO",
+	"INTERMEDIATE": "INTERMEDIO",
+	"ADVANCED": "AVANZADO",
+	"Removing the sample scenario...": "Quitando el escenario de ejemplo...",
+	"Deploying the sample scenario (ecommerce, data, ml, observability, chaos)...": "Desplegando el escenario de ejemplo (ecommerce, data, ml, observability, chaos)...",
+	"Scenario removed.": "Escenario quitado.",
+	"Scenario deployed: its breakdowns appear in a minute.": "Escenario desplegado: sus averías aparecen en un minuto.",
+	"Scenario failed: %s": "El escenario falló: %s",
+	"Remove the sample scenario's namespaces from this sandbox?": "¿Quitar los namespaces del escenario de ejemplo de este sandbox?",
+	"Deploy the sample scenario (5 namespaces with broken things on purpose) to this sandbox?": "¿Desplegar el escenario de ejemplo (5 namespaces con cosas rotas a propósito) en este sandbox?",
 	# ---- connect screen
 	"Your Kubernetes cluster, as a voxel world.": "Tu cluster de Kubernetes, como un mundo voxel.",
 	"k8s-bridge URL": "URL del k8s-bridge",
@@ -729,7 +762,7 @@ func _ready() -> void:
 	t.locale = "es"
 	for k in ES:
 		t.add_message(k, ES[k])
-	for m in Missions.LIST:
+	for m in Missions.all():
 		for f in ["title", "goal", "learn"]:
 			t.add_message(m[f], m[f + "_es"])
 	TranslationServer.add_translation(t)

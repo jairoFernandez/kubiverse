@@ -114,6 +114,11 @@ var _kc_text: TextEdit
 
 var _game_root: Control
 var _ctx_label: Label
+var _kind_btn: Button            # PRODUCTION / SANDBOX badge in the top bar
+var _kind_panel: PanelContainer  # asks which kind a new cluster is
+var _confirm_prod: Label         # red "PRODUCTION CLUSTER" line in the confirm dialog
+var _mission_track: HFlowContainer
+var _mission_scn: HBoxContainer  # DEPLOY / REMOVE scenario (intermediate, real sandbox)
 var _stats_label: RichTextLabel
 var _conn_dot: ColorRect
 var _chaos_btn: Button
@@ -250,6 +255,10 @@ func _ready() -> void:
 
 	K8s.connection_changed.connect(_on_connection)
 	K8s.state_updated.connect(_on_state)
+	K8s.cluster_kind_needed.connect(ask_cluster_kind)
+	K8s.cluster_kind_changed.connect(_on_kind_changed)
+	K8s.prod_confirm_requested.connect(func(req: Dictionary):
+		confirm(tr("This changes a PRODUCTION cluster: %s") % Kubectl.for_action(req), func(): K8s.action(req), Kubectl.for_action(req)))
 	K8s.cluster_event.connect(add_event)
 	K8s.action_started.connect(func(req): _term_cmd(Kubectl.for_action(req)))
 	K8s.action_done.connect(func(ok, msg, _req):
@@ -770,6 +779,7 @@ func show_connect(v: bool) -> void:
 	_game_root.visible = not v
 	if v:
 		_close_inspector()
+		_kind_panel.visible = false
 
 
 
@@ -812,6 +822,10 @@ func _build_game_ui() -> void:
 	_ctx_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_ctx_label.custom_minimum_size = Vector2(90, 0)
 	h.add_child(_ctx_label)
+	_kind_btn = _button("", func(): ask_cluster_kind())
+	_kind_btn.tooltip_text = tr("Cluster kind: click to change it")
+	_kind_btn.visible = false
+	h.add_child(_kind_btn)
 	_stats_label = _rich(26)
 	_stats_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_stats_label.fit_content = false
@@ -1201,6 +1215,16 @@ func _build_missions_panel() -> void:
 	h.add_child(_button("WHY?", _toggle_mission_why))
 	h.add_child(_button("SKIP", func(): missions.skip()))
 	h.add_child(_button("_", toggle_missions))
+	# Track: PRODUCTION (read-only) or the sandbox level picker.
+	_mission_track = HFlowContainer.new()
+	_mission_track.add_theme_constant_override("h_separation", 6)
+	_mission_track.add_theme_constant_override("v_separation", 4)
+	v.add_child(_mission_track)
+	_mission_scn = HBoxContainer.new()
+	_mission_scn.add_theme_constant_override("separation", 6)
+	_mission_scn.add_child(_button("DEPLOY SCENARIO", func(): _scenario(false), "GoButton"))
+	_mission_scn.add_child(_button("REMOVE", func(): _scenario(true)))
+	v.add_child(_mission_scn)
 	_mission_body = VBoxContainer.new()
 	_mission_body.add_theme_constant_override("separation", 6)
 	v.add_child(_mission_body)
@@ -1228,19 +1252,48 @@ func _toggle_mission_why() -> void:
 func refresh_missions() -> void:
 	if missions == null:
 		return
+	_refresh_mission_track()
 	if missions.all_done():
 		_mission_hdr.text = tr("MISSIONS COMPLETE")
 		_mission_title.text = tr("Certified plant!")
-		_mission_goal.text = tr("You completed every mission. You now know your way around a Kubernetes cluster.")
+		_mission_goal.text = tr("You completed every mission of this track.") + " " + \
+			(tr("On a sandbox you can try another level.") if missions.track() != "prod" else tr("Production missions are done: keep an eye on ALARMS and Kubi."))
 		_mission_learn.text = tr("To replay them: VIEW > Restart missions.")
 		_mission_cmd.text = ""
 		return
 	var m := missions.current()
-	_mission_hdr.text = tr("MISSION %d / %d") % [missions.index() + 1, Missions.LIST.size()]
+	_mission_hdr.text = tr("MISSION %d / %d") % [missions.index() + 1, missions.list().size()]
 	_mission_title.text = tr(m.title)
 	_mission_goal.text = tr(m.goal)
 	_mission_learn.text = tr(m.learn)
 	_mission_cmd.text = "[color=#ffec27]$[/color] [url=%s]%s[/url]" % [m.cmd, m.cmd]
+
+
+## PRODUCTION label, or the three sandbox levels as buttons.
+func _refresh_mission_track() -> void:
+	for c in _mission_track.get_children():
+		c.queue_free()
+	var t := missions.track()
+	if t == "prod":
+		var l := _label("PRODUCTION · read-only missions", 20, Vox.RED)
+		_mission_track.add_child(l)
+	else:
+		_mission_track.add_child(_label("SANDBOX · level:", 20, Vox.GREEN))
+		for lv in Missions.LEVELS:
+			var b := _button(Missions.TRACK_TITLES[lv], func(): missions.set_level(lv), "GoButton" if lv == t else "")
+			_mission_track.add_child(b)
+	# The sample scenario: the demo has it built in; never offered on production.
+	_mission_scn.visible = t == "intermediate" and K8s.mode == K8s.Mode.BRIDGE
+
+
+func _scenario(remove: bool) -> void:
+	var run := func():
+		toast(tr("Removing the sample scenario...") if remove else tr("Deploying the sample scenario (ecommerce, data, ml, observability, chaos)..."), true)
+		K8s.scenario(remove, func(ok: bool, out: String):
+			_term_text.append_text("[color=%s]%s[/color]\n" % ["#c2c3c7" if ok else "#ff4d6d", _esc(out.strip_edges())])
+			toast(tr("Scenario removed.") if remove and ok else (tr("Scenario deployed: its breakdowns appear in a minute.") if ok else tr("Scenario failed: %s") % out.strip_edges().left(160)), ok))
+	confirm(tr("Remove the sample scenario's namespaces from this sandbox?") if remove else tr("Deploy the sample scenario (5 namespaces with broken things on purpose) to this sandbox?"), run,
+		"kubectl %s -f bridge/scenarios/complex.yaml" % ("delete" if remove else "apply"))
 
 
 func toggle_missions() -> void:
@@ -1258,6 +1311,7 @@ func _fill_help() -> void:
 
 ## Re-translate everything built from formatted strings.
 func _on_lang_changed() -> void:
+	_update_kind_btn()
 	_fill_help()
 	refresh_missions()
 	_update_chaos_btn()
@@ -1393,6 +1447,8 @@ func toggle_kubi() -> void:
 		kubi.visible = false
 	else:
 		kubi.open()
+		if missions:
+			missions.notify("kubi")
 
 
 func toggle_watch() -> void:
@@ -1400,6 +1456,8 @@ func toggle_watch() -> void:
 		watch.visible = false
 	else:
 		watch.open()
+		if missions:
+			missions.notify("watch")
 	watch_toggled.emit(watch.visible)
 
 
@@ -1590,6 +1648,9 @@ func toggle_chaos() -> void:
 		chaos = false
 		_update_chaos_btn()
 		return
+	if K8s.is_prod():
+		toast(tr("Chaos mode and weapons are off on a PRODUCTION cluster. Use a sandbox (or the demo) to break things."), false)
+		return
 	confirm(tr("CHAOS MODE: the blaster (F) will delete REAL pods in context \"%s\" without asking. Enable?") % K8s.state.get("context", "?"),
 		_enable_chaos, tr("kubectl delete pod <the pod you shoot>"))
 
@@ -1597,6 +1658,8 @@ func toggle_chaos() -> void:
 func _enable_chaos() -> void:
 	chaos = true
 	_update_chaos_btn()
+	if missions:
+		missions.notify("chaos")
 
 
 func _update_chaos_btn() -> void:
@@ -1919,6 +1982,9 @@ func _term_edit(line: String) -> void:
 ## that attaches it to Kubi's chat. cb(entry: {id, cmd, out, ok}) optional.
 func term_run(line: String, cb := Callable()) -> void:
 	line = line.strip_edges().trim_prefix("kubectl ").strip_edges()
+	if K8s.is_prod() and not K8s.prod_ok and K8s.mode == K8s.Mode.BRIDGE and not Diagnose.is_read_only("kubectl " + line):
+		confirm(tr("This changes a PRODUCTION cluster:"), func(): term_run(line, cb), "kubectl " + line)
+		return
 	_term_text.append_text("[color=#ffec27]$[/color] [color=#fff1e8]kubectl %s[/color]\n" % _esc(line))
 	K8s.run_kubectl(line, func(ok: bool, out: String):
 		_term_seq += 1
@@ -1932,6 +1998,8 @@ func term_run(line: String, cb := Callable()) -> void:
 			var req := Kubectl.to_action(line)
 			if not req.is_empty():
 				missions.notify("action", req, true)
+		if missions:
+			missions.notify("kubectl", line, ok)
 		if cb.is_valid():
 			cb.call(entry))
 
@@ -2412,6 +2480,10 @@ func _build_modals() -> void:
 	cv.add_theme_constant_override("separation", 14)
 	_confirm_panel.add_child(cv)
 	cv.add_child(_label("ARE YOU SURE?", 30, Vox.YELLOW))
+	_confirm_prod = _label("PRODUCTION CLUSTER: this is real, people depend on it.", 22, Vox.RED)
+	_confirm_prod.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_confirm_prod.custom_minimum_size = Vector2(520, 0)
+	cv.add_child(_confirm_prod)
 	_confirm_label = _label("", 26)
 	_confirm_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_confirm_label.custom_minimum_size = Vector2(520, 0)
@@ -2426,6 +2498,30 @@ func _build_modals() -> void:
 	ch.add_child(_button("CANCEL [ESC]", func(): _confirm_panel.visible = false))
 	ch.add_child(_button("YES, DO IT [ENTER]", _confirm_yes, "DangerButton"))
 	cv.add_child(ch)
+
+	# What kind of cluster is this? Asked the first time a cluster connects.
+	_kind_panel = _modal(-1)
+	var kv := VBoxContainer.new()
+	kv.add_theme_constant_override("separation", 12)
+	kv.custom_minimum_size = Vector2(620, 0)
+	_kind_panel.add_child(kv)
+	kv.add_child(_label("WHAT KIND OF CLUSTER IS THIS?", 30, Vox.YELLOW))
+	var kn := _label("It decides the missions and how careful the game is. You can change it later from the badge in the top bar.", 22, Vox.SILVER)
+	kn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	kv.add_child(kn)
+	for k in [["prod", "PRODUCTION", "Real apps and users. Missions to know the cluster, find bottlenecks and anomalies, respond to incidents and check observability. Nothing is changed without a confirmation that says PRODUCTION; chaos mode and weapons are off.", "DangerButton"],
+			["sandbox", "SANDBOX", "Local, test or throwaway cluster (kind, minikube, a lab). Missions in three levels to break and fix things without fear, with a sample scenario full of breakdowns.", "GoButton"]]:
+		var row := VBoxContainer.new()
+		row.add_theme_constant_override("separation", 4)
+		var b := _button(k[1], func():
+			_kind_panel.visible = false
+			K8s.set_cluster_kind(k[0]), k[3])
+		b.custom_minimum_size = Vector2(0, 44)
+		row.add_child(b)
+		var d := _label(k[2], 21, Vox.PEACH)
+		d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		row.add_child(d)
+		kv.add_child(row)
 
 	# Control-plane guide
 	_guide_panel = _modal(60)
@@ -2503,6 +2599,8 @@ func toggle_map() -> void:
 
 func toggle_stats() -> void:
 	stats.visible = not stats.visible
+	if stats.visible and missions:
+		missions.notify("stats")
 	if stats.visible:
 		_mission_panel.visible = false
 		_legend.visible = false
@@ -2546,11 +2644,44 @@ func close_modals() -> bool:
 	return false
 
 
+## Prod or sandbox? (first connection to a cluster, or the top-bar badge)
+func ask_cluster_kind() -> void:
+	if K8s.mode != K8s.Mode.BRIDGE:
+		toast(tr("The demo cluster is always a sandbox."), true)
+		return
+	_kind_panel.visible = true
+	_kind_panel.move_to_front()
+
+
+func _update_kind_btn() -> void:
+	var kind := K8s.cluster_kind
+	_kind_btn.visible = kind != "" or K8s.mode == K8s.Mode.BRIDGE
+	if kind == "sandbox":
+		_kind_btn.text = tr("DEMO · SANDBOX") if K8s.mode == K8s.Mode.DEMO else tr("SANDBOX")
+		_kind_btn.theme_type_variation = "GoButton"
+	else:
+		_kind_btn.text = tr("PRODUCTION") if kind == "prod" else tr("KIND?")
+		_kind_btn.theme_type_variation = "DangerButton"
+
+
+func _on_kind_changed(kind: String) -> void:
+	_update_kind_btn()
+	if kind == "prod" and chaos:
+		chaos = false
+		_update_chaos_btn()
+	if kind != "":
+		toast(tr("PRODUCTION cluster: missions are read-only and every change asks first.") if kind == "prod" \
+			else tr("SANDBOX cluster: break and fix things without fear."), kind != "prod")
+	if missions:
+		missions.kind_changed()
+
+
 func confirm(text: String, cb: Callable, cmd := "") -> void:
 	_confirm_label.text = text
 	_confirm_cmd.text = ("$ " + cmd.replace("\n", "\n$ ")) if cmd != "" else ""
 	_confirm_cmd.visible = cmd != ""
 	_confirm_cb = cb
+	_confirm_prod.visible = K8s.is_prod() and K8s.mode != K8s.Mode.OFFLINE
 	_confirm_panel.visible = true
 	_confirm_panel.move_to_front()  # above the editor / Kubi
 
@@ -2558,7 +2689,10 @@ func confirm(text: String, cb: Callable, cmd := "") -> void:
 func _confirm_yes() -> void:
 	_confirm_panel.visible = false
 	if _confirm_cb.is_valid():
+		# The player said yes: let this change through the production guard.
+		K8s.prod_ok = true
 		_confirm_cb.call()
+		K8s.prod_ok = false
 
 
 func _input(event: InputEvent) -> void:
@@ -2646,7 +2780,7 @@ func _load_logs() -> void:
 ## Keeps side panels within the (UI-unit) screen size.
 func _layout_modals() -> void:
 	var full := _modal_layer.size
-	for p in [_confirm_panel, _build_panel]:
+	for p in [_confirm_panel, _build_panel, _kind_panel]:
 		if p.visible:
 			var ps: Vector2 = p.get_combined_minimum_size().min(full - Vector2(20, 20))
 			p.size = ps
@@ -2755,7 +2889,7 @@ func _layout() -> void:
 	watch.position = Vector2(sz.x - pw - (8.0 if compact else 10.0), top)
 	# Centered dialogs: size to content, center, keep on screen.
 	var full := _modal_layer.size
-	for p in [_confirm_panel, _build_panel]:
+	for p in [_confirm_panel, _build_panel, _kind_panel]:
 		if p.visible:
 			var ps: Vector2 = p.get_combined_minimum_size().min(full - Vector2(20, 20))
 			p.size = ps

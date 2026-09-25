@@ -1,7 +1,7 @@
 # A busier, more realistic scenario for a multi-node cluster (see
 # deploy/kind-cluster.yaml). Every object is small (tiny requests, busybox /
 # alpine images) so it runs on a laptop.
-#   make scenario           kubectl apply -f deploy/complex.yaml
+#   make scenario           kubectl apply -f bridge/scenarios/complex.yaml
 #   make scenario-delete
 # What you'll see in Kubiverse:
 #   ecommerce      web shop: spread frontend, api, workers, postgres+redis
