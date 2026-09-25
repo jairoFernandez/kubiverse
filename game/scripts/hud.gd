@@ -416,6 +416,26 @@ func _build_connect_ui() -> void:
 	_saved_list.add_theme_constant_override("separation", 6)
 	v.add_child(_saved_list)
 
+	# ---- run a bridge here (not needed when this page is served by one)
+	if not K8s.served_by_bridge():
+		v.add_child(_section("RUN THE BRIDGE ON THIS COMPUTER"))
+		var bn := _label("The game reaches your cluster through k8s-bridge, a small program that uses your kubeconfig like kubectl. Paste one of these in a terminal: it downloads the latest release, checks its SHA256 and starts it. Then press CONNECT TO CLUSTER.", 21, Vox.SILVER)
+		bn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		v.add_child(bn)
+		for pair in K8s.bridge_install_commands():
+			var row := HBoxContainer.new()
+			row.add_theme_constant_override("separation", 8)
+			var os_l := _label(pair[0], 21, Vox.PEACH)
+			os_l.custom_minimum_size.x = 150
+			row.add_child(os_l)
+			var cmd := LineEdit.new()
+			cmd.text = pair[1]
+			cmd.editable = false
+			cmd.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			row.add_child(cmd)
+			row.add_child(_button("COPY", _copy.bind(pair[1])))
+			v.add_child(row)
+
 	# ---- new connection
 	v.add_child(_section("NEW CONNECTION"))
 	var g := GridContainer.new()
@@ -505,7 +525,7 @@ func _build_connect_ui() -> void:
 	h2.add_child(_button(" + ", func(): Settings.step_scale(1)))
 	v.add_child(h2)
 	v.add_child(_lang_row())
-	_connect_status = _label("Start the bridge first:  make run-bridge", 24, Vox.SILVER)
+	_connect_status = _label("Start the bridge first, then CONNECT TO CLUSTER.", 24, Vox.SILVER)
 	_connect_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(_connect_status)
 	_refresh_saved()

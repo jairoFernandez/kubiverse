@@ -18,6 +18,9 @@ const ES := {
 	"Text size": "Tamaño del texto",
 	"Language": "Idioma",
 	"Start the bridge first:  make run-bridge": "Primero arranca el bridge:  make run-bridge",
+	"Start the bridge first, then CONNECT TO CLUSTER.": "Primero arranca el bridge y luego CONECTAR AL CLUSTER.",
+	"RUN THE BRIDGE ON THIS COMPUTER": "ARRANCA EL BRIDGE EN ESTE ORDENADOR",
+	"The game reaches your cluster through k8s-bridge, a small program that uses your kubeconfig like kubectl. Paste one of these in a terminal: it downloads the latest release, checks its SHA256 and starts it. Then press CONNECT TO CLUSTER.": "El juego llega a tu cluster a través de k8s-bridge, un pequeño programa que usa tu kubeconfig igual que kubectl. Pega uno de estos comandos en una terminal: descarga la última versión, comprueba su SHA256 y lo arranca. Luego pulsa CONECTAR AL CLUSTER.",
 	"Connecting to %s ...": "Conectando a %s ...",
 	# ---- bars and menus
 	"G LEGEND": "G LEYENDA",

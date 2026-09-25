@@ -2,7 +2,23 @@
 
 Your **real** Kubernetes cluster turned into a pixel‑art (voxel) 3D world you can walk around and operate.
 
+**[Play the demo in your browser](https://jairofernandez.github.io/kubiverse/?demo=1)** (simulated cluster) · **[Download the latest release](https://github.com/jairoFernandez/kubiverse/releases/latest)** (macOS, Linux, Windows and the bridge)
+
 ![Kubiverse connected to a real cluster](docs/real-cluster.png)
+
+## Play with your cluster
+
+Run the bridge on your machine (it uses your kubeconfig, like kubectl). These commands download the latest release, check its SHA256 against the release's `SHA256SUMS.txt` and start it ([`get-bridge.sh`](bridge/get-bridge.sh), [`get-bridge.ps1`](bridge/get-bridge.ps1)); the binary is kept in `~/.kubecraft/bin/`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jairoFernandez/kubiverse/main/bridge/get-bridge.sh | sh
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jairoFernandez/kubiverse/main/bridge/get-bridge.ps1)))
+```
+
+Then open **http://127.0.0.1:8088**: the bridge carries the game inside. To use the [online version](https://jairofernandez.github.io/kubiverse/) instead, add `--allow-origin https://jairofernandez.github.io` to the command (after `sh -s --` on macOS/Linux). The game's start screen shows these commands ready to copy, with the right origin.
 
 - **Engine:** Godot 4.7 (GDScript, *Compatibility* renderer) → exports to **Web (WASM)**, **macOS**, **Linux** and **Windows** from the same project.
 - **3D pixel‑art look:** the 3D world renders into a `SubViewport` at 1/3 resolution and is upscaled with *nearest* filtering; toon materials with the PICO‑8 palette, *inverted hull* outlines, orthographic isometric camera with *pixel snapping*.
@@ -318,8 +334,8 @@ make test                # bridge tests (Go) + world/collisions (headless Godot)
 
 There are two ways to play in the browser:
 
-- **Bundled bridge (recommended for real clusters):** download `k8s-bridge-<os>-<arch>` from a release, run it and open `http://127.0.0.1:8088`. The game comes inside the binary (`go:embed`), so there's no CORS or HTTPS to deal with. `--web DIR` still overrides the bundled build.
-- **Static site (public demo):** on every push to `main` the web build is deployed to GitHub Pages (Settings → Pages → Source: "GitHub Actions"). It's plain static files (no threads, so no COOP/COEP headers needed) and works on any static host. Link `?demo=1` to jump straight into the simulated cluster. To manage a real cluster from there, the player runs a bridge locally that trusts the site: `k8s-bridge --allow-origin https://<user>.github.io`. On a public host the start screen suggests `http://127.0.0.1:8088` as the bridge URL. Chrome and Firefox allow it (Chrome asks for local network access). Safari blocks `http://127.0.0.1` from an HTTPS page, so use the bundled bridge there.
+- **Bundled bridge (recommended for real clusters):** download `k8s-bridge-<os>-<arch>` from a release (or use the [one-line command](#play-with-your-cluster)), run it and open `http://127.0.0.1:8088`. The game comes inside the binary (`go:embed`), so there's no CORS or HTTPS to deal with. `--web DIR` still overrides the bundled build.
+- **Static site (public demo):** on every push to `main` the web build is deployed to GitHub Pages (Settings → Pages → Source: "GitHub Actions"). It's plain static files (no threads, so no COOP/COEP headers needed) and works on any static host. Link `?demo=1` to jump straight into the simulated cluster. To manage a real cluster from there, the player runs a bridge locally that trusts the site: `k8s-bridge --allow-origin https://<user>.github.io`. On a public host the start screen suggests `http://127.0.0.1:8088` as the bridge URL and shows the [download-and-run command](#play-with-your-cluster) with that flag already set. Chrome and Firefox allow it (Chrome asks for local network access). Safari blocks `http://127.0.0.1` from an HTTPS page, so use the bundled bridge there.
 
 ### Bridge flags
 

@@ -37,6 +37,31 @@ func default_bridge_url() -> String:
 	return "http://127.0.0.1:8088"
 
 
+## True when this web page comes from a k8s-bridge (localhost or `--lan`), so
+## a bridge is already running. False natively and on a public static host.
+func served_by_bridge() -> bool:
+	if not OS.has_feature("web"):
+		return false
+	var origin = JavaScriptBridge.eval("window.location.origin", true)
+	return origin != null and _is_local_host(str(origin))
+
+
+const GET_BRIDGE := "https://raw.githubusercontent.com/jairoFernandez/kubiverse/main/bridge/get-bridge"
+
+## One-liners that download the latest k8s-bridge release, check its SHA256
+## and run it; on the web they also trust this page's origin. [label, command].
+func bridge_install_commands() -> Array:
+	var args := ""
+	if OS.has_feature("web"):
+		var origin = JavaScriptBridge.eval("window.location.origin", true)
+		if origin != null and str(origin).begins_with("https://"):
+			args = " --allow-origin " + str(origin)
+	return [
+		["macOS / Linux", "curl -fsSL %s.sh | sh -s --%s" % [GET_BRIDGE, args]],
+		["Windows (PowerShell)", "& ([scriptblock]::Create((irm %s.ps1)))%s" % [GET_BRIDGE, args]],
+	]
+
+
 ## True for localhost and private-network addresses: the hosts a k8s-bridge
 ## serves the web build from.
 static func _is_local_host(origin: String) -> bool:
