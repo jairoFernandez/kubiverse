@@ -2,10 +2,12 @@ package main
 
 import (
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -127,5 +129,27 @@ func TestWebHandlerGzip(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code == 200 {
 		t.Fatal("path traversal served")
+	}
+}
+
+func TestKubeconfigNameClash(t *testing.T) {
+	kc := func(ctx, server string) string {
+		return "apiVersion: v1\nkind: Config\nclusters:\n- name: c\n  cluster: {server: " + server + "}\n" +
+			"users:\n- name: u\n  user: {token: x}\ncontexts:\n- name: " + ctx + "\n  context: {cluster: c, user: u}\ncurrent-context: " + ctx + "\n"
+	}
+	dir := t.TempDir()
+	main := filepath.Join(dir, "config")
+	os.WriteFile(main, []byte(kc("default", "https://a:6443")), 0o600)
+	extra := filepath.Join(dir, "extra")
+	os.MkdirAll(extra, 0o700)
+	os.WriteFile(filepath.Join(extra, "prod.yaml"), []byte(kc("default", "https://b:6443")), 0o600)
+	h := newHub(context.Background(), main, "", extra, false, "")
+	list, refs := h.contexts()
+	var names []string
+	for _, c := range list {
+		names = append(names, c.Name)
+	}
+	if len(list) != 2 || refs["default"].path != "" || refs["prod/default"].ctx != "default" || !strings.HasSuffix(refs["prod/default"].path, "prod.yaml") {
+		t.Fatalf("both contexts must be listed, the added one as prod/default: %v %v", names, refs)
 	}
 }

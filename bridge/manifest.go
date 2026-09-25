@@ -36,7 +36,7 @@ func (b *Bridge) kubectlRun(ctx context.Context, stdin []byte, args ...string) (
 	if err != nil {
 		return nil, errors.New("kubectl is not installed on the bridge host")
 	}
-	full := []string{"--context", b.contextName, "--request-timeout=15s"}
+	full := []string{"--context", b.kubectlCtx(), "--request-timeout=15s"}
 	if b.kubeconfigPath != "" {
 		full = append(full, "--kubeconfig", b.kubeconfigPath)
 	}

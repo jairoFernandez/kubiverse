@@ -37,7 +37,7 @@ Un solo bridge sirve **todos los contextos** de tu kubeconfig y los kubeconfigs 
 En la pantalla de inicio:
 - **Clusters guardados**: nombre, URL del bridge, contexto y token (se guardan en las preferencias del juego). Clic para conectar y X para borrar.
 - **Nueva conexión**: URL del bridge y **CARGAR CONTEXTOS**. Elige uno y usa **GUARDAR Y CONECTAR**.
-- **+ Añadir un kubeconfig**: pégalo, o **CARGAR ARCHIVO...** en la versión nativa. Se envía solo al bridge, que lo guarda en `~/.kubecraft/kubeconfigs/` con permisos 0600, y sus contextos aparecen en la lista. Ojo: igual que con kubectl, un kubeconfig con plugins `exec` ejecuta ese comando en el host del bridge.
+- **+ Añadir un kubeconfig**: pégalo, o **CARGAR ARCHIVO...** (selector nativo, o el del navegador en la versión web), ponle un nombre y **AÑADIR CLUSTER**. El kubeconfig se envía solo al bridge, que lo guarda en `~/.kubecraft/kubeconfigs/` con permisos 0600. El juego comprueba que el cluster responde, lo **guarda en la lista** y **se conecta**; si falla, muestra el error del servidor. Si alguno de sus contextos se llama igual que uno que ya tienes (típico: `default`, `kubernetes-admin@kubernetes`), aparece como `nombre-del-archivo/contexto` en lugar de ocultarse. Ojo: igual que con kubectl, un kubeconfig con plugins `exec` (aws, gke-gcloud-auth-plugin...) ejecuta ese comando en el host del bridge.
 
 API: `GET /api/contexts`, `POST /api/kubeconfig {name, content}` y `DELETE /api/kubeconfig?name=`. Todas las rutas de cluster aceptan `?context=`.
 

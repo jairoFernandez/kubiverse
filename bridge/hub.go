@@ -74,9 +74,16 @@ func (h *Hub) defaultRules() *clientcmd.ClientConfigLoadingRules {
 
 // contexts lists every context the bridge can serve and, for each, the
 // kubeconfig file it comes from ("" = the default kubeconfig).
-func (h *Hub) contexts() ([]ContextInfo, map[string]string) {
+// ctxRef: where a listed context really lives (file "" = default kubeconfig)
+// and its name inside that file.
+type ctxRef struct {
+	path string
+	ctx  string
+}
+
+func (h *Hub) contexts() ([]ContextInfo, map[string]ctxRef) {
 	var out []ContextInfo
-	files := map[string]string{}
+	files := map[string]ctxRef{}
 	seen := map[string]bool{}
 	if raw, err := h.defaultRules().Load(); err == nil {
 		for name, c := range raw.Contexts {
@@ -86,7 +93,7 @@ func (h *Hub) contexts() ([]ContextInfo, map[string]string) {
 			}
 			out = append(out, ContextInfo{Name: name, Cluster: c.Cluster, Server: srv, Source: "kubeconfig"})
 			seen[name] = true
-			files[name] = ""
+			files[name] = ctxRef{"", name}
 		}
 	}
 	entries, _ := os.ReadDir(h.dir)
@@ -99,9 +106,15 @@ func (h *Hub) contexts() ([]ContextInfo, map[string]string) {
 		if err != nil {
 			continue
 		}
-		for name, c := range raw.Contexts {
+		for ctx, c := range raw.Contexts {
+			// Many kubeconfigs reuse names like "default": on a clash the
+			// added one is listed as "<file>/<context>" instead of hidden.
+			name := ctx
 			if seen[name] {
-				continue // the default kubeconfig wins on name clashes
+				name = strings.TrimSuffix(e.Name(), ".yaml") + "/" + ctx
+			}
+			if seen[name] {
+				continue
 			}
 			srv := ""
 			if cl, ok := raw.Clusters[c.Cluster]; ok {
@@ -109,7 +122,7 @@ func (h *Hub) contexts() ([]ContextInfo, map[string]string) {
 			}
 			out = append(out, ContextInfo{Name: name, Cluster: c.Cluster, Server: srv, Source: e.Name()})
 			seen[name] = true
-			files[name] = path
+			files[name] = ctxRef{path, ctx}
 		}
 	}
 	h.mu.Lock()
@@ -165,18 +178,22 @@ func (h *Hub) get(name string) (*Bridge, error) {
 
 func (h *Hub) start(name string) (*Bridge, error) {
 	_, files := h.contexts()
-	path, ok := files[name]
+	ref, ok := files[name]
 	if !ok {
 		return nil, fmt.Errorf("unknown context %q", name)
 	}
 	rules := h.defaultRules()
 	kubectlPath := h.explicit
-	if path != "" {
-		rules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: path}
-		kubectlPath = path
+	if ref.path != "" {
+		rules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: ref.path}
+		kubectlPath = ref.path
 	}
-	cc := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{CurrentContext: name})
-	return startBridge(h.root, cc, name, kubectlPath, h.readOnly)
+	cc := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{CurrentContext: ref.ctx})
+	b, err := startBridge(h.root, cc, name, kubectlPath, h.readOnly)
+	if b != nil {
+		b.kubectlContext = ref.ctx
+	}
+	return b, err
 }
 
 func (h *Hub) auth(next http.HandlerFunc) http.HandlerFunc {
@@ -250,9 +267,13 @@ func (h *Hub) handleAddKubeconfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
+	// The names as the game will see them (renamed on clashes).
 	var names []string
-	for n := range cfg.Contexts {
-		names = append(names, n)
+	list, _ := h.contexts()
+	for _, c := range list {
+		if c.Source == req.Name+".yaml" {
+			names = append(names, c.Name)
+		}
 	}
 	sort.Strings(names)
 	log.Printf("kubeconfig %s added with contexts %v", path, names)

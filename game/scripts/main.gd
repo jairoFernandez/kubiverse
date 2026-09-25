@@ -736,6 +736,24 @@ func _screenshot_and_quit(path: String) -> void:
 		print("TERM docked=", Rect2(t.position, t.size), " floating=", d.is_floating())
 		get_tree().quit()
 		return
+	for x in OS.get_cmdline_user_args():
+		if x.begins_with("--kc-test="):
+			var saved := Settings.servers.duplicate(true)
+			hud.show_connect(true)
+			hud._kc_text.text = FileAccess.get_file_as_string(x.substr(10))
+			hud._kc_name.text = "kctest"
+			hud._upload_kubeconfig()
+			for i in 60:
+				await get_tree().create_timer(0.5).timeout
+				if K8s.mode == K8s.Mode.BRIDGE and not K8s.state.is_empty():
+					break
+			print("KC status='", hud._connect_status.text, "'")
+			print("KC connected context=", K8s.context, " state_ctx=", K8s.state.get("context"), " nodes=", K8s.state.get("nodes", []).size())
+			print("KC saved=", Settings.servers.filter(func(v): return v.name.begins_with("kctest")))
+			Settings.servers = saved
+			Settings.save()
+			get_tree().quit()
+			return
 	if "--menu-open" in OS.get_cmdline_user_args():
 		hud.toggle_menu()
 		await get_tree().create_timer(0.4).timeout

@@ -161,7 +161,7 @@ func (b *Bridge) handleKubectl(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "output": "error: kubectl is not installed on the bridge host"})
 		return
 	}
-	full := []string{"--context", b.contextName, "--request-timeout=15s"}
+	full := []string{"--context", b.kubectlCtx(), "--request-timeout=15s"}
 	if b.kubeconfigPath != "" {
 		full = append(full, "--kubeconfig", b.kubeconfigPath)
 	}

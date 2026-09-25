@@ -35,8 +35,11 @@ import (
 type Bridge struct {
 	cs          kubernetes.Interface
 	contextName string
-	server      string
-	readOnly    bool
+	// kubectlContext: the context's name inside its kubeconfig when it is
+	// listed under another one ("file/context" on a name clash).
+	kubectlContext string
+	server         string
+	readOnly       bool
 
 	kubeconfigPath string             // explicit --kubeconfig, passed on to kubectl
 	stop           context.CancelFunc // stops this cluster's informers
@@ -403,4 +406,12 @@ func isLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// kubectlCtx: the --context to give kubectl for this cluster.
+func (b *Bridge) kubectlCtx() string {
+	if b.kubectlContext != "" {
+		return b.kubectlContext
+	}
+	return b.contextName
 }

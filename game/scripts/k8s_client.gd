@@ -78,6 +78,19 @@ func add_kubeconfig(url: String, tok: String, name: String, content: String, cb:
 		JSON.stringify({"name": name, "content": content}), cb)
 
 
+## Starts (or reuses) a context on the bridge and reports whether the
+## cluster answers. cb(ok, error)
+func check_context(url: String, tok: String, ctx: String, cb: Callable) -> void:
+	var path := "/api/state?context=%s" % ctx.uri_encode()
+	_http_to(normalize_url(url), tok, HTTPClient.METHOD_GET, path, "", func(ok: bool, data):
+		if not ok:
+			cb.call(false, str(data))
+		elif data.has("error"):
+			cb.call(false, str(data.error))
+		else:
+			cb.call(true, ""), 40.0)
+
+
 func start_demo() -> void:
 	disconnect_all()
 	mode = Mode.DEMO

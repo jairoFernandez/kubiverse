@@ -483,9 +483,8 @@ func _build_connect_ui() -> void:
 	_kc_box.add_child(_kc_text)
 	var kb := HBoxContainer.new()
 	kb.add_theme_constant_override("separation", 10)
-	if not OS.has_feature("web"):
-		kb.add_child(_button("LOAD FILE...", _pick_kubeconfig_file))
-	kb.add_child(_button("ADD TO BRIDGE", _upload_kubeconfig, "GoButton"))
+	kb.add_child(_button("LOAD FILE...", _pick_kubeconfig_web if OS.has_feature("web") else _pick_kubeconfig_file))
+	kb.add_child(_button("ADD CLUSTER", _upload_kubeconfig, "GoButton"))
 	_kc_box.add_child(kb)
 
 	# ---- misc
@@ -616,19 +615,62 @@ func _do_connect(save: bool) -> void:
 	_status(tr("Connecting to %s ...") % K8s.base_url, Vox.YELLOW)
 
 
+## Adds a kubeconfig as a new cluster: the bridge stores it, we check that
+## the cluster answers, save it in the list and connect.
 func _upload_kubeconfig() -> void:
-	var name := _kc_name.text.strip_edges()
-	if name == "" or _kc_text.text.strip_edges() == "":
-		_status(tr("Give the kubeconfig a name and paste its content."), Vox.RED)
+	var name := _kc_name.text.strip_edges().replace(" ", "-")
+	if _kc_text.text.strip_edges() == "":
+		_status(tr("Paste the kubeconfig or load its file first."), Vox.RED)
 		return
+	if name == "":
+		name = "cluster-%d" % (Settings.servers.size() + 1)
+		_kc_name.text = name
+	_status(tr("Sending the kubeconfig to the bridge..."), Vox.YELLOW)
 	K8s.add_kubeconfig(_url_edit.text, _token_edit.text, name, _kc_text.text, func(ok: bool, data):
 		if not ok or not data.get("ok", false):
-			_status(str(data if not ok else data.get("error", "")), Vox.RED)
+			_status(tr("The bridge rejected it: %s") % str(data if not ok else data.get("error", "")), Vox.RED)
+			return
+		var ctxs: Array = data.get("contexts", [])
+		if ctxs.is_empty():
+			_status(tr("The kubeconfig has no usable context."), Vox.RED)
 			return
 		_kc_text.text = ""
 		_kc_box.visible = false
-		_status(tr("Added contexts: %s") % ", ".join(data.contexts), Vox.GREEN)
-		_load_contexts())
+		_load_contexts()
+		var ctx: String = ctxs[0]
+		var more := "" if ctxs.size() == 1 else "  " + tr("(%d more contexts in the list)") % (ctxs.size() - 1)
+		_status(tr("Checking the cluster %s (can take up to 25 s)...") % ctx + more, Vox.YELLOW)
+		K8s.check_context(_url_edit.text, _token_edit.text, ctx, func(ok2: bool, err: String):
+			if not ok2:
+				_status(tr("Saved on the bridge, but the cluster doesn't answer: %s") % err + "\n" +
+					tr("Check that the server is reachable from the bridge machine and that its credentials (or exec plugins like aws / gke-gcloud-auth-plugin) work there."), Vox.RED)
+				return
+			var label := name if ctxs.size() == 1 else "%s (%s)" % [name, ctx]
+			Settings.servers = Settings.servers.filter(func(x): return x.name != label)
+			Settings.servers.append({"name": label, "url": K8s.normalize_url(_url_edit.text), "token": _token_edit.text, "context": ctx})
+			Settings.save()
+			_refresh_saved()
+			_status(tr("Cluster %s added. Connecting...") % label, Vox.GREEN)
+			K8s.connect_bridge(_url_edit.text, _token_edit.text, ctx)))
+
+
+## Web: the browser's own file picker (there is no native dialog there).
+var _js_file_cb: JavaScriptObject
+
+
+func _pick_kubeconfig_web() -> void:
+	_js_file_cb = JavaScriptBridge.create_callback(func(args: Array):
+		_kc_text.text = str(args[0])
+		if _kc_name.text.strip_edges() == "":
+			_kc_name.text = str(args[1]).get_basename().replace(" ", "-")
+		_status(tr("File loaded: %s. Now press ADD CLUSTER.") % str(args[1]), Vox.GREEN))
+	JavaScriptBridge.get_interface("window").kubecraftFile = _js_file_cb
+	JavaScriptBridge.eval("""(function(){
+		const i = document.createElement('input');
+		i.type = 'file';
+		i.onchange = async () => { const f = i.files[0]; if (f) window.kubecraftFile(await f.text(), f.name); };
+		i.click();
+	})()""", true)
 
 
 func _pick_kubeconfig_file() -> void:
