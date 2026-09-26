@@ -656,6 +656,7 @@ const ES := {
 	"OK: %s": "OK: %s",
 	"ERROR: %s": "ERROR: %s",
 	"Connected: %s": "Conectado: %s",
+	"The cluster is still loading (big or slow): it opens by itself when ready": "El cluster aún está cargando (grande o lento): se abre solo cuando esté listo",
 	"Service lines: ALL": "Líneas de servicios: TODAS",
 	"Service lines: only for what you hover/select": "Líneas de servicios: solo lo que señalas/seleccionas",
 	"Bridge is read-only": "El bridge está en modo solo lectura",

@@ -2613,9 +2613,13 @@ func set_weapon(current: int) -> void:
 	_weapon_bar.visible = chaos
 
 
+var _last_loading := ""   # toast "still loading" once, not every retry
+
+
 func _on_connection(status: String, detail: String) -> void:
 	match status:
 		"online":
+			_last_loading = ""
 			_conn_dot.color = Vox.GREEN
 			if _connect_root.visible:
 				show_connect(false)
@@ -2623,6 +2627,14 @@ func _on_connection(status: String, detail: String) -> void:
 			_check_bridge_version()
 		"connecting":
 			_conn_dot.color = Vox.YELLOW
+		"loading":
+			_conn_dot.color = Vox.YELLOW
+			if _connect_root.visible:
+				_connect_status.text = detail
+				_connect_status.add_theme_color_override("font_color", Vox.YELLOW)
+			elif detail != _last_loading:
+				toast(detail, true)
+			_last_loading = detail
 		_:
 			_conn_dot.color = Vox.RED
 			if _connect_root.visible:

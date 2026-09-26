@@ -160,6 +160,11 @@ func (h *Hub) get(name string) (*Bridge, error) {
 	for {
 		h.mu.Lock()
 		if b, ok := h.clusters[name]; ok {
+			if e := b.loadErr.Load(); e != nil { // gave up loading: start over next time
+				delete(h.clusters, name)
+				h.mu.Unlock()
+				return nil, *e
+			}
 			h.mu.Unlock()
 			return b, nil
 		}
@@ -261,6 +266,11 @@ func (h *Hub) cluster(fn func(*Bridge, http.ResponseWriter, *http.Request)) http
 		b, err := h.get(r.URL.Query().Get("context"))
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error(), "output": "error: " + err.Error()})
+			return
+		}
+		if !b.ready.Load() {
+			msg := "cluster still loading (big or slow): it opens by itself when ready"
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "loading": true, "error": msg, "output": "error: " + msg})
 			return
 		}
 		fn(b, w, r)

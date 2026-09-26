@@ -21,6 +21,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -48,13 +49,17 @@ type Bridge struct {
 
 	kubeconfigPath string             // explicit --kubeconfig, passed on to kubectl
 	stop           context.CancelFunc // stops this cluster's informers
-	metrics        Metrics
-	ctrUsage       map[string]map[string]Usage // "ns/pod" -> container -> usage
-	restCfg        *rest.Config                // for port-forwards (SPDY)
-	fw             forwards
-	pol            *policy       // cluster kinds (prod/sandbox) + audit log, shared by the hub
-	inCluster      bool          // running inside the cluster with its ServiceAccount
-	imp            impersonators // team mode: clientsets acting as each player
+	// A big or slow cluster keeps loading in the background after the first
+	// wait: ready says when its caches are in, loadErr why it gave up.
+	ready     atomic.Bool
+	loadErr   atomic.Pointer[error]
+	metrics   Metrics
+	ctrUsage  map[string]map[string]Usage // "ns/pod" -> container -> usage
+	restCfg   *rest.Config                // for port-forwards (SPDY)
+	fw        forwards
+	pol       *policy       // cluster kinds (prod/sandbox) + audit log, shared by the hub
+	inCluster bool          // running inside the cluster with its ServiceAccount
+	imp       impersonators // team mode: clientsets acting as each player
 
 	nodeLister corelisters.NodeLister
 	nsLister   corelisters.NamespaceLister
@@ -268,7 +273,7 @@ func startBridge(root context.Context, cfg *rest.Config, ctxName, kubeconfigPath
 		UpdateFunc: func(any, any) { b.markDirty() },
 		DeleteFunc: func(any) { b.markDirty() },
 	}
-	for _, inf := range []cache.SharedIndexInformer{
+	core := []cache.SharedIndexInformer{
 		f.Core().V1().Nodes().Informer(),
 		f.Core().V1().Namespaces().Informer(),
 		f.Core().V1().Pods().Informer(),
@@ -277,11 +282,20 @@ func startBridge(root context.Context, cfg *rest.Config, ctxName, kubeconfigPath
 		f.Apps().V1().ReplicaSets().Informer(),
 		f.Apps().V1().StatefulSets().Informer(),
 		f.Apps().V1().DaemonSets().Informer(),
-	} {
+	}
+	for _, inf := range core {
 		if _, err := inf.AddEventHandler(markDirty); err != nil {
 			cancel()
 			return nil, err
 		}
+	}
+	// Unreachable clusters fail fast; reachable but slow ones keep loading.
+	vctx, vcancel := context.WithTimeout(ctx, 15*time.Second)
+	_, verr := cs.Discovery().RESTClient().Get().AbsPath("/version").DoRaw(vctx)
+	vcancel()
+	if verr != nil {
+		cancel()
+		return nil, fmt.Errorf("cluster %s unreachable: %w", cfg.Host, verr)
 	}
 	// Ingresses are optional: some users may not be allowed to list them,
 	// and a failing informer would keep the whole cluster from syncing.
@@ -311,25 +325,82 @@ func startBridge(root context.Context, cfg *rest.Config, ctxName, kubeconfigPath
 	b.startWatch(ctx, f)
 	log.Printf("[%s] connecting to %s ...", ctxName, cfg.Host)
 	f.Start(ctx.Done())
-	syncCtx, syncCancel := context.WithTimeout(ctx, 25*time.Second)
-	defer syncCancel()
-	// Only the core types keep the cluster from opening: events and the
-	// optional kinds come later (or never) without hiding the rest.
-	for typ, ok := range f.WaitForCacheSync(syncCtx.Done()) {
-		if ok {
-			continue
-		}
-		if coreTypes[typ] {
+	done := make(chan error, 1)
+	go func() { done <- b.waitSynced(ctx, f, core) }()
+	select {
+	case err := <-done:
+		if err != nil {
 			cancel()
-			return nil, fmt.Errorf("cluster %s unreachable (cache sync failed for %v)", cfg.Host, typ)
+			return nil, err
 		}
-		log.Printf("[%s] %v not synced yet, going on without it for now", ctxName, typ)
+		b.goLive(ctx)
+	case <-time.After(25 * time.Second):
+		log.Printf("[%s] big or slow cluster: still loading, it opens when ready", ctxName)
+		go func() {
+			if err := <-done; err != nil {
+				log.Printf("[%s] %v", ctxName, err)
+				b.loadErr.Store(&err)
+				cancel()
+				return
+			}
+			b.goLive(ctx)
+		}()
 	}
-	log.Printf("[%s] cluster cache synced", ctxName)
+	return b, nil
+}
+
+// waitSynced waits for the core caches (the city can't be drawn without
+// them), then gives the optional ones a moment and goes on without the late.
+func (b *Bridge) waitSynced(ctx context.Context, f informers.SharedInformerFactory, core []cache.SharedIndexInformer) error {
+	cctx, ccancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer ccancel()
+	synced := make([]cache.InformerSynced, len(core))
+	for i, inf := range core {
+		synced[i] = inf.HasSynced
+	}
+	start := time.Now()
+	tick := time.NewTicker(30 * time.Second)
+	defer tick.Stop()
+	go func() {
+		for {
+			select {
+			case <-cctx.Done():
+				return
+			case <-tick.C:
+				n := 0
+				for _, ok := range synced {
+					if ok() {
+						n++
+					}
+				}
+				if n < len(synced) {
+					log.Printf("[%s] loading: %d/%d core kinds after %s", b.contextName, n, len(synced), time.Since(start).Round(time.Second))
+				}
+			}
+		}
+	}()
+	if !cache.WaitForCacheSync(cctx.Done(), synced...) {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("cluster %s: its core kinds (nodes, pods, workloads) didn't load in 10 minutes", b.server)
+	}
+	octx, ocancel := context.WithTimeout(ctx, 20*time.Second)
+	defer ocancel()
+	for typ, ok := range f.WaitForCacheSync(octx.Done()) {
+		if !ok && !coreTypes[typ] {
+			log.Printf("[%s] %v not synced yet, going on without it for now", b.contextName, typ)
+		}
+	}
+	return nil
+}
+
+func (b *Bridge) goLive(ctx context.Context) {
+	log.Printf("[%s] cluster cache synced", b.contextName)
+	b.ready.Store(true)
 	b.markDirty()
 	go b.publishLoop(ctx)
 	go b.pollMetrics(ctx)
-	return b, nil
 }
 
 // coreTypes are the informers the city can't be drawn without.

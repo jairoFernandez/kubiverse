@@ -233,6 +233,7 @@ func _process(delta: float) -> void:
 	_ws.poll()
 	var st := _ws.get_ready_state()
 	if st != _ws_last_state:
+		var was := _ws_last_state
 		_ws_last_state = st
 		match st:
 			WebSocketPeer.STATE_OPEN:
@@ -241,7 +242,10 @@ func _process(delta: float) -> void:
 				github_status()
 			WebSocketPeer.STATE_CLOSED:
 				var reason := _ws.get_close_reason()
-				connection_changed.emit("offline", "bridge unreachable at %s %s — retrying" % [base_url, reason])
+				if was == WebSocketPeer.STATE_OPEN:
+					connection_changed.emit("offline", "bridge unreachable at %s %s — retrying" % [base_url, reason])
+				else:
+					_why_refused()
 	if st == WebSocketPeer.STATE_OPEN:
 		while _ws.get_available_packet_count() > 0:
 			var txt := _ws.get_packet().get_string_from_utf8()
@@ -268,6 +272,18 @@ func _process(delta: float) -> void:
 	elif st == WebSocketPeer.STATE_CLOSED:
 		_ws = null
 		_reconnect_in = 2.0
+
+
+## The WebSocket was refused: ask a cheap endpoint why. A big or slow
+## cluster answers "still loading" (and opens by itself when it's in).
+func _why_refused() -> void:
+	_http(HTTPClient.METHOD_GET, "/api/cani" + _q(), "", func(ok: bool, data):
+		if ok and typeof(data) == TYPE_DICTIONARY and data.get("loading", false):
+			connection_changed.emit("loading", tr("The cluster is still loading (big or slow): it opens by itself when ready"))
+		elif ok and typeof(data) == TYPE_DICTIONARY and not data.get("ok", true) and str(data.get("error", "")) != "":
+			connection_changed.emit("offline", str(data.error))
+		else:
+			connection_changed.emit("offline", "bridge unreachable at %s — retrying" % base_url))
 
 
 const COLLECTIONS := ["nodes", "namespaces", "pods", "workloads", "services", "ingresses", "alerts", "volumes", "storage_classes", "apps", "certs", "pvs", "configs"]
