@@ -4,7 +4,7 @@ Your **real** Kubernetes cluster turned into a pixel‑art (voxel) 3D world you 
 
 **[Play the demo in your browser](https://jairofernandez.github.io/kubiverse/?demo=1)** (simulated cluster) · **[Download the latest release](https://github.com/jairoFernandez/kubiverse/releases/latest)** (macOS, Linux, Windows and the bridge)
 
-![Kubiverse connected to a real cluster](docs/real-cluster.png)
+![The plant: a factory hall per namespace, the energy plant (nodes), the library (storage), the bank (secrets) and the gate to the Internet](docs/plant.png)
 
 - **Engine:** Godot 4.7 (GDScript, *Compatibility* renderer) → exports to **Web (WASM)**, **macOS**, **Linux** and **Windows** from the same project.
 - **3D pixel‑art look:** the 3D world renders into a `SubViewport` at 1/3 resolution and is upscaled with *nearest* filtering; toon materials with the PICO‑8 palette, *inverted hull* outlines, orthographic isometric camera with *pixel snapping*.
@@ -70,8 +70,8 @@ When you connect a cluster, a ~14 s fly-through introduces the world: the logo o
 
 To go in or out, just **step on the door mat** (or press E, double-click a hall, or use the level bar). You start on the main street between the halls, and when you leave a hall you appear in front of its door. Stepping onto an island or entering a hall shows a **zone sign** explaining what it is (control-plane, worker or namespace), and the level bar shows where you are. Warp pipes and kiosks are used with E. The character respects physical limits: it only walks on real ground (terrain, hall floors, islands and bridges) and doesn't walk through halls, consoles, belts or docks.
 
-![Inside a hall](docs/hall.png)
-![Energy room](docs/energy.png)
+![Inside a hall: assembly lines, robots (pods) and the inspector of a failing pod](docs/hall.png)
+![Energy room: a generator island per node with the pods running on it](docs/energy.png)
 
 ## Multiple clusters and kubeconfigs
 
@@ -202,6 +202,8 @@ Click a robot and **ENTER POD [E]** to swim inside it. The pod is a **fish tank*
 
 The bridge serves it at `GET /api/pod?ns=&name=` (per-container usage comes from metrics-server when installed).
 
+![Inside a pod: containers as glass capsules, with the legend and a container's inspector](docs/pod.png)
+
 ## The engine room: how Kubernetes works inside
 
 South of the **Kubernetes Quarter** stands the **ENGINE ROOM** (also a button in the level bar). Inside, the control plane's machines, piped to the API server: the **API server** (the front desk every request goes through), **etcd** (the vault with the whole desired state, one disk per member), the **controller manager** (gears: control loops that make reality match), the **scheduler** (a crane that picks a node for each pod), a **kubelet** per node with its container runtime, **CoreDNS**, **kube-proxy**, the **CNI** and **you** at the kubectl desk. Each lamp shows the health of its pod in kube-system (managed clusters hide the control plane: "managed by the provider").
@@ -209,6 +211,8 @@ South of the **Kubernetes Quarter** stands the **ENGINE ROOM** (also a button in
 - Every **real event** of your cluster becomes a **work order** that travels between the machines (ScalingReplicaSet and SuccessfulCreate from the controllers, Scheduled from the scheduler to a node's kubelet, Pulling/Started at the kubelet, FailedScheduling, BackOff...), and a panel says in plain words what each component just did. Your own changes start at your desk.
 - **TEACH ME: THE LIFE OF A POD**: on a sandbox it creates a tiny `engine-tour` Deployment in `academia` and follows its six steps with its real events (and a REMOVE button); on production it replays the last pod the cluster started, creating nothing.
 - Click a machine for a longer explanation.
+
+![The engine room with a lesson open: rolling updates, step by step](docs/engine-room.png)
 
 ## Looks (themes)
 
@@ -362,6 +366,8 @@ A hall whose namespace has failing pods catches fire: voxel flames on the roof a
 
 On the surface, press ↑ ↑ ↓ ↓ ← → and type `START`: you go down to **KUBIVERSE: UNDERGROUND**, a hidden arcade with minigames: Whack-a-Pod, OOM Snake, Kube Rally (a top-down race through the traffic) and Laser Tag (against three rogue pods among the racks), plus a cabinet waiting for the next one. High scores are kept per game. The bar on top always shows the cluster's alarms (click one to go up and look at it) and the way back to the surface (or ESC). Nothing down there touches the cluster.
 
+![KUBIVERSE: UNDERGROUND, the hidden arcade](docs/underground.png)
+
 </details>
 
 ## Languages
@@ -402,6 +408,11 @@ The bridge finds them by itself among the cluster's Services (kube-prometheus-st
 - **The LIBRARY (storage)**: a building of the plant you walk into. Each StorageClass is a **section** (a bookshelf with its sign; the default one in gold) and each PersistentVolume a **book** on it: thicker the bigger, coloured by its state (green Bound, blue Available, orange Released, red Failed), with a bookmark as high as its **real use** when Prometheus has the kubelet's volume stats (red past 90%). Claims still waiting are **request cards on the librarian's desk** (red when their class doesn't exist, and the inspector says which ones do). ConfigMaps are **notebooks** in the reference section, a table per namespace, with a tab per key the pods read by name. A volume over 90% full raises an alarm, and so does a Released or Failed PV.
 - **The BANK (secrets)**: behind the round vault door, a velvet tray per namespace with a **pearl per Secret**: gold for TLS, blue for registry credentials, white for the rest; dull if nobody uses it. Secrets pods ask for that don't exist are **cracked red pearls** on the MISSING counter, and an alarm (those pods can't start). **Values are never read**: what pods use comes from their own specs, whether a Secret exists from a metadata-only list with every annotation dropped as it arrives (kubectl's last-applied annotation would carry the data), and nothing about them reaches the AI. In the Helm chart, listing Secret names is off by default (`secrets.listNames`), because RBAC can't grant "list" without "read".
 - A pod's inspector says which books (volumes), pearls (secrets) and notebooks (ConfigMaps) it uses.
+
+| The library (storage) | The bank (secrets) |
+|---|---|
+| ![The library: a section per StorageClass, a book per volume, requests on the desk](docs/library.png) | ![The bank: a pearl per Secret on its namespace's tray, missing ones cracked and red](docs/bank.png) |
+
 - **Nodes**: taints and pressure conditions (MemoryPressure, DiskPressure, PIDPressure) in the inspector; pressure raises an alarm and darkens the weather.
 - **A namespace's inspector**: its ResourceQuotas as bars (≥90% raises an alarm), LimitRange defaults, NetworkPolicies in words ("default-deny: no traffic IN"; "from pods app=api on 5432"), its PVCs, the Argo CD apps that deploy into it, its certificates, and **your permissions there** (`can: see pods, read logs... · can't: read secrets`, from a SelfSubjectRulesReview: in team mode, the signed-in person's).
 - **A pod's inspector**: the NetworkPolicies that select it (or "all traffic allowed").

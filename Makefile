@@ -2,7 +2,7 @@ GODOT  ?= godot
 BRIDGE := bridge/bin/kubiverse-bridge
 ADDR   ?= 127.0.0.1:8088
 
-.PHONY: serve-lan test metrics-server cluster cluster-delete cluster-ha cluster-ha-delete scenario scenario-delete play-kind serve-web-kind all bridge bridge-all bridge-bundle webdist game-import web macos linux windows native run-bridge play play-demo serve-web demo-apply demo-delete clean
+.PHONY: serve-lan test metrics-server cluster cluster-delete cluster-ha cluster-ha-delete scenario scenario-delete play-kind serve-web-kind all bridge bridge-all bridge-bundle webdist game-import web macos linux windows native run-bridge play play-demo serve-web demo-apply demo-delete clean readme-shots
 
 all: bridge web
 
@@ -125,3 +125,15 @@ demo-delete:
 clean:
 	rm -rf build bridge/bin game/.godot
 	find bridge/webdist -mindepth 1 ! -name README.md -delete
+
+# The README's screenshots, from the demo cluster (English, clear sky, no panels).
+SHOT = $(GODOT) --path game -- --demo --readme --hour=16
+readme-shots: game-import
+	$(SHOT) --shot=$(CURDIR)/docs/plant.png --zoom=40
+	$(SHOT) --shot=$(CURDIR)/docs/hall.png --level=ns:shop --inspect
+	$(SHOT) --shot=$(CURDIR)/docs/energy.png --level=power --zoom=36
+	$(SHOT) --shot=$(CURDIR)/docs/engine-room.png --lesson=rolling:2
+	$(SHOT) --shot=$(CURDIR)/docs/pod.png --enter-pod=shop --inspect-container
+	$(SHOT) --shot=$(CURDIR)/docs/library.png --level=library --zoom=40
+	$(SHOT) --shot=$(CURDIR)/docs/bank.png --level=bank --zoom=34
+	$(SHOT) --shot=$(CURDIR)/docs/underground.png --underground

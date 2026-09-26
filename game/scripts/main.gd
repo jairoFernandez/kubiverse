@@ -326,6 +326,14 @@ func _ready() -> void:
 
 
 func _screenshot_and_quit(path: String) -> void:
+	# --readme: clean shots for the docs (English, clear sky, no panels),
+	# without saving any of it to the player's settings.
+	var readme := "--readme" in OS.get_cmdline_user_args()
+	if readme:
+		Settings.lang = "en"
+		TranslationServer.set_locale("en")
+		I18n.lang_changed.emit()
+		Settings.weather = "off"
 	if "--pf-demo" in OS.get_cmdline_user_args():
 		# Two port-forward tubes with simulated traffic.
 		await get_tree().create_timer(1.5).timeout
@@ -1144,6 +1152,12 @@ func _screenshot_and_quit(path: String) -> void:
 		_cycle_pods()
 		_zoom_target = 18.0
 		await get_tree().create_timer(2.0).timeout
+	if readme:
+		hud._terminal.visible = false
+		hud._mission_panel.visible = false
+		if hud._banner:
+			hud._banner.visible = false
+		await get_tree().create_timer(0.3).timeout
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(path)
 	get_tree().quit()
