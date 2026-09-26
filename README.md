@@ -8,13 +8,13 @@ Your **real** Kubernetes cluster turned into a pixel‑art (voxel) 3D world you 
 
 - **Engine:** Godot 4.7 (GDScript, *Compatibility* renderer) → exports to **Web (WASM)**, **macOS**, **Linux** and **Windows** from the same project.
 - **3D pixel‑art look:** the 3D world renders into a `SubViewport` at 1/3 resolution and is upscaled with *nearest* filtering; toon materials with the PICO‑8 palette, *inverted hull* outlines, orthographic isometric camera with *pixel snapping*.
-- **Cluster connection:** `k8s-bridge`, a Go binary (client-go) that reads your kubeconfig, keeps *informers* running and talks to the game over HTTP + WebSocket.
+- **Cluster connection:** `kubiverse-bridge`, a Go binary (client-go) that reads your kubeconfig, keeps *informers* running and talks to the game over HTTP + WebSocket.
 
 ```
-┌──────────────┐  WebSocket (snapshots + events)   ┌─────────────┐  client-go / informers  ┌──────────────┐
-│  Kubiverse   │ ◄──────────────────────────────── │ k8s-bridge  │ ◄─────────────────────► │ kube-apiserver│
-│(web/native)  │ ──── HTTP /api/action, /api/logs ─►│  (Go)       │     (your kubeconfig)   │   (real)      │
-└──────────────┘                                    └─────────────┘                         └──────────────┘
+┌──────────────┐  WebSocket (snapshots + events)   ┌──────────────────┐  client-go / informers  ┌──────────────┐
+│  Kubiverse   │ ◄──────────────────────────────── │ kubiverse-bridge │ ◄─────────────────────► │ kube-apiserver│
+│(web/native)  │ ──── HTTP /api/action, /api/logs ─►│      (Go)        │     (your kubeconfig)   │   (real)      │
+└──────────────┘                                    └──────────────────┘                         └──────────────┘
 ```
 
 Why a bridge? A browser can't talk to the API server directly (CORS, client certificates, EKS/GKE/AKS `exec` plugins). With the bridge, the web and native builds use exactly the same protocol and authentication stays on your machine.
@@ -34,19 +34,21 @@ curl -fsSL https://raw.githubusercontent.com/jairoFernandez/kubiverse/main/bridg
 Or with a package manager (once the tap / winget package are published, see [Releases and packages](#releases-and-packages)):
 
 ```bash
-brew install jairofernandez/kubiverse/k8s-bridge          # the bridge (macOS, Linux)
+brew install jairofernandez/kubiverse/kubiverse-bridge    # the bridge (macOS, Linux)
 brew install --cask jairofernandez/kubiverse/kubiverse    # the native macOS game
 ```
 
 ```powershell
-winget install JairoFernandez.K8sBridge
+winget install JairoFernandez.KubiverseBridge
 ```
+
+The bridge used to be called `k8s-bridge`: `brew upgrade` moves it to `kubiverse-bridge` by itself, the old command keeps working for a while, and the scripts above install the new name.
 
 Then open **http://127.0.0.1:8088**: the bridge carries the game inside. To use the [online version](https://jairofernandez.github.io/kubiverse/) instead, add `--allow-origin https://jairofernandez.github.io` to the command (after `sh -s --` on macOS/Linux). The game's start screen shows these commands ready to copy, with the right origin.
 
 The native apps (smoother than the browser) are in the [latest release](https://github.com/jairoFernandez/kubiverse/releases/latest); the web start screen links them under **+ NATIVE APP**, with how to open each one:
 
-- **macOS** (`kubiverse-macos.zip`): unzip and move Kubiverse.app to Applications. It isn't notarized, so the first time use right-click → Open (or System Settings → Privacy & Security → Open Anyway).
+- **macOS**: `brew install --cask jairofernandez/kubiverse/kubiverse` (it brings the bridge too), or unzip `kubiverse-macos.zip` into Applications. It isn't notarized yet, so macOS blocks it the first time; allow it once with `xattr -dr com.apple.quarantine /Applications/Kubiverse.app` (it removes the "downloaded from the Internet" flag), or right-click → Open. The start screen shows both commands ready to copy.
 - **Windows** (`kubiverse-windows-x86_64.zip`): unzip and run Kubiverse.exe; if SmartScreen stops it, More info → Run anyway.
 - **Linux** (`kubiverse-linux-x86_64.tar.gz`): `tar xzf kubiverse-linux-x86_64.tar.gz && ./kubiverse.x86_64`.
 
@@ -279,7 +281,7 @@ On touch screens (or if the window is narrow) the game switches to a **compact m
 For safety the bridge only listens on `127.0.0.1`: it controls your cluster with your credentials. To open it from a phone or tablet on the same Wi-Fi:
 
 ```bash
-make serve-lan      # = k8s-bridge --lan --web build/web
+make serve-lan      # = kubiverse-bridge --lan --web build/web
 ```
 
 `--lan` listens on all interfaces, generates a **random token** (or uses `--token`), allows origins from your local network and prints the URLs to open, like `https://192.168.1.20:8088/?token=...` (only IPs of real interfaces, not Docker/OrbStack ones). The game connects only with that token.
@@ -430,7 +432,7 @@ Builds:
 ```bash
 make web                 # build/web/          (HTML5/WASM, no threads → no COOP/COEP needed)
 make macos linux windows # build/<os>/          (needs Godot 4.7.2 export templates)
-make bridge-all          # bridge/bin/k8s-bridge-<os>-<arch>
+make bridge-all          # bridge/bin/kubiverse-bridge-<os>-<arch>
 make bridge-bundle       # same, with the web build embedded (single file that serves the game)
 make test                # bridge tests (Go) + world/collisions (headless Godot)
 ```
@@ -448,7 +450,7 @@ make test                # bridge tests (Go) + world/collisions (headless Godot)
 
 ### Releases and packages
 
-A `v*` tag builds everything and publishes the release with `SHA256SUMS.txt`, the Homebrew formula (`k8s-bridge.rb`) and cask (`kubiverse.rb`) and the winget manifest, filled with that release's checksums ([`packaging/`](packaging)). What turns on with repository secrets:
+A `v*` tag builds everything and publishes the release with `SHA256SUMS.txt`, the Homebrew formula (`kubiverse-bridge.rb`, with `formula_renames.json` for the old `k8s-bridge`) and cask (`kubiverse.rb`) and the winget manifest, filled with that release's checksums ([`packaging/`](packaging)). What turns on with repository secrets:
 
 | Secret(s) | What it does |
 |---|---|
@@ -462,8 +464,8 @@ winget: the rendered `JairoFernandez.K8sBridge.yaml` goes to microsoft/winget-pk
 
 There are two ways to play in the browser:
 
-- **Bundled bridge (recommended for real clusters):** download `k8s-bridge-<os>-<arch>` from a release (or use the [one-line command](#play-with-your-cluster)), run it and open `http://127.0.0.1:8088`. The game comes inside the binary (`go:embed`), so there's no CORS or HTTPS to deal with. `--web DIR` still overrides the bundled build.
-- **Static site (public demo):** on every push to `main` the web build is deployed to GitHub Pages (Settings → Pages → Source: "GitHub Actions"). It's plain static files (no threads, so no COOP/COEP headers needed) and works on any static host. Link `?demo=1` to jump straight into the simulated cluster. To manage a real cluster from there, the player runs a bridge locally that trusts the site: `k8s-bridge --allow-origin https://<user>.github.io`. On a public host the start screen suggests `http://127.0.0.1:8088` as the bridge URL and shows the [download-and-run command](#play-with-your-cluster) with that flag already set. Chrome and Firefox allow it (Chrome asks for local network access). Safari blocks `http://127.0.0.1` from an HTTPS page, so use the bundled bridge there.
+- **Bundled bridge (recommended for real clusters):** download `kubiverse-bridge-<os>-<arch>` from a release (or use the [one-line command](#play-with-your-cluster)), run it and open `http://127.0.0.1:8088`. The game comes inside the binary (`go:embed`), so there's no CORS or HTTPS to deal with. `--web DIR` still overrides the bundled build.
+- **Static site (public demo):** on every push to `main` the web build is deployed to GitHub Pages (Settings → Pages → Source: "GitHub Actions"). It's plain static files (no threads, so no COOP/COEP headers needed) and works on any static host. Link `?demo=1` to jump straight into the simulated cluster. To manage a real cluster from there, the player runs a bridge locally that trusts the site: `kubiverse-bridge --allow-origin https://<user>.github.io`. On a public host the start screen suggests `http://127.0.0.1:8088` as the bridge URL and shows the [download-and-run command](#play-with-your-cluster) with that flag already set. Chrome and Firefox allow it (Chrome asks for local network access). Safari blocks `http://127.0.0.1` from an HTTPS page, so use the bundled bridge there.
 
 ### Bridge flags
 

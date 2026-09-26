@@ -1,5 +1,5 @@
 GODOT  ?= godot
-BRIDGE := bridge/bin/k8s-bridge
+BRIDGE := bridge/bin/kubiverse-bridge
 ADDR   ?= 127.0.0.1:8088
 
 .PHONY: serve-lan test metrics-server cluster cluster-delete cluster-ha cluster-ha-delete scenario scenario-delete play-kind serve-web-kind all bridge bridge-all bridge-bundle webdist game-import web macos linux windows native run-bridge play play-demo serve-web demo-apply demo-delete clean
@@ -8,12 +8,12 @@ all: bridge web
 
 ## --- bridge (Go) -----------------------------------------------------------
 bridge:
-	cd bridge && go build -o bin/k8s-bridge .
+	cd bridge && go build -o bin/kubiverse-bridge .
 
 bridge-all:
 	cd bridge && for t in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do \
 	  os=$${t%/*}; arch=$${t#*/}; ext=$$( [ $$os = windows ] && echo .exe ); \
-	  GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/k8s-bridge-$$os-$$arch$$ext . ; done
+	  GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/kubiverse-bridge-$$os-$$arch$$ext . ; done
 
 ## Single-file bridges that serve the game themselves (go:embed of build/web).
 bridge-bundle: webdist

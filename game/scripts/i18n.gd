@@ -17,6 +17,7 @@ const ES := {
 	"Out of order.\nMore games are coming.": "Fuera de servicio.\nVienen más juegos.",
 	"OUT OF ORDER": "FUERA DE SERVICIO",
 	"SEARCH": "BUSCAR",
+	"Easiest with Homebrew (it brings the bridge too). The app isn't notarized yet, so macOS blocks it the first time: the second command removes the \"downloaded from the Internet\" flag once (or right-click the app > Open).": "Lo más fácil es con Homebrew (trae también el bridge). La app aún no está notarizada, así que macOS la bloquea la primera vez: el segundo comando quita una vez la marca de \"descargado de Internet\" (o clic derecho en la app > Abrir).",
 	"LIBRARY (storage)": "BIBLIOTECA (almacenamiento)",
 	"BANK (secrets)": "BANCO (secrets)",
 	"LIBRARY": "BIBLIOTECA",
@@ -526,7 +527,7 @@ const ES := {
 	"Deploy the sample scenario (5 namespaces with broken things on purpose) to this sandbox?": "¿Desplegar el escenario de ejemplo (5 namespaces con cosas rotas a propósito) en este sandbox?",
 	# ---- connect screen
 	"Your Kubernetes cluster, as a voxel world.": "Tu cluster de Kubernetes, como un mundo voxel.",
-	"k8s-bridge URL": "URL del k8s-bridge",
+	"kubiverse-bridge URL": "URL del kubiverse-bridge",
 	"Token (optional, --token on the bridge)": "Token (opcional, --token en el bridge)",
 	"CONNECT TO CLUSTER": "CONECTAR AL CLUSTER",
 	"DEMO MODE": "MODO DEMO",
@@ -540,7 +541,7 @@ const ES := {
 	"Smoother than the browser. It connects to the same bridge: start it with the command above (without --allow-origin), then CONNECT TO CLUSTER.": "Va más fluida que en el navegador. Se conecta al mismo bridge: arráncalo con el comando de arriba (sin --allow-origin) y luego CONECTAR AL CLUSTER.",
 	"Unzip and move Kubiverse.app to Applications. It is not notarized: the first time, right-click > Open (or System Settings > Privacy & Security > Open Anyway).": "Descomprime y mueve Kubiverse.app a Aplicaciones. No está notarizada: la primera vez, clic derecho > Abrir (o Ajustes del Sistema > Privacidad y seguridad > Abrir igualmente).",
 	"Unzip and run Kubiverse.exe. If SmartScreen stops it: More info > Run anyway.": "Descomprime y ejecuta Kubiverse.exe. Si SmartScreen lo frena: Más información > Ejecutar de todas formas.",
-	"The game reaches your cluster through k8s-bridge, a small program that uses your kubeconfig like kubectl. Paste one of these in a terminal: it downloads the latest release, checks its SHA256 and starts it. Then press CONNECT TO CLUSTER.": "El juego llega a tu cluster a través de k8s-bridge, un pequeño programa que usa tu kubeconfig igual que kubectl. Pega uno de estos comandos en una terminal: descarga la última versión, comprueba su SHA256 y lo arranca. Luego pulsa CONECTAR AL CLUSTER.",
+	"The game reaches your cluster through kubiverse-bridge, a small program that uses your kubeconfig like kubectl. Paste one of these in a terminal: it downloads the latest release, checks its SHA256 and starts it. Then press CONNECT TO CLUSTER.": "El juego llega a tu cluster a través de kubiverse-bridge, un pequeño programa que usa tu kubeconfig igual que kubectl. Pega uno de estos comandos en una terminal: descarga la última versión, comprueba su SHA256 y lo arranca. Luego pulsa CONECTAR AL CLUSTER.",
 	"Connecting to %s ...": "Conectando a %s ...",
 	# ---- bars and menus
 	"G LEGEND": "G LEYENDA",

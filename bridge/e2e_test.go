@@ -89,7 +89,7 @@ func TestE2E(t *testing.T) {
 
 	// The bridge itself, as users run it.
 	dir := t.TempDir()
-	bin := filepath.Join(dir, "k8s-bridge")
+	bin := filepath.Join(dir, "kubiverse-bridge")
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}

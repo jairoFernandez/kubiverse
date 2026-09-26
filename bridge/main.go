@@ -1,4 +1,4 @@
-// k8s-bridge connects to a real Kubernetes cluster (using your kubeconfig)
+// kubiverse-bridge connects to a real Kubernetes cluster (using your kubeconfig)
 // and exposes a small, game-friendly HTTP + WebSocket API for Kubiverse.
 //
 // Browsers cannot talk to the kube-apiserver directly (CORS, client certs,
@@ -196,7 +196,7 @@ func main() {
 	if *lan {
 		scheme = "https"
 	}
-	log.Printf("k8s-bridge listening on %s://%s (readonly=%v)", scheme, *addr, *readOnly)
+	log.Printf("kubiverse-bridge listening on %s://%s (readonly=%v)", scheme, *addr, *readOnly)
 	if len(lanURLs) > 0 {
 		log.Printf("LAN mode (HTTPS): open one of these on your phone/tablet (same Wi-Fi). The browser warns once about the self-signed certificate: accept it. The token is in the URL: share it only with people you trust.")
 		for _, u := range lanURLs {

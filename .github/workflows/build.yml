@@ -73,8 +73,8 @@ jobs:
       - run: make bridge-all
       - uses: actions/upload-artifact@v4
         with:
-          name: k8s-bridge
-          path: bridge/bin/k8s-bridge-*
+          name: kubiverse-bridge
+          path: bridge/bin/kubiverse-bridge-*
           if-no-files-found: error
 
   game:
@@ -211,7 +211,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: "{kubiverse-macos,k8s-bridge}"
+          pattern: "{kubiverse-macos,kubiverse-bridge}"
       - name: Sign and notarize
         if: env.HAS_CERT == 'true'
         env:
@@ -238,10 +238,10 @@ jobs:
           xcrun stapler staple app/Kubiverse.app
           rm out/kubiverse-macos.zip && ditto -c -k --keepParent app/Kubiverse.app out/kubiverse-macos.zip
           # The bridge binaries (a zip to notarize; the binaries themselves are shipped)
-          for b in dist/k8s-bridge/k8s-bridge-darwin-*; do
+          for b in dist/kubiverse-bridge/kubiverse-bridge-darwin-*; do
             codesign --force --options runtime --timestamp -s "$id" "$b"; cp "$b" out/
           done
-          ditto -c -k out/k8s-bridge-darwin-* bridges.zip && notarize bridges.zip
+          ditto -c -k out/kubiverse-bridge-darwin-* bridges.zip && notarize bridges.zip
       - uses: actions/upload-artifact@v4
         if: env.HAS_CERT == 'true'
         with:
@@ -263,7 +263,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: "{kubiverse-*,k8s-bridge,signed-macos}"
+          pattern: "{kubiverse-*,signed-macos}"
       - name: Package
         run: |
           cd dist
@@ -272,7 +272,7 @@ jobs:
           (cd kubiverse-web && zip -qr ../out/kubiverse-web.zip .)
           (cd kubiverse-linux && chmod +x kubiverse.x86_64 && tar czf ../out/kubiverse-linux-x86_64.tar.gz .)
           (cd kubiverse-windows && zip -qr ../out/kubiverse-windows-x86_64.zip .)
-          chmod +x k8s-bridge/* && cp k8s-bridge/* out/
+          chmod +x kubiverse-bridge/* && cp kubiverse-bridge/* out/
           # Signed and notarized macOS builds replace the ad-hoc ones when present.
           if [ -d signed-macos ]; then cp signed-macos/* out/; fi
       # Windows: Authenticode signature when WINDOWS_CERT_PFX (base64) and
@@ -287,7 +287,7 @@ jobs:
           sudo apt-get install -y -qq osslsigncode >/dev/null
           echo "$PFX" | base64 --decode > $RUNNER_TEMP/cert.pfx
           sign() { osslsigncode sign -pkcs12 $RUNNER_TEMP/cert.pfx -pass "$PFX_PASSWORD" -n Kubiverse -i https://github.com/${{ github.repository }} -t http://timestamp.digicert.com -in "$1" -out "$1.signed" && mv "$1.signed" "$1"; }
-          for b in dist/out/k8s-bridge-windows-*.exe; do sign "$b"; done
+          for b in dist/out/kubiverse-bridge-windows-*.exe; do sign "$b"; done
           cd dist && rm -rf winsign && mkdir winsign && cd winsign && unzip -q ../out/kubiverse-windows-x86_64.zip
           for e in *.exe; do sign "$e"; done
           rm ../out/kubiverse-windows-x86_64.zip && zip -qr ../out/kubiverse-windows-x86_64.zip .
@@ -296,6 +296,9 @@ jobs:
           path: src
       - name: Checksums, Homebrew and winget manifests
         run: |
+          # The bridge used to be called k8s-bridge: its old asset names stay
+          # for a couple of releases (old get-bridge scripts, old links).
+          (cd dist/out && for f in kubiverse-bridge-*; do cp "$f" "k8s-bridge-${f#kubiverse-bridge-}"; done)
           (cd dist/out && sha256sum * > SHA256SUMS.txt)
           cd src && packaging/render.sh "${GITHUB_REF_NAME#v}" ../dist/out ../dist/packaging
           cp ../dist/packaging/* ../dist/out/
@@ -309,7 +312,10 @@ jobs:
           set -euo pipefail
           git clone -q "https://x-access-token:${TAP_TOKEN}@github.com/${{ github.repository_owner }}/homebrew-kubiverse.git" tap
           mkdir -p tap/Formula tap/Casks
-          cp dist/packaging/k8s-bridge.rb tap/Formula/ && cp dist/packaging/kubiverse.rb tap/Casks/
+          cp dist/packaging/kubiverse-bridge.rb tap/Formula/ && cp dist/packaging/kubiverse.rb tap/Casks/
+          # k8s-bridge was renamed: brew upgrade moves old installs.
+          cp src/packaging/homebrew/formula_renames.json tap/
+          rm -f tap/Formula/k8s-bridge.rb
           cd tap && git config user.name "kubiverse release" && git config user.email "actions@users.noreply.github.com"
           git add -A && git commit -qm "kubiverse ${GITHUB_REF_NAME}" && git push -q
       - name: Create release

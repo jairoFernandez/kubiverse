@@ -482,7 +482,7 @@ func _build_connect_ui() -> void:
 	# ---- run a bridge here (not needed when this page is served by one)
 	if not K8s.served_by_bridge():
 		v.add_child(_section("RUN THE BRIDGE ON THIS COMPUTER"))
-		var bn := _label("The game reaches your cluster through k8s-bridge, a small program that uses your kubeconfig like kubectl. Paste one of these in a terminal: it downloads the latest release, checks its SHA256 and starts it. Then press CONNECT TO CLUSTER.", 21, Vox.SILVER)
+		var bn := _label("The game reaches your cluster through kubiverse-bridge, a small program that uses your kubeconfig like kubectl. Paste one of these in a terminal: it downloads the latest release, checks its SHA256 and starts it. Then press CONNECT TO CLUSTER.", 21, Vox.SILVER)
 		bn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		v.add_child(bn)
 		for pair in K8s.bridge_install_commands():
@@ -526,6 +526,20 @@ func _build_connect_ui() -> void:
 			how.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			row.add_child(how)
 			nbox.add_child(row)
+			# Terminal commands, ready to copy.
+			for cmd in (d[3] if d.size() > 3 else []):
+				var cr := HBoxContainer.new()
+				cr.add_theme_constant_override("separation", 8)
+				var pad := Control.new()
+				pad.custom_minimum_size.x = 110
+				cr.add_child(pad)
+				var cl := _label("$ " + cmd, 19, Vox.YELLOW)
+				cl.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+				cl.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
+				cl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				cr.add_child(cl)
+				cr.add_child(_button("COPY", _copy.bind(cmd)))
+				nbox.add_child(cr)
 
 	# ---- new connection
 	v.add_child(_section("NEW CONNECTION"))
@@ -535,7 +549,7 @@ func _build_connect_ui() -> void:
 	g.add_theme_constant_override("h_separation", 10)
 	g.add_theme_constant_override("v_separation", 8)
 	v.add_child(g)
-	g.add_child(_label("k8s-bridge URL", 24, Vox.SILVER))
+	g.add_child(_label("kubiverse-bridge URL", 24, Vox.SILVER))
 	_url_edit = LineEdit.new()
 	_url_edit.text = K8s.default_bridge_url()
 	_url_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL

@@ -1,6 +1,7 @@
 #!/bin/sh
-# Downloads the latest k8s-bridge release for this machine, checks its SHA256
-# against the release's SHA256SUMS.txt and runs it. Extra args go to the bridge:
+# Downloads the latest kubiverse-bridge release for this machine, checks its
+# SHA256 against the release's SHA256SUMS.txt and runs it. Extra args go to
+# the bridge:
 #   curl -fsSL https://raw.githubusercontent.com/jairoFernandez/kubiverse/main/bridge/get-bridge.sh | sh -s -- --allow-origin https://jairofernandez.github.io
 set -eu
 REPO=jairoFernandez/kubiverse
@@ -17,12 +18,16 @@ case "$arch" in
   *) echo "unsupported CPU: $arch" >&2; exit 1 ;;
 esac
 
-name=k8s-bridge-$os-$arch
 dir=${KUBIVERSE_HOME:-$HOME/.kubecraft}/bin
 base=https://github.com/$REPO/releases/latest/download
 mkdir -p "$dir"
+# Its old name was k8s-bridge: releases up to v0.1.7 only have that one.
+name=kubiverse-bridge-$os-$arch
 echo "Downloading $name (latest release of $REPO)..."
-curl -fL --progress-bar -o "$dir/$name.tmp" "$base/$name"
+if ! curl -fsL -o "$dir/$name.tmp" "$base/$name"; then
+  name=k8s-bridge-$os-$arch
+  curl -fL --progress-bar -o "$dir/$name.tmp" "$base/$name"
+fi
 curl -fsSL -o "$dir/SHA256SUMS.txt" "$base/SHA256SUMS.txt"
 
 want=$(awk -v n="$name" '$2 == n { print $1 }' "$dir/SHA256SUMS.txt")
@@ -37,6 +42,7 @@ if [ -z "$want" ] || [ "$want" != "$got" ]; then
   exit 1
 fi
 chmod +x "$dir/$name.tmp"
-mv "$dir/$name.tmp" "$dir/k8s-bridge"
-echo "Checksum OK. Starting $dir/k8s-bridge (Ctrl+C stops it)."
-exec "$dir/k8s-bridge" "$@"
+mv "$dir/$name.tmp" "$dir/kubiverse-bridge"
+rm -f "$dir/k8s-bridge"
+echo "Checksum OK. Starting $dir/kubiverse-bridge (Ctrl+C stops it)."
+exec "$dir/kubiverse-bridge" "$@"

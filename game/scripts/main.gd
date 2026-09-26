@@ -305,7 +305,7 @@ func _ready() -> void:
 		K8s.start_demo()
 		hud.show_connect(false)
 	elif K8s.web_query_param("bridge") != "" or K8s.web_query_param("token") != "" or "--connect" in OS.get_cmdline_user_args():
-		# ?token=... comes from `k8s-bridge --lan` (the link printed for phones).
+		# ?token=... comes from `kubiverse-bridge --lan` (the link printed for phones).
 		var url := K8s.default_bridge_url()
 		var ctx := K8s.web_query_param("context")
 		for arg in OS.get_cmdline_user_args():

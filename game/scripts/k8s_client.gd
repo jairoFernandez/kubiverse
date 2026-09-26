@@ -1,5 +1,5 @@
 extends Node
-## Autoload "K8s": talks to k8s-bridge over HTTP + WebSocket, or drives the
+## Autoload "K8s": talks to kubiverse-bridge over HTTP + WebSocket, or drives the
 ## offline MockCluster in demo mode. The rest of the game only sees signals.
 
 signal state_updated(state: Dictionary)
@@ -63,7 +63,7 @@ func default_bridge_url() -> String:
 
 var _served_by_bridge := -1
 
-## True when this web page comes from a k8s-bridge (localhost, `--lan`, or a
+## True when this web page comes from a kubiverse-bridge (localhost, `--lan`, or a
 ## team bridge in the cluster behind the company login), so a bridge is
 ## already running. False natively and on a public static host (Pages demo).
 func served_by_bridge() -> bool:
@@ -83,7 +83,7 @@ func served_by_bridge() -> bool:
 
 const GET_BRIDGE := "https://raw.githubusercontent.com/jairoFernandez/kubiverse/main/bridge/get-bridge"
 
-## One-liners that download the latest k8s-bridge release, check its SHA256
+## One-liners that download the latest kubiverse-bridge release, check its SHA256
 ## and run it; on the web they also trust this page's origin. [label, command].
 func bridge_install_commands() -> Array:
 	var args := ""
@@ -103,7 +103,8 @@ const RELEASE_DOWNLOAD := "https://github.com/jairoFernandez/kubiverse/releases/
 func native_downloads() -> Array:
 	return [
 		["macOS", RELEASE_DOWNLOAD + "kubiverse-macos.zip",
-			"Unzip and move Kubiverse.app to Applications. It is not notarized: the first time, right-click > Open (or System Settings > Privacy & Security > Open Anyway)."],
+			"Easiest with Homebrew (it brings the bridge too). The app isn't notarized yet, so macOS blocks it the first time: the second command removes the \"downloaded from the Internet\" flag once (or right-click the app > Open).",
+			["brew install --cask jairofernandez/kubiverse/kubiverse", "xattr -dr com.apple.quarantine /Applications/Kubiverse.app"]],
 		["Windows", RELEASE_DOWNLOAD + "kubiverse-windows-x86_64.zip",
 			"Unzip and run Kubiverse.exe. If SmartScreen stops it: More info > Run anyway."],
 		["Linux", RELEASE_DOWNLOAD + "kubiverse-linux-x86_64.tar.gz",

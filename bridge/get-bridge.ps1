@@ -1,18 +1,25 @@
-# Downloads the latest k8s-bridge release for Windows, checks its SHA256
+# Downloads the latest kubiverse-bridge release for Windows, checks its SHA256
 # against the release's SHA256SUMS.txt and runs it. Extra args go to the bridge:
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/jairoFernandez/kubiverse/main/bridge/get-bridge.ps1))) --allow-origin https://jairofernandez.github.io
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $repo = 'jairoFernandez/kubiverse'
-$name = 'k8s-bridge-windows-amd64.exe'
+$arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
 $base = "https://github.com/$repo/releases/latest/download"
 $dir = Join-Path $HOME '.kubecraft\bin'
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
-$exe = Join-Path $dir 'k8s-bridge.exe'
+$exe = Join-Path $dir 'kubiverse-bridge.exe'
 $tmp = "$exe.tmp"
 
+# Its old name was k8s-bridge: releases up to v0.1.7 only have that one (amd64).
+$name = "kubiverse-bridge-windows-$arch.exe"
 Write-Host "Downloading $name (latest release of $repo)..."
-Invoke-WebRequest "$base/$name" -OutFile $tmp -UseBasicParsing
+try {
+  Invoke-WebRequest "$base/$name" -OutFile $tmp -UseBasicParsing
+} catch {
+  $name = 'k8s-bridge-windows-amd64.exe'
+  Invoke-WebRequest "$base/$name" -OutFile $tmp -UseBasicParsing
+}
 $sums = (Invoke-WebRequest "$base/SHA256SUMS.txt" -UseBasicParsing).Content
 if ($sums -is [byte[]]) { $sums = [Text.Encoding]::UTF8.GetString($sums) }
 
@@ -27,5 +34,6 @@ if (-not $want -or $want -ne $got) {
   throw "checksum mismatch for ${name}: not running it"
 }
 Move-Item -Force $tmp $exe
+Remove-Item -ErrorAction SilentlyContinue (Join-Path $dir 'k8s-bridge.exe')
 Write-Host "Checksum OK. Starting $exe (Ctrl+C stops it)."
 & $exe @args

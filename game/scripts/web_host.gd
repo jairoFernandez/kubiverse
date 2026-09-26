@@ -1,7 +1,7 @@
 class_name WebHost
 ## Where a web build is served from.
 
-## True for localhost and private-network addresses: the hosts a k8s-bridge
+## True for localhost and private-network addresses: the hosts a kubiverse-bridge
 ## serves the web build from.
 static func is_local(origin: String) -> bool:
 	var host := origin.get_slice("://", 1).get_slice("/", 0)
