@@ -23,6 +23,7 @@ var kubi_steps := {}          # dynamic mission id -> current step
 var cluster_kinds := {}       # "bridge url|context" -> "prod" | "sandbox"
 var cluster_looks := {}       # "bridge url|context" (or "demo") -> Look id (farm, space...)
 var ns_filters := {}          # same key -> "team-*, shop" (only these namespaces are drawn)
+var lessons_done := {}        # engine room lesson id -> true (its quiz was answered right)
 var lang := ""
 var always_run := false
 var minimap := true
@@ -60,6 +61,7 @@ func _ready() -> void:
 		cluster_kinds = cf.get_value("clusters", "kinds", cluster_kinds)
 		cluster_looks = cf.get_value("clusters", "looks", cluster_looks)
 		ns_filters = cf.get_value("clusters", "ns_filters", ns_filters)
+		lessons_done = cf.get_value("learn", "lessons_done", lessons_done)
 		lang = cf.get_value("ui", "lang", lang)
 		always_run = cf.get_value("ui", "always_run", always_run)
 		minimap = cf.get_value("ui", "minimap", minimap)
@@ -122,6 +124,7 @@ func save() -> void:
 	cf.set_value("clusters", "kinds", cluster_kinds)
 	cf.set_value("clusters", "looks", cluster_looks)
 	cf.set_value("clusters", "ns_filters", ns_filters)
+	cf.set_value("learn", "lessons_done", lessons_done)
 	cf.set_value("ui", "lang", lang)
 	cf.set_value("ui", "always_run", always_run)
 	cf.set_value("ui", "minimap", minimap)

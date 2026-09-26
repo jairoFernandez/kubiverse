@@ -346,6 +346,15 @@ func _screenshot_and_quit(path: String) -> void:
 		if arg.begins_with("--level="):
 			_go_level(arg.substr(8))
 			await get_tree().create_timer(2.5).timeout
+		if arg.begins_with("--lesson="):
+			# The engine room with a lesson open at a step: --lesson=rolling:2
+			_go_level("engine")
+			await get_tree().create_timer(2.0).timeout
+			hud.engine.visible = true
+			hud.engine.open_lesson(arg.substr(9).get_slice(":", 0))
+			hud.engine._goto_step(int(arg.get_slice(":", 1)) if ":" in arg else 0, true)
+			hud.engine._playing = false
+			await get_tree().create_timer(1.2).timeout
 		if arg.begins_with("--underground"):
 			# --underground (the arcade) or --underground=whack|snake|over
 			var what := arg.get_slice("=", 1) if "=" in arg else ""
@@ -1206,7 +1215,7 @@ func _on_level_changed(l: String) -> void:
 	hud.engine.visible = l == "engine"
 	if l == "engine":
 		hud._mission_panel.visible = false
-		hud.banner(tr("ENGINE ROOM"), tr("The control plane at work. Every event of your cluster travels between the machines as a work order. Click a machine to see what it does, or TEACH ME to follow the life of a pod."))
+		hud.banner(tr("ENGINE ROOM"), tr("The control plane at work. Every event of your cluster travels between the machines as a work order. Click a machine to see what it does, or open LESSONS: from zero to expert."))
 	# Out of a pod: back next to its robot in the hall.
 	if l.begins_with("ns:") and _prev_level.begins_with("pod:"):
 		var bot: PodBot = world.pods.get(_prev_level.substr(4))

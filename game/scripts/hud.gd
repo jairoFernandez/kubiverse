@@ -4190,6 +4190,8 @@ func _layout() -> void:
 		_close_fab.position = Vector2(sz.x - fs.x - 8.0, clampf(lowest + 8.0, top, sz.y * 0.62))
 	var bottom := (_help_bar.size.y + 6.0) if _help_bar.visible else 6.0
 	# Terminal and feed sit above the help bar.
+	if engine and engine.drag:
+		engine.drag.place(sz)   # the engine room panel, when dragged out
 	var term_floating := _term_drag.place(sz)
 	if term_floating:
 		# Floating: its size is the player's; the text fills it.
