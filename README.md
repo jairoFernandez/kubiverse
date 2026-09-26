@@ -414,6 +414,16 @@ For a workload an Argo CD Application deploys from a GitHub repo, **OPEN IN GIT*
 
 Connect GitHub from VIEW → GITHUB (GitOps) with a [fine-grained token](https://github.com/settings/personal-access-tokens/new): Repository access → only your GitOps repos; Contents: Read-only to look (Read and write to propose), Pull requests: Read and write to open PRs. The token stays with the bridge (`~/.kubecraft/github-token`, 0600), is never sent to the game or the AI; on a shared bridge it comes from a Secret (`--github-token-file`, Helm `github.tokenSecret`). Apps built with Kustomize or Helm generate their objects: the game links their folder instead. The demo has an app `shop` in a pretend `acme/platform` repo.
 
+## Updates
+
+At startup and every 6 hours the game asks GitHub for the latest release (silently: nothing is shown offline). When something is behind, a green **UPDATE vX.Y.Z** button appears in the top strip (plus one notice) and opens what's new with the right way to update:
+
+- **macOS app**: `brew upgrade --cask jairofernandez/kubiverse/kubiverse`, or download `kubiverse-macos.zip` from the release page.
+- **Windows / Linux app**: download it from the release page.
+- **Bridge** (`GET /api/version`, `kubiverse-bridge --version`): `brew upgrade jairofernandez/kubiverse/kubiverse-bridge`, or rerun the one-line get-bridge command (it always fetches the latest). The web build served by a bridge comes inside it, so updating the bridge updates the web game too; the GitHub Pages demo is always the latest (it only tells you when the bridge you connect to is older).
+
+**Skip this version** stops the notice until a newer one comes out; development builds (`dev`, `0.0.0`, the editor) never ask.
+
 ## Quick start
 
 Requirements: Go (version in `bridge/go.mod`), Godot 4.7 (`brew install --cask godot`), a working kubeconfig.
@@ -546,6 +556,7 @@ The defaults expect oauth2-proxy answering `/oauth2/*` on the same host (see [va
 | GET · POST · DELETE | `/api/portforward` | list · open `{"kind": "pod"\|"service", "ns", "name", "port", "local_port"}` · close `?id=`. Traffic counters arrive on the WebSocket as `{"type":"forwards"}` every second |
 | GET · POST | `/api/kind` | `?context=` → `{kind, locked}` · `{"context","kind":"prod"\|"sandbox"}` marks it (refused for `--production` contexts) |
 | GET | `/api/audit?limit=&context=` | the change log (newest first) |
+| GET | `/api/version` | `{version}`: this bridge's release (`dev` for local builds; `make bridge VERSION=0.1.8`) |
 | GET | `/api/whoami` | `{team, user, groups, in_cluster}`: who changes are made as |
 | POST | `/api/action` | `{"action": "delete_pod" \| "scale" \| "restart" \| "pause" \| "resume" \| "rollout_undo" \| "cordon" \| "uncordon" \| "drain" \| "create_deployment" \| "delete_workload", "kind", "ns", "name", "replicas", "image", "service", "revision"}` |
 | GET | `/api/obs` | the Prometheus / Alertmanager / Loki found (`{prometheus, alertmanager, loki}`, null if missing) |

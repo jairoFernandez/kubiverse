@@ -95,6 +95,14 @@ var clock_text := ""
 var weather_why := ""   # what the weather means (tooltip of the clock)
 var _look_btn: Button
 var _audit_panel: PanelContainer   # what changed through the bridge
+var _upd_btn: Button               # UPDATE vX.Y.Z in the level strip: a newer release exists
+var _upd_panel: PanelContainer     # what's new and how to update on this platform
+var _upd_box: VBoxContainer
+var _upd_latest: Dictionary = {}   # GitHub's latest release (tag_name, name, body, html_url)
+var _upd_bridge := ""              # version of the bridge we talk to ("" = unknown / none)
+var _upd_targets: Array[String] = []
+var _upd_told := ""                # version already announced with a toast
+var _upd_later := ""               # "remind me later": hidden until the next check
 var _audit_text: RichTextLabel
 var _top_bar: PanelContainer
 var _level_strip: PanelContainer
@@ -320,6 +328,13 @@ func _ready() -> void:
 		toast(tr("OK: %s" if ok else "ERROR: %s") % msg, ok))
 	Settings.changed.connect(_sync_view)
 	I18n.lang_changed.connect(_on_lang_changed)
+	# Newer release? At startup and every few hours (silent when offline).
+	var ut := Timer.new()
+	ut.wait_time = Updates.CHECK_EVERY
+	ut.autostart = true
+	ut.timeout.connect(check_updates)
+	add_child(ut)
+	check_updates.call_deferred()
 
 
 # ------------------------------------------------------------------ theme
@@ -1272,6 +1287,12 @@ func _build_level_strip() -> void:
 	_level_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_level_label.clip_text = true
 	h.add_child(_level_label)
+	_upd_btn = _button("", open_update, "GoButton")
+	_upd_btn.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	_upd_btn.add_theme_color_override("font_color", Vox.GREEN)
+	_upd_btn.tooltip_text = tr("A newer Kubiverse is out: what's new and how to update")
+	_upd_btn.visible = false
+	h.add_child(_upd_btn)
 	_perf_label = _label("", 20, Vox.SILVER)
 	_perf_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	h.add_child(_perf_label)
@@ -2285,7 +2306,7 @@ func close_top() -> bool:
 
 
 func _anything_to_close() -> bool:
-	for p in [_confirm_panel, _pf_panel, _build_panel, _guide_panel, _log_panel, _audit_panel, _map_panel, _logs_panel, _view_panel, _vol_panel, _alarm_panel,
+	for p in [_confirm_panel, _upd_panel, _pf_panel, _build_panel, _guide_panel, _log_panel, _audit_panel, _map_panel, _logs_panel, _view_panel, _vol_panel, _alarm_panel,
 			_legend, kubi, watch, _menu_panel, stats, _mission_panel, _inspector]:
 		if p.visible:
 			return true
@@ -2568,6 +2589,7 @@ func _on_connection(status: String, detail: String) -> void:
 			if _connect_root.visible:
 				show_connect(false)
 			toast(tr("Connected: %s") % detail, true)
+			_check_bridge_version()
 		"connecting":
 			_conn_dot.color = Vox.YELLOW
 		_:
@@ -3871,6 +3893,12 @@ func _build_modals() -> void:
 	_audit_text.selection_enabled = true
 	av.add_child(_audit_text)
 
+	# A newer release: what's new and how to update (filled by open_update)
+	_upd_panel = _modal(-1)
+	_upd_box = VBoxContainer.new()
+	_upd_box.add_theme_constant_override("separation", 10)
+	_upd_panel.add_child(_upd_box)
+
 	# Control-plane guide
 	_guide_panel = _modal(60)
 	_guide_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -3984,7 +4012,7 @@ func close_modals() -> bool:
 	if editor.visible:
 		editor.request_close()
 		return true
-	for p in [_confirm_panel, _build_panel, _gh_panel, _guide_panel, _map_panel, _logs_panel, _view_panel, _vol_panel, _alarm_panel, _search_panel, _legend, kubi, watch]:
+	for p in [_confirm_panel, _build_panel, _gh_panel, _upd_panel, _guide_panel, _map_panel, _logs_panel, _view_panel, _vol_panel, _alarm_panel, _search_panel, _legend, kubi, watch]:
 		if p.visible:
 			p.visible = false
 			_sync_view()
@@ -4132,6 +4160,142 @@ func _on_kind_changed(kind: String) -> void:
 			else tr("SANDBOX cluster: break and fix things without fear."), kind != "prod")
 	if missions:
 		missions.kind_changed()
+
+
+# --------------------------------------------------------------- updates
+
+## Asks GitHub for the latest release (the timer calls it every few hours;
+## "remind me later" lasts until then). Offline or rate-limited: silence.
+func check_updates() -> void:
+	_upd_later = ""
+	K8s.fetch_json(Updates.LATEST_API, func(code: int, data):
+		if code != 200 or typeof(data) != TYPE_DICTIONARY:
+			return
+		_upd_latest = data
+		_check_bridge_version())
+
+
+## The bridge may be older than the game (or the web build inside it is).
+func _check_bridge_version() -> void:
+	if _upd_latest.is_empty():
+		return
+	K8s.bridge_version(func(v: String):
+		_upd_bridge = v
+		_update_notice())
+
+
+## macos / windows / linux, or the web build served by a bridge / Pages.
+func _update_platform() -> String:
+	if OS.has_feature("web"):
+		return "web_bridge" if K8s.served_by_bridge() else "web_pages"
+	if OS.has_feature("macos"):
+		return "macos"
+	if OS.has_feature("windows"):
+		return "windows"
+	return "linux"
+
+
+## Version of this build (stamped by CI on releases); none from the editor.
+func _app_version() -> String:
+	if OS.has_feature("editor"):
+		return ""
+	return str(ProjectSettings.get_setting("application/config/version", ""))
+
+
+func _update_notice() -> void:
+	var latest := str(_upd_latest.get("tag_name", ""))
+	_upd_targets = Updates.targets(_update_platform(), _app_version(), _upd_bridge, latest)
+	var notify := Updates.should_notify(latest, _upd_targets, Settings.skipped_version) and _upd_later != latest
+	_upd_btn.visible = notify
+	if not notify:
+		return
+	_upd_btn.text = "%s %s" % [tr("UPDATE"), latest]
+	if _upd_told != latest:
+		_upd_told = latest
+		toast(tr("Kubiverse %s is out: press UPDATE to see how to get it.") % latest, true)
+
+
+func _update_target_title(target: String) -> String:
+	match target:
+		"macos": return tr("This app (macOS)")
+		"windows": return tr("This app (Windows)")
+		"linux": return tr("This app (Linux)")
+	return tr("The bridge (kubiverse-bridge)")
+
+
+func open_update() -> void:
+	for c in _upd_box.get_children():
+		_upd_box.remove_child(c)
+		c.queue_free()
+	var latest := str(_upd_latest.get("tag_name", ""))
+	var page := str(_upd_latest.get("html_url", Updates.RELEASES))
+	var head := _label(tr("UPDATE AVAILABLE: %s") % latest, 30, Vox.GREEN)
+	head.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	_upd_box.add_child(head)
+	var rname := str(_upd_latest.get("name", "")).strip_edges()
+	if rname != "" and rname != latest:
+		var n := _label(rname, 24, Vox.YELLOW)
+		n.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		_upd_box.add_child(n)
+	var notes := Updates.summary(str(_upd_latest.get("body", "")))
+	if notes != "":
+		var nl := _label(notes, 20, Vox.SILVER)
+		nl.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		nl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		nl.custom_minimum_size = Vector2(620, 0)
+		_upd_box.add_child(nl)
+	# On a public host the bridge must keep trusting this page's origin.
+	var origin := ""
+	if OS.has_feature("web") and not K8s.served_by_bridge():
+		var o = JavaScriptBridge.eval("window.location.origin", true)
+		if o != null and str(o).begins_with("https://"):
+			origin = str(o)
+	for target in _upd_targets:
+		_upd_box.add_child(_section(_update_target_title(target)))
+		for hint: Dictionary in Updates.hints(target, origin):
+			var row := HBoxContainer.new()
+			row.add_theme_constant_override("separation", 10)
+			var l := _label(tr(str(hint.label)), 22, Vox.WHITE)
+			l.custom_minimum_size = Vector2(190, 0)
+			l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			row.add_child(l)
+			if hint.has("cmd"):
+				var cmd := str(hint.cmd)
+				var c := _label(cmd, 20, Vox.YELLOW)
+				c.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+				c.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
+				c.custom_minimum_size = Vector2(380, 0)
+				c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				row.add_child(c)
+				row.add_child(_button("COPY", func(): _copy(cmd)))
+			else:
+				var url := str(hint.url)
+				row.add_child(_button("OPEN RELEASE PAGE", func(): OS.shell_open(url)))
+			_upd_box.add_child(row)
+		if target == "bridge":
+			var tip := tr("Then restart the bridge and connect again.")
+			if OS.has_feature("web") and K8s.served_by_bridge():
+				tip = tr("This game comes inside the bridge: update it, restart it and reload this page.")
+			var tl := _label(tip, 20, Vox.SILVER)
+			tl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			tl.custom_minimum_size = Vector2(620, 0)
+			_upd_box.add_child(tl)
+	var bh := HBoxContainer.new()
+	bh.add_theme_constant_override("separation", 12)
+	bh.alignment = BoxContainer.ALIGNMENT_END
+	bh.add_child(_button("RELEASE PAGE", func(): OS.shell_open(page)))
+	bh.add_child(_button("REMIND ME LATER", func():
+		_upd_later = latest
+		_upd_panel.visible = false
+		_update_notice()))
+	bh.add_child(_button("SKIP THIS VERSION", func():
+		Settings.skipped_version = latest
+		Settings.save()
+		_upd_panel.visible = false
+		_update_notice(), "DangerButton"))
+	_upd_box.add_child(bh)
+	_upd_panel.visible = true
+	_upd_panel.move_to_front()
 
 
 func confirm(text: String, cb: Callable, cmd := "") -> void:
@@ -4286,7 +4450,7 @@ func _load_logs() -> void:
 ## Keeps side panels within the (UI-unit) screen size.
 func _layout_modals() -> void:
 	var full := _modal_layer.size
-	for p in [_confirm_panel, _build_panel, _kind_panel, _pf_panel, _gh_panel]:
+	for p in [_confirm_panel, _build_panel, _kind_panel, _pf_panel, _gh_panel, _upd_panel]:
 		if p.visible:
 			var ps: Vector2 = p.get_combined_minimum_size().min(full - Vector2(20, 20))
 			p.size = ps
@@ -4397,7 +4561,7 @@ func _layout() -> void:
 	watch.position = Vector2(sz.x - pw - (8.0 if compact else 10.0), top)
 	# Centered dialogs: size to content, center, keep on screen.
 	var full := _modal_layer.size
-	for p in [_confirm_panel, _build_panel, _kind_panel, _pf_panel]:
+	for p in [_confirm_panel, _build_panel, _kind_panel, _pf_panel, _upd_panel]:
 		if p.visible:
 			var ps: Vector2 = p.get_combined_minimum_size().min(full - Vector2(20, 20))
 			p.size = ps

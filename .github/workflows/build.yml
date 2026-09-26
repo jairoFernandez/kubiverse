@@ -70,7 +70,8 @@ jobs:
         with:
           name: kubiverse-web
           path: bridge/webdist
-      - run: make bridge-all
+      # Tags stamp their version (vX.Y.Z -> X.Y.Z): GET /api/version.
+      - run: make bridge-all VERSION=${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'dev' }}
       - uses: actions/upload-artifact@v4
         with:
           name: kubiverse-bridge
@@ -191,6 +192,7 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: VERSION=${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'dev' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

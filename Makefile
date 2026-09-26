@@ -7,13 +7,18 @@ ADDR   ?= 127.0.0.1:8088
 all: bridge web
 
 ## --- bridge (Go) -----------------------------------------------------------
+## Version stamped in the bridge (GET /api/version, --version): VERSION=v0.1.8
+## or 0.1.8 (a leading v is dropped).
+VERSION ?= dev
+BRIDGE_VERSION := $(patsubst v%,%,$(VERSION))
+
 bridge:
-	cd bridge && go build -o bin/kubiverse-bridge .
+	cd bridge && go build -ldflags="-X main.version=$(BRIDGE_VERSION)" -o bin/kubiverse-bridge .
 
 bridge-all:
 	cd bridge && for t in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do \
 	  os=$${t%/*}; arch=$${t#*/}; ext=$$( [ $$os = windows ] && echo .exe ); \
-	  GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/kubiverse-bridge-$$os-$$arch$$ext . ; done
+	  GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=$(BRIDGE_VERSION)" -o bin/kubiverse-bridge-$$os-$$arch$$ext . ; done
 
 ## Single-file bridges that serve the game themselves (go:embed of build/web).
 bridge-bundle: webdist

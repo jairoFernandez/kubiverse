@@ -9,6 +9,23 @@ signal lang_changed
 const LANGS := {"en": "English", "es": "Español"}
 
 const ES := {
+	"UPDATE": "ACTUALIZAR",
+	"A newer Kubiverse is out: what's new and how to update": "Hay un Kubiverse más nuevo: qué trae y cómo actualizar",
+	"Kubiverse %s is out: press UPDATE to see how to get it.": "Salió Kubiverse %s: pulsa ACTUALIZAR para ver cómo tenerlo.",
+	"This app (macOS)": "Esta app (macOS)",
+	"This app (Windows)": "Esta app (Windows)",
+	"This app (Linux)": "Esta app (Linux)",
+	"The bridge (kubiverse-bridge)": "El bridge (kubiverse-bridge)",
+	"UPDATE AVAILABLE: %s": "ACTUALIZACIÓN DISPONIBLE: %s",
+	"Download kubiverse-macos.zip": "Descarga kubiverse-macos.zip",
+	"Download kubiverse-windows-x86_64.zip": "Descarga kubiverse-windows-x86_64.zip",
+	"Download kubiverse-linux-x86_64.tar.gz": "Descarga kubiverse-linux-x86_64.tar.gz",
+	"OPEN RELEASE PAGE": "ABRIR PÁGINA DE LA VERSIÓN",
+	"Then restart the bridge and connect again.": "Luego reinicia el bridge y vuelve a conectar.",
+	"This game comes inside the bridge: update it, restart it and reload this page.": "Este juego viene dentro del bridge: actualízalo, reinícialo y recarga esta página.",
+	"RELEASE PAGE": "PÁGINA DE LA VERSIÓN",
+	"REMIND ME LATER": "RECUÉRDAMELO LUEGO",
+	"SKIP THIS VERSION": "SALTAR ESTA VERSIÓN",
 	"The bridge refused: %s": "El bridge lo rechazó: %s",
 	"CHANGE LOG (this bridge)": "REGISTRO DE CAMBIOS (este bridge)",
 	"Change log (what was changed)": "Registro de cambios (qué se cambió)",
