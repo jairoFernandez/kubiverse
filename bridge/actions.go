@@ -17,7 +17,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/client-go/informers"
+	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
+	watchtools "k8s.io/client-go/tools/watch"
 )
 
 type ActionRequest struct {
@@ -213,8 +216,10 @@ func (b *Bridge) handleLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 // watchEvents streams fresh Kubernetes Events (scheduling, pulls, crashes...)
-// to the game so they can be shown as an in-game feed.
-func (b *Bridge) watchEvents(ctx context.Context, f informers.SharedInformerFactory) {
+// to the game so they can be shown as an in-game feed. Only new ones matter,
+// so it watches from "now" instead of listing them all first: on a big or far
+// cluster that list can take longer than the whole connection may wait.
+func (b *Bridge) watchEvents(ctx context.Context, cs kubernetes.Interface) {
 	start := time.Now().Add(-5 * time.Second)
 	send := func(obj any) {
 		e, ok := obj.(*corev1.Event)
@@ -237,6 +242,31 @@ func (b *Bridge) watchEvents(ctx context.Context, f informers.SharedInformerFact
 		}})
 		b.broadcast(msg)
 	}
-	inf := f.Core().V1().Events().Informer()
-	inf.AddEventHandler(cacheHandler(send))
+	lw := &cache.ListWatch{WatchFuncWithContext: func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) {
+		return cs.CoreV1().Events("").Watch(ctx, o)
+	}}
+	go func() {
+		for ctx.Err() == nil {
+			// A one-item list only to learn where "now" is.
+			l, err := cs.CoreV1().Events("").List(ctx, metav1.ListOptions{Limit: 1})
+			if err == nil {
+				var w *watchtools.RetryWatcher
+				if w, err = watchtools.NewRetryWatcherWithContext(ctx, l.ResourceVersion, lw); err == nil {
+					for ev := range w.ResultChan() {
+						if ev.Type == watch.Added || ev.Type == watch.Modified {
+							send(ev.Object)
+						}
+					}
+					w.Stop()
+				}
+			}
+			if err != nil && ctx.Err() == nil {
+				log.Printf("events feed: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(10 * time.Second):
+			}
+		}
+	}()
 }

@@ -18,12 +18,15 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
@@ -303,24 +306,42 @@ func startBridge(root context.Context, cfg *rest.Config, ctxName, kubeconfigPath
 	probeCancel()
 	b.addResources(ctx, f, cs, cfg, markDirty)
 	b.addStorageAndConfig(ctx, f, cs, cfg, markDirty)
-	b.watchEvents(ctx, f)
+	b.watchEvents(ctx, cs)
 
 	b.startWatch(ctx, f)
 	log.Printf("[%s] connecting to %s ...", ctxName, cfg.Host)
 	f.Start(ctx.Done())
 	syncCtx, syncCancel := context.WithTimeout(ctx, 25*time.Second)
 	defer syncCancel()
+	// Only the core types keep the cluster from opening: events and the
+	// optional kinds come later (or never) without hiding the rest.
 	for typ, ok := range f.WaitForCacheSync(syncCtx.Done()) {
-		if !ok {
+		if ok {
+			continue
+		}
+		if coreTypes[typ] {
 			cancel()
 			return nil, fmt.Errorf("cluster %s unreachable (cache sync failed for %v)", cfg.Host, typ)
 		}
+		log.Printf("[%s] %v not synced yet, going on without it for now", ctxName, typ)
 	}
 	log.Printf("[%s] cluster cache synced", ctxName)
 	b.markDirty()
 	go b.publishLoop(ctx)
 	go b.pollMetrics(ctx)
 	return b, nil
+}
+
+// coreTypes are the informers the city can't be drawn without.
+var coreTypes = map[reflect.Type]bool{
+	reflect.TypeOf(&corev1.Node{}):        true,
+	reflect.TypeOf(&corev1.Namespace{}):   true,
+	reflect.TypeOf(&corev1.Pod{}):         true,
+	reflect.TypeOf(&corev1.Service{}):     true,
+	reflect.TypeOf(&appsv1.Deployment{}):  true,
+	reflect.TypeOf(&appsv1.ReplicaSet{}):  true,
+	reflect.TypeOf(&appsv1.StatefulSet{}): true,
+	reflect.TypeOf(&appsv1.DaemonSet{}):   true,
 }
 
 // guard protects the API from drive-by browser requests: any web page you
