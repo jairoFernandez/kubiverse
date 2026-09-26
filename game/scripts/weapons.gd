@@ -18,9 +18,13 @@ const LIST := [
 ]
 
 
+## The demo hands out every weapon: nothing there is real.
+static var all_unlocked := false
+
+
 static func unlocked(i: int) -> bool:
 	var u: String = LIST[i].unlock
-	return u == "" or u in Settings.missions_done
+	return all_unlocked or u == "" or u in Settings.missions_done
 
 
 ## Mission title that unlocks weapon i (for the "locked" hint).

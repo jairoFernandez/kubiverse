@@ -231,7 +231,9 @@ func _ready() -> void:
 	weather = Weather.new()
 	world.add_child(weather)
 	K8s.forwards_updated.connect(world.set_forwards)
-	K8s.connection_changed.connect(func(_st, _d): world.demo = K8s.is_demo())
+	K8s.connection_changed.connect(func(_st, _d):
+		world.demo = K8s.is_demo()
+		Weapons.all_unlocked = K8s.is_demo())
 	missions = Missions.new()
 	add_child(missions)
 	hud.missions = missions
@@ -301,8 +303,13 @@ func _ready() -> void:
 	if K8s.web_query_param("vol") != "":  # dev: ?vol=0 sets the master volume
 		Settings.master_volume = float(K8s.web_query_param("vol"))
 	# Web: ?demo=1 jumps straight into demo mode; ?bridge=... auto-connects.
-	if K8s.web_query_param("demo") == "1" or "--demo" in OS.get_cmdline_user_args():
-		K8s.start_demo()
+	# ?demo=1 (the shop) or ?demo=starter|shop|incident|big; --demo[=...] natively.
+	var demo_arg := K8s.web_query_param("demo")
+	for a in OS.get_cmdline_user_args():
+		if a == "--demo" or a.begins_with("--demo="):
+			demo_arg = a.get_slice("=", 1) if "=" in a else "1"
+	if demo_arg != "":
+		K8s.start_demo("shop" if demo_arg == "1" else demo_arg)
 		hud.show_connect(false)
 	elif K8s.web_query_param("bridge") != "" or K8s.web_query_param("token") != "" or "--connect" in OS.get_cmdline_user_args():
 		# ?token=... comes from `kubiverse-bridge --lan` (the link printed for phones).

@@ -19,6 +19,11 @@ var _tick := 0.0
 var _dirty := true
 var _ip := 10
 var _chaos_t := 15.0
+var _chaos_every := Vector2(12.0, 25.0)   # seconds between things breaking on their own
+## Which demo: starter (a tiny, calm cluster), shop (the full one), incident
+## (the shop having a very bad day) or big (the shop plus a few hundred pods).
+var scenario := "shop"
+const SCENARIOS := ["starter", "shop", "incident", "big"]
 var _field_node := ""
 var _watch_t := 2.0
 var _visitors := {}
@@ -33,6 +38,63 @@ const CAST := [
 
 
 func start() -> void:
+	if scenario == "starter":
+		_seed_starter()
+	else:
+		_seed_shop()
+	if scenario == "incident":
+		_seed_incident()
+	elif scenario == "big":
+		_seed_big()
+	# Warm up so the world starts populated.
+	for i in 40:
+		_reconcile(0.25)
+	_emit()
+
+
+## First steps: one worker, one small app, nothing broken.
+func _seed_starter() -> void:
+	namespaces = ["default", "kube-system", "hello"]
+	_node("control-plane", ["control-plane"])
+	_node("worker-1", [])
+	_wl("Deployment", "kube-system", "coredns", 2, "coredns/coredns:1.11", "ok")
+	_wl("DaemonSet", "kube-system", "kube-proxy", 0, "registry.k8s.io/kube-proxy:v1.31", "ok")
+	_wl("Deployment", "hello", "web", 2, "nginx:alpine", "ok")
+	_wl("Deployment", "hello", "api", 1, "busybox:1.36", "ok")
+	_svc("kube-system", "kube-dns", "ClusterIP", "coredns", ["53/UDP", "53/TCP"])
+	_svc("hello", "web", "LoadBalancer", "web", ["80/TCP"])
+	_svc("hello", "api", "ClusterIP", "api", ["8080/TCP"])
+
+
+## The shop having a very bad day: a node down, more crashes, a bad image
+## everywhere, and things break on their own more often.
+func _seed_incident() -> void:
+	nodes["worker-c"].ready = false
+	workloads["shop/Deployment/cart"].behaviour = "crash"
+	_wl("Deployment", "shop", "checkout", 2, "registry.invalid/checkout:v2", "pullfail")
+	_wl("Deployment", "shop", "search", 2, "busybox:1.36", "crash")
+	_wl("Deployment", "data", "etl", 3, "busybox", "unschedulable")
+	_svc("shop", "checkout", "ClusterIP", "checkout", ["8080/TCP"])
+	_chaos_every = Vector2(4.0, 9.0)
+
+
+## A big cluster: the shop plus 10 more nodes and 30 team namespaces.
+func _seed_big() -> void:
+	for i in 10:
+		_node("worker-%02d" % (i + 1), [])
+	var apps := ["api", "web", "worker", "cache", "jobs"]
+	for t in 30:
+		var ns := "team-%02d" % (t + 1)
+		namespaces.append(ns)
+		for j in 2 + t % 3:
+			var app: String = apps[(t + j) % apps.size()]
+			_wl("Deployment", ns, app, 2 + (t + j) % 3, "busybox:1.36", "crash" if (t * 7 + j) % 23 == 0 else "ok")
+			if j == 0:
+				_svc(ns, app, "ClusterIP", app, ["8080/TCP"])
+
+
+## The full demo: an online shop with payments, ML, data and platform tools.
+func _seed_shop() -> void:
 	_node("control-plane", ["control-plane"])
 	_node("worker-a", [])
 	_node("worker-b", [])
@@ -89,10 +151,6 @@ func start() -> void:
 	_svc("shop", "redis", "ClusterIP", "redis", ["6379/TCP"], true)
 	_svc("payments", "ledger", "NodePort", "ledger", ["9000/TCP"])
 	_svc("monitoring", "prometheus", "ClusterIP", "node-exporter", ["9100/TCP"])
-	# Warm up so the world starts populated.
-	for i in 40:
-		_reconcile(0.25)
-	_emit()
 
 
 func _node(n: String, roles: Array) -> void:
@@ -118,8 +176,9 @@ func _process(delta: float) -> void:
 	_tick += delta
 	_chaos_t -= delta
 	if _chaos_t <= 0.0:
-		_chaos_t = randf_range(12.0, 25.0)
-		_random_chaos()
+		_chaos_t = randf_range(_chaos_every.x, _chaos_every.y)
+		if scenario != "starter":   # the first-steps cluster stays calm
+			_random_chaos()
 	if _tick >= 0.25:
 		_reconcile(_tick)
 		_tick = 0.0
@@ -545,7 +604,7 @@ func _emit() -> void:
 		s.services.append({"ns": sv.ns, "name": sv.name, "type": sv.type, "cluster_ip": sv.cluster_ip,
 			"ports": sv.ports, "selector": {"app": sv.app}, "pods": backends, "ready": ready, "external": ext, "node_ports": nps})
 	# Ingresses: domains of the demo shop, one route pointing to a Service that doesn't exist.
-	s["ingresses"] = [
+	s["ingresses"] = [] if scenario == "starter" else [
 		{"ns": "shop", "name": "storefront", "class": "nginx", "tls": ["shop.kubiverse.dev"], "address": ["198.51.100.7"],
 			"rules": [{"host": "shop.kubiverse.dev", "path": "/", "service": "frontend", "port": "80"},
 				{"host": "shop.kubiverse.dev", "path": "/cart", "service": "cart", "port": "8080"}]},
@@ -1002,6 +1061,11 @@ func log_search(ns: String, wl_name: String, text: String, since: String) -> Dic
 
 ## The resources beyond workloads, like the bridge's snapshot has them.
 func _resources(s: Dictionary) -> void:
+	if scenario == "starter":   # no storage, secrets, GitOps or certificates yet
+		for k in ["volumes", "pvs", "configs", "apps", "certs"]:
+			s[k] = []
+		s["storage_classes"] = [{"name": "standard", "provisioner": "rancher.io/local-path", "reclaim": "Delete", "binding": "WaitForFirstConsumer", "default": true, "expand": false}]
+		return
 	var users := func(wkey: String) -> Array:
 		return pods.values().filter(func(p): return p._wl == wkey and not p.deleting).map(func(p): return p.name)
 	s["volumes"] = [

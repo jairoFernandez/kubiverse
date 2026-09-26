@@ -494,16 +494,94 @@ func _build_connect_ui() -> void:
 	ver.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	v.add_child(ver)
 
-	# ---- saved clusters
-	v.add_child(_section("SAVED CLUSTERS"))
+	# ---- the demo first: what a first-time visitor is looking for
+	var demo := PanelContainer.new()
+	demo.add_theme_stylebox_override("panel", _flat(Color(0.05, 0.16, 0.1), Vox.GREEN, 3, 14))
+	v.add_child(demo)
+	var dv := VBoxContainer.new()
+	dv.add_theme_constant_override("separation", 6)
+	demo.add_child(dv)
+	var dh := _label("PLAY A DEMO: no cluster needed, a simulated one runs right here. Pick one:", 22, Vox.GREEN)
+	dh.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	dh.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	dv.add_child(dh)
+	var dg := GridContainer.new()
+	dg.name = "DemoGrid"
+	dg.columns = 2
+	dg.add_theme_constant_override("h_separation", 8)
+	dg.add_theme_constant_override("v_separation", 8)
+	dv.add_child(dg)
+	for it in [["starter", "FIRST STEPS", "2 nodes and one small app. Calm: learn to walk around."],
+			["shop", "ONLINE SHOP", "The full tour: 5 nodes, 14 namespaces, a few things broken."],
+			["incident", "INCIDENT DAY", "A node down, crashes everywhere: fix it, or grab the weapons."],
+			["big", "BIG CLUSTER", "15 nodes and a few hundred pods: see how it scales."]]:
+		var sc: String = it[0]
+		var tile := VBoxContainer.new()
+		tile.add_theme_constant_override("separation", 4)
+		tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var pb := _button(it[1], func():
+			K8s.start_demo(sc)
+			show_connect(false), "GoButton" if sc == "shop" else "")
+		pb.custom_minimum_size.y = 50
+		pb.add_theme_font_size_override("font_size", 24)
+		tile.add_child(pb)
+		var dd := _label(it[2], 18, Vox.SILVER)
+		dd.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		dd.custom_minimum_size.x = 200
+		tile.add_child(dd)
+		dg.add_child(tile)
+
+	# ---- the desktop app (web only): a card per system, links in plain sight
+	if OS.has_feature("web"):
+		v.add_child(_section("DESKTOP APP"))
+		var ntext := "Smoother than the browser. It connects to the same bridge: start it with the command below (without --allow-origin), then CONNECT TO CLUSTER."
+		if K8s.served_by_bridge():
+			ntext = "Smoother than the browser. It connects to the bridge serving this page: keep it running and press CONNECT TO CLUSTER in the app."
+		var nn := _label(ntext, 21, Vox.SILVER)
+		nn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		v.add_child(nn)
+		var cards := HFlowContainer.new()
+		cards.add_theme_constant_override("h_separation", 10)
+		cards.add_theme_constant_override("v_separation", 10)
+		v.add_child(cards)
+		for d in K8s.native_downloads():
+			var card := PanelContainer.new()
+			card.add_theme_stylebox_override("panel", _flat(Color(0.07, 0.09, 0.18), Vox.SLATE, 2, 10))
+			card.custom_minimum_size.x = 226
+			card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			cards.add_child(card)
+			var cv := VBoxContainer.new()
+			cv.add_theme_constant_override("separation", 6)
+			card.add_child(cv)
+			var os_l := _label(d[0], 26, Vox.PEACH)
+			os_l.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+			cv.add_child(os_l)
+			var dl := _button("DOWNLOAD", OS.shell_open.bind(d[1]), "GoButton")
+			dl.custom_minimum_size.y = 44
+			cv.add_child(dl)
+			var how := _label(d[2], 18, Vox.SILVER)
+			how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			cv.add_child(how)
+			# Terminal commands, ready to copy.
+			for cmd in (d[3] if d.size() > 3 else []):
+				var cb := _button("COPY: " + cmd, _copy.bind(cmd))
+				cb.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+				cb.add_theme_font_size_override("font_size", 16)
+				cb.alignment = HORIZONTAL_ALIGNMENT_LEFT
+				cb.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+				cb.clip_text = true
+				cb.tooltip_text = cmd
+				cv.add_child(cb)
+
+	# ---- your cluster: saved ones, then the bridge and a new connection
+	v.add_child(_section("YOUR CLUSTER"))
 	_saved_list = VBoxContainer.new()
 	_saved_list.add_theme_constant_override("separation", 6)
 	v.add_child(_saved_list)
 
 	# ---- run a bridge here (not needed when this page is served by one)
 	if not K8s.served_by_bridge():
-		v.add_child(_section("RUN THE BRIDGE ON THIS COMPUTER"))
-		var bn := _label("The game reaches your cluster through kubiverse-bridge, a small program that uses your kubeconfig like kubectl. Paste one of these in a terminal: it downloads the latest release, checks its SHA256 and starts it. Then press CONNECT TO CLUSTER.", 21, Vox.SILVER)
+		var bn := _label("1. The game reaches your cluster through kubiverse-bridge, a small program that uses your kubeconfig like kubectl. Paste one of these in a terminal: it downloads the latest release, checks its SHA256 and starts it.", 21, Vox.SILVER)
 		bn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		v.add_child(bn)
 		for pair in K8s.bridge_install_commands():
@@ -519,51 +597,10 @@ func _build_connect_ui() -> void:
 			row.add_child(cmd)
 			row.add_child(_button("COPY", _copy.bind(pair[1])))
 			v.add_child(row)
-
-	# ---- native builds (web only, collapsible)
-	if OS.has_feature("web"):
-		var nbox := VBoxContainer.new()
-		nbox.add_theme_constant_override("separation", 6)
-		nbox.visible = false
-		var nh := HBoxContainer.new()
-		nh.add_child(_button("+ NATIVE APP (MACOS, WINDOWS, LINUX)", func(): nbox.visible = not nbox.visible))
-		v.add_child(nh)
-		v.add_child(nbox)
-		var ntext := "Smoother than the browser. It connects to the same bridge: start it with the command above (without --allow-origin), then CONNECT TO CLUSTER."
-		if K8s.served_by_bridge():
-			ntext = "Smoother than the browser. It connects to the bridge serving this page: keep it running and press CONNECT TO CLUSTER in the app."
-		var nn := _label(ntext, 21, Vox.SILVER)
-		nn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		nbox.add_child(nn)
-		for d in K8s.native_downloads():
-			var row := HBoxContainer.new()
-			row.add_theme_constant_override("separation", 8)
-			var os_l := _label(d[0], 21, Vox.PEACH)
-			os_l.custom_minimum_size.x = 110
-			row.add_child(os_l)
-			row.add_child(_button("DOWNLOAD", OS.shell_open.bind(d[1]), "GoButton"))
-			var how := _label(d[2], 19, Vox.SILVER)
-			how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			how.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			row.add_child(how)
-			nbox.add_child(row)
-			# Terminal commands, ready to copy.
-			for cmd in (d[3] if d.size() > 3 else []):
-				var cr := HBoxContainer.new()
-				cr.add_theme_constant_override("separation", 8)
-				var pad := Control.new()
-				pad.custom_minimum_size.x = 110
-				cr.add_child(pad)
-				var cl := _label("$ " + cmd, 19, Vox.YELLOW)
-				cl.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
-				cl.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
-				cl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				cr.add_child(cl)
-				cr.add_child(_button("COPY", _copy.bind(cmd)))
-				nbox.add_child(cr)
+		var b2 := _label("2. Then connect:", 21, Vox.SILVER)
+		v.add_child(b2)
 
 	# ---- new connection
-	v.add_child(_section("NEW CONNECTION"))
 	var g := GridContainer.new()
 	_connect_grid = g
 	g.columns = 2
@@ -636,14 +673,14 @@ func _build_connect_ui() -> void:
 	kb.add_child(_button("ADD CLUSTER", _upload_kubeconfig, "GoButton"))
 	_kc_box.add_child(kb)
 
-	# ---- misc
+	_connect_status = _label("Start the bridge first, then CONNECT TO CLUSTER.", 24, Vox.SILVER)
+	_connect_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(_connect_status)
+
+	# ---- settings
 	var h2 := HFlowContainer.new()
 	h2.add_theme_constant_override("h_separation", 10)
 	h2.add_theme_constant_override("v_separation", 8)
-	var d := _button("DEMO MODE", func():
-		K8s.start_demo()
-		show_connect(false))
-	h2.add_child(d)
 	h2.add_child(_label("Text size", 24, Vox.SILVER))
 	h2.add_child(_button(" - ", func(): Settings.step_scale(-1)))
 	_connect_scale = _label("", 26, Vox.YELLOW)
@@ -651,9 +688,6 @@ func _build_connect_ui() -> void:
 	h2.add_child(_button(" + ", func(): Settings.step_scale(1)))
 	v.add_child(h2)
 	v.add_child(_lang_row())
-	_connect_status = _label("Start the bridge first, then CONNECT TO CLUSTER.", 24, Vox.SILVER)
-	_connect_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	v.add_child(_connect_status)
 	_refresh_saved()
 
 
@@ -723,10 +757,8 @@ func _load_contexts() -> void:
 func _refresh_saved() -> void:
 	for c in _saved_list.get_children():
 		c.queue_free()
+	_saved_list.visible = not Settings.servers.is_empty()
 	if Settings.servers.is_empty():
-		var none := _label("Nothing saved yet: fill in a new connection and use SAVE & CONNECT.", 22, Vox.SLATE)
-		none.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		_saved_list.add_child(none)
 		return
 	for i in Settings.servers.size():
 		var sv: Dictionary = Settings.servers[i]
@@ -2615,6 +2647,10 @@ func toggle_chaos() -> void:
 		return
 	if K8s.is_prod():
 		toast(tr("Chaos mode and weapons are off on a PRODUCTION cluster. Use a sandbox (or the demo) to break things."), false)
+		return
+	if K8s.is_demo():
+		_enable_chaos()
+		toast(tr("CHAOS MODE in the demo: every weapon is yours (1-6, F fires). Nothing here is real, break it all."), true)
 		return
 	confirm(tr("CHAOS MODE: the blaster (F) will delete REAL pods in context \"%s\" without asking. Enable?") % K8s.state.get("context", "?"),
 		_enable_chaos, tr("kubectl delete pod <the pod you shoot>"))
@@ -4724,6 +4760,7 @@ func _process(delta: float) -> void:
 		var narrow := screen.x < 700.0
 		_connect_v.custom_minimum_size.x = minf(720.0, screen.x - 90.0)
 		_connect_grid.columns = 1 if narrow else 2
+		(_connect_v.find_child("DemoGrid", true, false) as GridContainer).columns = 1 if narrow else 2
 		_connect_title.add_theme_font_size_override("font_size", 22 if narrow else 38)
 	if _toast_t > 0.0:
 		_toast_t -= delta

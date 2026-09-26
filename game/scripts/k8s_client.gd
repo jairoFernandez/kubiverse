@@ -77,7 +77,9 @@ func served_by_bridge() -> bool:
 		# Any other host: ask it (a bridge answers its health check).
 		var probe = JavaScriptBridge.eval("""(function(){try{var x=new XMLHttpRequest();
 			x.open('GET','healthz',false);x.send();return x.status==200&&x.responseText=='ok'}catch(e){return false}})()""", true)
-		_served_by_bridge = 1 if probe == true else 0
+		# The browser may hand back false as 0: test it for truth, not == true
+		# (int == bool is an error that left this unset, probing on every call).
+		_served_by_bridge = 1 if probe else 0
 	return _served_by_bridge == 1
 
 
@@ -103,7 +105,7 @@ const RELEASE_DOWNLOAD := "https://github.com/jairoFernandez/kubiverse/releases/
 func native_downloads() -> Array:
 	return [
 		["macOS", RELEASE_DOWNLOAD + "kubiverse-macos.zip",
-			"Easiest with Homebrew (it brings the bridge too). The app isn't notarized yet, so macOS blocks it the first time: the second command removes the \"downloaded from the Internet\" flag once (or right-click the app > Open).",
+			"Homebrew brings the bridge too. Not notarized yet: the second command lets macOS open it (or right-click > Open).",
 			["brew install --cask jairofernandez/kubiverse/kubiverse", "xattr -dr com.apple.quarantine /Applications/Kubiverse.app"]],
 		["Windows", RELEASE_DOWNLOAD + "kubiverse-windows-x86_64.zip",
 			"Unzip and run Kubiverse.exe. If SmartScreen stops it: More info > Run anyway."],
@@ -169,10 +171,11 @@ func check_context(url: String, tok: String, ctx: String, cb: Callable) -> void:
 			cb.call(true, ""), 40.0)
 
 
-func start_demo() -> void:
+func start_demo(scenario := "shop") -> void:
 	disconnect_all()
 	mode = Mode.DEMO
 	_mock = MockCluster.new()
+	_mock.scenario = scenario if scenario in MockCluster.SCENARIOS else "shop"
 	add_child(_mock)
 	_mock.state_changed.connect(_on_state)
 	_mock.event.connect(func(ev): cluster_event.emit(ev))

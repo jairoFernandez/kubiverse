@@ -4,6 +4,8 @@ Your **real** Kubernetes cluster turned into a pixel‑art (voxel) 3D world you 
 
 **[Play the demo in your browser](https://jairofernandez.github.io/kubiverse/?demo=1)** (simulated cluster) · **[Download the latest release](https://github.com/jairoFernandez/kubiverse/releases/latest)** (macOS, Linux, Windows and the bridge)
 
+There are four demos to pick from on the start screen (or with `?demo=`): **FIRST STEPS** (`starter`, 2 nodes and one small app, calm), **ONLINE SHOP** (`shop`, the full tour, also `?demo=1`), **INCIDENT DAY** (`incident`, a node down and crashes everywhere) and **BIG CLUSTER** (`big`, 15 nodes and a few hundred pods). In the demo, CHAOS MODE turns on without asking and every weapon is unlocked: nothing there is real.
+
 ![The plant: a factory hall per namespace, the energy plant (nodes), the library (storage), the bank (secrets) and the gate to the Internet](docs/plant.png)
 
 - **Engine:** Godot 4.7 (GDScript, *Compatibility* renderer) → exports to **Web (WASM)**, **macOS**, **Linux** and **Windows** from the same project.
@@ -518,7 +520,7 @@ There are two ways to play in the browser:
 --auth-groups-header H  comma-separated groups header from the same proxy
 ```
 
-Web build URL parameters: `?bridge=http://host:8088`, `?token=...`, `?demo=1`.
+Web build URL parameters: `?bridge=http://host:8088`, `?token=...`, `?demo=1` (or `?demo=starter|shop|incident|big`).
 
 ## Security
 
