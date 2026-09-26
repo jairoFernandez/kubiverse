@@ -1247,6 +1247,8 @@ func _build_level_strip() -> void:
 	h.add_child(_button("PLANT", func(): level_requested.emit("plant")))
 	h.add_child(_button("ENERGY (nodes)", func(): level_requested.emit("power")))
 	h.add_child(_button("ENGINE ROOM", func(): level_requested.emit("engine")))
+	h.add_child(_button("LIBRARY", func(): level_requested.emit("library")))
+	h.add_child(_button("BANK", func(): level_requested.emit("bank")))
 	_level_label = _label("", 26, Vox.YELLOW)
 	_level_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_level_label.clip_text = true
@@ -1557,6 +1559,16 @@ func _resource_lines(kind: String, d: Dictionary) -> Array:
 				out.append(_kv("pressure", "[color=#ff004d]%s[/color]" % ", ".join(conds)))
 				out.append("[color=#83769c]  %s[/color]" % tr("the kubelet may evict pods to recover (lowest priority first)"))
 		"pod":
+			var vols: Array = st.get("volumes", []).filter(func(v): return v.ns == d.ns and d.name in (v.get("pods", []) if v.get("pods") != null else []))
+			if not vols.is_empty():
+				out.append(_kv("storage", "%s  [color=#83769c](%s)[/color]" % [", ".join(vols.map(func(v): return str(v.name))), tr("books in the LIBRARY")]))
+			var cfs: Array = st.get("configs", []).filter(func(c): return c.ns == d.ns and d.name in (c.get("pods", []) if c.get("pods") != null else []))
+			var secs := cfs.filter(func(c): return c.kind == "Secret")
+			var cms := cfs.filter(func(c): return c.kind == "ConfigMap")
+			if not secs.is_empty():
+				out.append(_kv("secrets", "%s  [color=#83769c](%s)[/color]" % [", ".join(secs.map(func(c): return str(c.name) + (" [color=#ff004d](MISSING)[/color]" if str(c.get("exists", "")) == "no" else ""))), tr("pearls in the BANK")]))
+			if not cms.is_empty():
+				out.append(_kv("config", "%s  [color=#83769c](%s)[/color]" % [", ".join(cms.map(func(c): return str(c.name))), tr("notebooks in the LIBRARY")]))
 			var nps: Array = d.get("netpols", []) if d.get("netpols") != null else []
 			out.append(_kv("network", tr("policies: %s") % ", ".join(nps) if not nps.is_empty() else "[color=#83769c]%s[/color]" % tr("no NetworkPolicy selects it: all traffic allowed")))
 		"workload":
@@ -1632,7 +1644,7 @@ func _volume_lines(d: Dictionary) -> Array:
 	var out := []
 	out.append(_kv("namespace", d.ns))
 	var st := str(d.get("status", ""))
-	out.append(_kv("status", "[color=#%s]%s[/color]" % [StorageTank.status_color(d).to_html(false), st]))
+	out.append(_kv("status", "[color=#%s]%s[/color]" % [{"Bound": "00e436", "Pending": "ffec27"}.get(st, "ff004d"), st]))
 	out.append(_kv("size", "%s  [color=#83769c](%s %s)[/color]" % [d.get("capacity", "-"), tr("asked"), d.get("request", "")]))
 	if d.get("used_pct") != null:
 		var up := float(d.used_pct)
@@ -3104,6 +3116,14 @@ func _refresh_inspector() -> void:
 			buttons.append(["LOGS [L]", func():
 				open_logs(pod_d), "", false, "kubectl -n %s logs %s -c %s --tail=200" % [c.ns, c.pod, c.name]])
 			buttons.append(["EDIT POD YAML", func(): open_editor("Pod", c.ns, c.pod), "", false, "kubectl -n %s edit pod %s" % [c.ns, c.pod]])
+		"landmark":
+			var lib: bool = _insp_target.what == "library"
+			_insp_title.text = tr("LIBRARY (storage)") if lib else tr("BANK (secrets)")
+			lines.append("[color=#83769c]%s[/color]" % (tr("Storage as a library: each StorageClass is a section (a bookshelf) and each PersistentVolume a book (thicker = bigger, the bookmark = how full). Claims still waiting are request cards on the desk. ConfigMaps are notebooks in the reference section.") if lib
+				else tr("Secrets as pearls in a vault: a tray per namespace, gold for TLS, blue for registry credentials. The ones pods ask for that don't exist are cracked red pearls on the MISSING counter. Their values are never read.")))
+			lines.append(_kv("", str(d.get("sub", ""))))
+			buttons.append(["ENTER [E]", func(): level_requested.emit("library" if lib else "bank"), "GoButton", false,
+				"kubectl get storageclass,pv,pvc -A" if lib else "kubectl get secrets -A"])
 		"engine_hall":
 			_insp_title.text = tr("ENGINE ROOM")
 			lines.append("[color=#83769c]%s[/color]" % tr("How Kubernetes works inside. The control plane's machines (API server, etcd, controller manager, scheduler) and the kubelet of each node, piped together; every event of your cluster travels between them."))
@@ -3170,9 +3190,15 @@ func _refresh_inspector() -> void:
 			lines.append_array(_config_lines(d))
 		"pv":
 			_insp_title.text = "PERSISTENT VOLUME %s" % d.name
-			lines.append(_kv("status", "[color=#%s]%s[/color]" % [PVTank.status_color(d).to_html(false), d.status]))
+			lines.append(_kv("status", "[color=#%s]%s[/color]" % [Book.status_color(d).to_html(false), d.status]))
 			lines.append(_kv("size", str(d.get("capacity", ""))))
 			lines.append(_kv("claim", str(d.get("claim", "")) if str(d.get("claim", "")) != "" else tr("(none: free)")))
+			for v in K8s.state.get("volumes", []):
+				if "%s/%s" % [v.ns, v.name] == str(d.get("claim", "")):
+					if v.get("used_pct") != null:
+						lines.append(_kv("used", "%s %d%%" % [StatsPanel.bar(float(v.used_pct) / 100.0, 12), int(v.used_pct)]))
+					var vp: Array = v.get("pods", []) if v.get("pods") != null else []
+					lines.append(_kv("read by", ", ".join(vp) if not vp.is_empty() else tr("(no pod)")))
 			lines.append(_kv("class", str(d.get("class", ""))))
 			lines.append(_kv("reclaim", str(d.get("reclaim", ""))))
 			lines.append(_kv("source", str(d.get("source", ""))))

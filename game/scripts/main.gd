@@ -11,7 +11,7 @@ const DRAG_THRESHOLD := 6.0  # px before a click becomes a drag
 const ZOOM_MIN := 10.0
 const ZOOM_MAX := 70.0         # desktop; touch screens can zoom out twice as far
 
-const LEVEL_ZOOM := {"plant": 34.0, "power": 38.0, "engine": 40.0}
+const LEVEL_ZOOM := {"plant": 34.0, "power": 38.0, "engine": 40.0, "library": 30.0, "bank": 30.0}
 
 var world: World
 var player: Player
@@ -1207,12 +1207,20 @@ func _on_level_changed(l: String) -> void:
 	# Coming back to the plant: stand in front of the door you came out of.
 	if l == "plant" and _prev_level == "engine" and world.engine_hall:
 		player.teleport(_standable_near(world.engine_hall.door_position() + Vector3(0, 0, 1.8)))
+	elif l == "plant" and _prev_level in ["library", "bank"]:
+		var lm: Landmark = world.library_bld if _prev_level == "library" else world.bank_bld
+		if lm:
+			player.teleport(_standable_near(lm.door_position() + Vector3(0, 0, 1.8)))
 	elif l == "plant" and _prev_level != "plant":
 		var key := "@power" if _prev_level == "power" else _prev_level.substr(3)
 		var b: FactoryBuilding = world.buildings.get(key)
 		if b:
 			player.teleport(_standable_near(b.door_position() + Vector3(0, 0, 1.8)))
 	hud.engine.visible = l == "engine"
+	if l == "library":
+		hud.banner(tr("LIBRARY (storage)"), tr("A section per StorageClass, a book per volume (thicker = bigger, the bookmark = how full). Requests still waiting are on the desk; ConfigMaps are notebooks in the reference section."))
+	elif l == "bank":
+		hud.banner(tr("BANK (secrets)"), tr("A pearl per Secret on its namespace's tray: gold TLS, blue registry, white the rest. Cracked red pearls: pods ask for them and they don't exist. Values are never read."))
 	if l == "engine":
 		hud._mission_panel.visible = false
 		hud.banner(tr("ENGINE ROOM"), tr("The control plane at work. Every event of your cluster travels between the machines as a work order. Click a machine to see what it does, or open LESSONS: from zero to expert."))
@@ -1338,7 +1346,7 @@ func _goto(kind: String, key: String, ns: String) -> void:
 		_pan = Vector3.ZERO
 		hud.inspect(bl)
 		return
-	var l := "power" if kind == "node" else ("plant" if kind in ["pv", "storageclass"] else "ns:" + ns)
+	var l := "power" if kind == "node" else ("library" if kind in ["pv", "storageclass", "volume"] or (kind == "config" and key.begins_with("ConfigMap/")) else ("bank" if kind == "config" else "ns:" + ns))
 	if world.level != l:
 		_go_level(l)
 	var e := world.find_entity(kind, key)
