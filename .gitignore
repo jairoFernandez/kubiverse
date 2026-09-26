@@ -3,3 +3,6 @@ bridge/bin/
 bridge/webdist/*
 !bridge/webdist/README.md
 .DS_Store
+
+# Promo video project (kept out of the repo for now)
+promo/
