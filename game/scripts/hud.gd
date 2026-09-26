@@ -66,10 +66,12 @@ var touch := false
 var touch_ctl: TouchControls
 var _bar_btns: Array[Control] = []
 var _strip_extra: Array[Control] = []
+var _level_btns: Array[Control] = []   # hidden on narrow phones: the MENU has them
 var _menu_btn: Button
 var _menu_panel: PanelContainer
 var _compact_term := false
 var _was_compact := false
+var _kind_wanted := false   # the cluster-kind button has something to say
 var _close_fab: Button
 var editor: ManifestEditor
 var term_log := []     # last terminal outputs [{id, cmd, out, ok}]
@@ -1278,11 +1280,11 @@ func _build_level_strip() -> void:
 	var h := HBoxContainer.new()
 	h.add_theme_constant_override("separation", 10)
 	strip.add_child(h)
-	h.add_child(_button("PLANT", func(): level_requested.emit("plant")))
-	h.add_child(_button("ENERGY (nodes)", func(): level_requested.emit("power")))
-	h.add_child(_button("ENGINE ROOM", func(): level_requested.emit("engine")))
-	h.add_child(_button("LIBRARY", func(): level_requested.emit("library")))
-	h.add_child(_button("BANK", func(): level_requested.emit("bank")))
+	for it in [["PLANT", "plant"], ["ENERGY (nodes)", "power"], ["ENGINE ROOM", "engine"], ["LIBRARY", "library"], ["BANK", "bank"]]:
+		var lv: String = it[1]
+		var b := _button(it[0], func(): level_requested.emit(lv))
+		h.add_child(b)
+		_level_btns.append(b)
 	_level_label = _label("", 26, Vox.YELLOW)
 	_level_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_level_label.clip_text = true
@@ -2238,7 +2240,11 @@ func _build_menu() -> void:
 	grid.add_theme_constant_override("h_separation", 8)
 	grid.add_theme_constant_override("v_separation", 8)
 	_menu_panel.add_child(grid)
-	var items := [["KUBI", toggle_kubi], ["WATCH", toggle_watch], ["MAP", toggle_map], ["MISSIONS", toggle_missions],
+	# Levels and search first: on a phone held upright they don't fit in the strip.
+	var items := [["PLANT", func(): level_requested.emit("plant")], ["ENERGY", func(): level_requested.emit("power")],
+		["ENGINE ROOM", func(): level_requested.emit("engine")], ["LIBRARY", func(): level_requested.emit("library")],
+		["BANK", func(): level_requested.emit("bank")], ["SEARCH", toggle_search],
+		["KUBI", toggle_kubi], ["WATCH", toggle_watch], ["MAP", toggle_map], ["MISSIONS", toggle_missions],
 		["ALARMS", toggle_alarms], ["BUILD", open_build], ["CHAOS", toggle_chaos], ["TERMINAL", toggle_terminal],
 		["LEGEND", toggle_legend], ["STATS", toggle_stats], ["FIRST PERSON", func(): fpv_requested.emit()],
 		["JETPACK", func(): jetpack_requested.emit()], ["SOUND", toggle_volume], ["VIEW", toggle_view],
@@ -2287,6 +2293,43 @@ func _fit_top_bar(width: float) -> void:
 	_menu_btn.visible = hidden
 
 
+## Phones: what doesn't fit the width goes, the MENU always stays. Top bar:
+## the counters, then the cluster kind, then the context name. Level strip:
+## all the level buttons at once (they're in the MENU), leaving where you
+## are, SEARCH and ALARMS.
+func _fit_compact(width: float) -> void:
+	_fit_row(_menu_btn.get_parent(), [[_stats_label, true], [_kind_btn, _kind_wanted], [_ctx_label, true]], width)
+	var lv: Array = []
+	for b in _level_btns:
+		lv.append([b, true])
+	_fit_row(_level_btns[0].get_parent(), lv, width, true)
+
+
+## Shows each [control, wanted] of a row, dropping them in order while the
+## row is wider than width (sizes are measured without toggling anything).
+## together: all of them or none.
+func _fit_row(box: HBoxContainer, droppable: Array, width: float, together := false) -> void:
+	var sep := float(box.get_theme_constant("separation"))
+	var ctl: Array = droppable.map(func(d): return d[0])
+	var total := 20.0
+	for k in box.get_children():
+		if k is Control and not k in ctl and k.visible:
+			total += k.get_combined_minimum_size().x + sep
+	for d in droppable:
+		if d[1]:
+			total += d[0].get_combined_minimum_size().x + sep
+	var none := together and total > width
+	for d in droppable:
+		var c: Control = d[0]
+		if none:
+			c.visible = false
+		elif d[1] and total > width:
+			total -= c.get_combined_minimum_size().x + sep
+			c.visible = false
+		else:
+			c.visible = d[1]
+
+
 ## Switches between the desktop layout and the compact (phone) one.
 func _apply_compact(on: bool) -> void:
 	compact = on
@@ -2310,6 +2353,9 @@ func _apply_compact(on: bool) -> void:
 		mm.anchor_top = 1.0
 		mm.anchor_bottom = 1.0
 		_ctx_label.visible = true
+		_stats_label.visible = true
+		for b in _level_btns:
+			b.visible = true
 		map_mini.custom_minimum_size = MINIMAP_SIZES[Settings.minimap_size]
 		var logo: Label = _game_root.find_child("Logo", true, false)
 		logo.add_theme_font_size_override("font_size", 16)
@@ -4184,7 +4230,8 @@ func ask_cluster_kind() -> void:
 
 func _update_kind_btn() -> void:
 	var kind := K8s.cluster_kind
-	_kind_btn.visible = kind != "" or K8s.mode == K8s.Mode.BRIDGE
+	_kind_wanted = kind != "" or K8s.mode == K8s.Mode.BRIDGE
+	_kind_btn.visible = _kind_wanted
 	if kind == "sandbox":
 		_kind_btn.text = tr("DEMO · SANDBOX") if K8s.mode == K8s.Mode.DEMO else tr("SANDBOX")
 		_kind_btn.theme_type_variation = "GoButton"
@@ -4535,6 +4582,8 @@ func _layout() -> void:
 		_apply_compact(want_compact)
 	if not compact:
 		_fit_top_bar(sz.x)
+	else:
+		_fit_compact(sz.x)
 	var top := TOP
 	_help_bar.visible = not touch
 	overlay.text_scale = 0.82 if compact else 1.0
@@ -4619,9 +4668,8 @@ func _layout() -> void:
 		mm.offset_bottom = top + msz.y
 		# Small minimap on phones (it sits under the top bars).
 		map_mini.custom_minimum_size = (MINIMAP_SIZES[Settings.minimap_size] as Vector2).min(Vector2(sz.x * 0.42, sz.y * 0.24))
-		# Narrow screens: shorter title bar so the MENU button always fits.
+		# Narrow screens: a smaller logo (what else fits: _fit_compact).
 		var narrow := sz.x < 560
-		_ctx_label.visible = not narrow
 		var logo: Label = _game_root.find_child("Logo", true, false)
 		logo.add_theme_font_size_override("font_size", 11 if narrow else 16)
 		var grid: GridContainer = _menu_panel.get_node("Grid")
