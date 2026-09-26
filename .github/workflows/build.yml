@@ -185,6 +185,8 @@ jobs:
             type=semver,pattern={{version}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
       - uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -209,6 +211,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: "{kubiverse-macos,k8s-bridge}"
       - name: Sign and notarize
         if: env.HAS_CERT == 'true'
         env:
@@ -256,9 +259,11 @@ jobs:
       HAS_WINDOWS_CERT: ${{ secrets.WINDOWS_CERT_PFX != '' }}
       HAS_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
     steps:
+      # By name: other jobs leave artifacts too (Docker build records).
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: "{kubiverse-*,k8s-bridge,signed-macos}"
       - name: Package
         run: |
           cd dist
