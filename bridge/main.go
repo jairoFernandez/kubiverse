@@ -66,6 +66,7 @@ type Bridge struct {
 	obs        observability                   // Prometheus, Alertmanager, Loki
 	res        resListers                      // storage, policies, quotas, CRDs
 	store      storeListers                    // PVs, Secret/ConfigMap names
+	gh         *githubConn                     // GitHub, for GitOps (shared by the hub)
 	ctx        context.Context                 // lives as long as this cluster's bridge
 
 	mu      sync.Mutex
@@ -106,6 +107,7 @@ func main() {
 	promURL := flag.String("prometheus", "auto", "Prometheus URL for trends (auto = find it in the cluster, off = none)")
 	amURL := flag.String("alertmanager", "auto", "Alertmanager URL for alerts (auto / off)")
 	lokiURL := flag.String("loki", "auto", "Loki URL for logs of whole namespaces (auto / off)")
+	ghTokenFile := flag.String("github-token-file", "", "GitHub token for GitOps (a file, e.g. from a Secret); without it the game can connect one, kept in ~/.kubecraft/github-token")
 	inCluster := flag.Bool("in-cluster", false, "run inside the cluster with the pod's ServiceAccount (team mode, see deploy/helm)")
 	userHeader := flag.String("auth-user-header", "", "team mode: header with the signed-in user set by an OIDC proxy (e.g. X-Auth-Request-Email); requests without it are refused and changes impersonate that user")
 	groupsHeader := flag.String("auth-groups-header", "", "team mode: header with the user's groups (comma-separated), e.g. X-Auth-Request-Groups")
@@ -131,6 +133,7 @@ func main() {
 	hub.pol = newPolicy(filepath.Dir(*dataDir), strings.Split(*production, ","))
 	hub.inCluster, hub.userHeader, hub.groupsHeader = *inCluster, *userHeader, *groupsHeader
 	hub.obsFlags = map[string]string{"prometheus": *promURL, "alertmanager": *amURL, "loki": *lokiURL}
+	hub.gh = newGithubConn(filepath.Dir(*dataDir), *ghTokenFile, *inCluster || *userHeader != "")
 	if *inCluster {
 		hub.defaultCtx = inClusterName
 	}
@@ -165,6 +168,9 @@ func main() {
 	mux.HandleFunc("GET /api/rollout", hub.cluster((*Bridge).handleRollout))
 	mux.HandleFunc("GET /api/obs", hub.cluster((*Bridge).handleObs))
 	mux.HandleFunc("GET /api/cani", hub.cluster((*Bridge).handleCanI))
+	mux.HandleFunc("/api/github", hub.auth(hub.handleGithub))
+	mux.HandleFunc("GET /api/gitops/source", hub.cluster((*Bridge).handleGitSource))
+	mux.HandleFunc("POST /api/gitops/change", hub.cluster((*Bridge).handleGitChange))
 	mux.HandleFunc("GET /api/series", hub.cluster((*Bridge).handleSeries))
 	mux.HandleFunc("GET /api/logsearch", hub.cluster((*Bridge).handleLogSearch))
 	mux.HandleFunc("GET /api/manifest", hub.cluster((*Bridge).handleManifestGet))

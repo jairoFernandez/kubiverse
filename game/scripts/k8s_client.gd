@@ -179,6 +179,7 @@ func start_demo() -> void:
 	_mock.watch.connect(func(w): watch_updated.emit(w))
 	connection_changed.emit("online", "demo cluster (simulated)")
 	refresh_obs()
+	github_status()
 	_mock.start()
 
 
@@ -237,6 +238,7 @@ func _process(delta: float) -> void:
 			WebSocketPeer.STATE_OPEN:
 				connection_changed.emit("online", base_url)
 				refresh_obs()
+				github_status()
 			WebSocketPeer.STATE_CLOSED:
 				var reason := _ws.get_close_reason()
 				connection_changed.emit("offline", "bridge unreachable at %s %s — retrying" % [base_url, reason])
@@ -516,6 +518,55 @@ func log_search(ns: String, workload: String, text: String, since: String, cb: C
 		cb.call(good, data if typeof(data) == TYPE_DICTIONARY else {"error": str(data)}))
 
 
+## GitHub for GitOps: {connected, login, can_set}. The token stays with the bridge.
+var github := {}
+signal github_changed
+
+func github_status(token_or_empty := "", disconnect := false) -> void:
+	if mode == Mode.DEMO:
+		github = {"connected": true, "login": "demo-user", "can_set": false}
+		github_changed.emit()
+		return
+	if mode != Mode.BRIDGE:
+		return
+	var method := HTTPClient.METHOD_GET
+	var body := ""
+	if disconnect:
+		method = HTTPClient.METHOD_DELETE
+	elif token_or_empty != "":
+		method = HTTPClient.METHOD_POST
+		body = JSON.stringify({"token": token_or_empty})
+	_http(method, "/api/github" + _q(), body, func(ok: bool, data):
+		if ok and typeof(data) == TYPE_DICTIONARY:
+			if bool(data.get("ok", false)):
+				github = data
+			else:
+				github["error"] = str(data.get("error", ""))
+		github_changed.emit())
+
+
+## The object's YAML in its Argo CD app's GitHub repo, and the drift. cb(ok, data)
+func git_source(kind: String, ns: String, name: String, cb: Callable) -> void:
+	if mode == Mode.DEMO:
+		cb.call(true, _mock.git_source(kind, ns, name))
+		return
+	_http(HTTPClient.METHOD_GET, "/api/gitops/source?kind=%s&ns=%s&name=%s%s" % [kind, ns.uri_encode(), name.uri_encode(), _q(false)], "", func(ok: bool, data):
+		var good := ok and typeof(data) == TYPE_DICTIONARY and bool(data.get("ok", false))
+		cb.call(good, data if typeof(data) == TYPE_DICTIONARY else {"error": str(data)}))
+
+
+## Preview an edit of that YAML (git diff + what Argo would change), or
+## propose it as a pull request. cb(ok, data)
+func git_change(kind: String, ns: String, name: String, yaml: String, title: String, propose: bool, cb: Callable) -> void:
+	if mode == Mode.DEMO:
+		cb.call(true, _mock.git_change(kind, ns, name, yaml, propose))
+		return
+	var body := JSON.stringify({"kind": kind, "ns": ns, "name": name, "yaml": yaml, "title": title, "propose": propose})
+	_http(HTTPClient.METHOD_POST, "/api/gitops/change" + _q(), body, func(ok: bool, data):
+		var good := ok and typeof(data) == TYPE_DICTIONARY and bool(data.get("ok", false))
+		cb.call(good, data if typeof(data) == TYPE_DICTIONARY else {"error": str(data)}))
+
+
 ## What I may do in a namespace (my own RBAC; impersonated in team mode).
 ## cb(ok, {user, checks: [{what, ok, cmd}]} or {error})
 func can_i(ns: String, cb: Callable) -> void:
@@ -688,42 +739,7 @@ func diff_manifest(kind: String, ns: String, name: String, yaml: String, orig: S
 
 ## A line diff (lines removed with -, added with +) for the demo.
 static func simple_diff(a: String, b: String) -> String:
-	var la := a.split("\n")
-	var lb := b.split("\n")
-	var out := PackedStringArray()
-	var i := 0
-	var j := 0
-	while i < la.size() or j < lb.size():
-		if i < la.size() and j < lb.size() and la[i] == lb[j]:
-			i += 1
-			j += 1
-			continue
-		# a changed stretch: find where they meet again
-		var ni := i
-		var nj := j
-		var found := false
-		for d in range(1, 40):
-			for k in d + 1:
-				var x := i + k
-				var y := j + d - k
-				if x < la.size() and y < lb.size() and la[x] == lb[y]:
-					ni = x
-					nj = y
-					found = true
-					break
-			if found:
-				break
-		if not found:
-			ni = la.size()
-			nj = lb.size()
-		out.append("@@ line %d @@" % (j + 1))
-		for x in range(i, ni):
-			out.append("-" + la[x])
-		for y in range(j, nj):
-			out.append("+" + lb[y])
-		i = ni
-		j = nj
-	return "\n".join(out)
+	return TextDiff.lines(a, b)
 
 
 ## Deploys (or removes) the sample scenario the sandbox missions use: broken

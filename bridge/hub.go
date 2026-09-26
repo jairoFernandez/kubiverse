@@ -35,6 +35,7 @@ type Hub struct {
 	pol          *policy
 	inCluster    bool              // one cluster: the one the bridge runs in
 	obsFlags     map[string]string // --prometheus/--alertmanager/--loki
+	gh           *githubConn       // GitHub for GitOps (token kept by the bridge)
 	userHeader   string            // team mode: the proxy's user header
 	groupsHeader string
 
@@ -223,6 +224,7 @@ func (h *Hub) start(name string) (*Bridge, error) {
 		b.pol = h.pol
 		b.inCluster = h.inCluster
 		b.obs.flags = h.obsFlags
+		b.gh = h.gh
 		go b.alertLoop(b.ctx)
 	}
 	return b, err

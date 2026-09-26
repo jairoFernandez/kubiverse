@@ -156,6 +156,10 @@ var _chaos_btn: Button
 var _view_panel: PanelContainer
 var _view_sys: CheckBox
 var _view_nsf: LineEdit    # which namespaces to draw (big clusters)
+var _gh_panel: PanelContainer   # connect GitHub (GitOps)
+var _gh_status: Label
+var _gh_token: LineEdit
+var _gh_disconnect: Button
 var _view_lines: CheckBox
 var _view_term: CheckBox
 var _view_legend: CheckBox
@@ -950,6 +954,7 @@ func _build_game_ui() -> void:
 	vv.add_child(_section("VIEW"))
 	_view_sys = _check("System namespaces  [H]", toggle_system)
 	vv.add_child(_view_sys)
+	vv.add_child(_button("GITHUB (GitOps)", open_github))
 	vv.add_child(_label("Only these namespaces (this cluster; e.g. shop, team-*, or a word they contain):", 20, Vox.SILVER))
 	_view_nsf = LineEdit.new()
 	_view_nsf.placeholder_text = tr("all of them")
@@ -2420,6 +2425,84 @@ func set_ns_filter(text: String, save := true) -> void:
 			toast(tr("Showing only namespaces: %s (VIEW to change)") % ", ".join(f), true)
 
 
+const GH_TOKEN_URL := "https://github.com/settings/personal-access-tokens/new"
+
+## Connect GitHub: a fine-grained token for the GitOps repos. It goes to the
+## bridge and stays there (never shown again, never sent to the AI).
+func _build_github_panel() -> void:
+	_gh_panel = _modal(-1)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 8)
+	v.custom_minimum_size = Vector2(640, 0)
+	_gh_panel.add_child(v)
+	v.add_child(_label("GITHUB FOR GITOPS", 26, Vox.YELLOW))
+	_gh_status = _label("", 21, Vox.SILVER)
+	_gh_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(_gh_status)
+	var how := _label("With it, a workload that Argo CD deploys opens in git: you see its YAML in the repo, how the cluster differs, what Argo would do with your change, and you can propose it as a pull request.", 20, Vox.LAVENDER)
+	how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(how)
+	var steps := _label("1. Create a fine-grained token (button below).\n2. Repository access: Only select repositories -> your GitOps repos.\n3. Permissions -> Repository: Contents: Read-only to look, or Read and write to propose changes; Pull requests: Read and write to open them. (Metadata is added by itself.)\n4. Generate it and paste it here. It stays with the bridge (~/.kubecraft/github-token) and is never shown again.", 19, Vox.SILVER)
+	steps.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(steps)
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 8)
+	v.add_child(h)
+	h.add_child(_button("CREATE A TOKEN ON GITHUB", func(): OS.shell_open(GH_TOKEN_URL), "GoButton"))
+	h.add_child(_button("COPY THE LINK", func(): _copy(GH_TOKEN_URL)))
+	_gh_token = LineEdit.new()
+	_gh_token.secret = true
+	_gh_token.placeholder_text = "github_pat_..."
+	_gh_token.add_theme_font_size_override("font_size", 22)
+	_gh_token.text_submitted.connect(func(_t): _gh_connect())
+	v.add_child(_gh_token)
+	var bh := HBoxContainer.new()
+	bh.add_theme_constant_override("separation", 8)
+	v.add_child(bh)
+	bh.add_child(_button("CONNECT", _gh_connect, "GoButton"))
+	_gh_disconnect = _button("DISCONNECT", func(): K8s.github_status("", true), "DangerButton")
+	bh.add_child(_gh_disconnect)
+	bh.add_child(_button("CLOSE [ESC]", func(): _gh_panel.visible = false))
+	K8s.github_changed.connect(_gh_refresh)
+
+
+func open_github() -> void:
+	_gh_refresh()
+	_gh_panel.visible = true
+	_gh_panel.move_to_front()
+	_gh_token.grab_focus()
+
+
+func _gh_connect() -> void:
+	var t := _gh_token.text.strip_edges()
+	if t == "":
+		return
+	_gh_token.text = ""
+	_gh_status.text = tr("checking the token with GitHub...")
+	K8s.github_status(t)
+
+
+func _gh_refresh() -> void:
+	var g: Dictionary = K8s.github
+	var shared: bool = not bool(g.get("can_set", true)) and K8s.mode == K8s.Mode.BRIDGE
+	_gh_disconnect.visible = bool(g.get("connected", false)) and not shared
+	_gh_token.editable = not shared
+	if str(g.get("error", "")) != "":
+		_gh_status.text = tr("GitHub said: %s") % str(g.error)
+		_gh_status.add_theme_color_override("font_color", Vox.RED)
+		g.erase("error")
+	elif bool(g.get("connected", false)):
+		_gh_status.text = tr("Connected as @%s.") % str(g.get("login", "?")) + ("  " + tr("(demo)") if K8s.mode == K8s.Mode.DEMO else "")
+		_gh_status.add_theme_color_override("font_color", Vox.GREEN)
+	elif shared:
+		_gh_status.text = tr("This shared bridge takes its GitHub token from a Secret (--github-token-file): ask whoever runs it.")
+		_gh_status.add_theme_color_override("font_color", Vox.SILVER)
+	else:
+		_gh_status.text = tr("Not connected.")
+		_gh_status.add_theme_color_override("font_color", Vox.SILVER)
+	_insp_sig = ""
+
+
 func toggle_system() -> void:
 	world.hide_system = not world.hide_system
 	if not K8s.state.is_empty():
@@ -3055,6 +3138,12 @@ func _refresh_inspector() -> void:
 			lines.append_array(_owner_lines(d))
 			lines.append_array(_usage_lines(K8s.state.get("pods", []).filter(func(p): return p.ns == d.ns and p.get("owner_kind") == d.kind and p.get("owner_name") == d.name)))
 			buttons.append_array(_workload_buttons(d, ro))
+			var gw = d.get("gitops")
+			if gw != null and gw.tool == "argocd":
+				if bool(K8s.github.get("connected", false)):
+					buttons.append(["OPEN IN GIT", func(): editor.open_git(d.kind, d.ns, d.name), "GoButton", false, "# its YAML in the Argo CD app's GitHub repo"])
+				else:
+					buttons.append(["CONNECT GITHUB", open_github, "", false, "# to see and change it in git"])
 			if K8s.has_obs("loki"):
 				buttons.append(["LOGS (all pods)", func(): open_aggregate_logs(d.ns, d.name), "", false, "logcli query '{namespace=\"%s\", pod=~\"%s-.*\"}'" % [d.ns, d.name]])
 			buttons.append(["EDIT YAML", func(): open_editor(d.kind, d.ns, d.name), "", false, "kubectl -n %s edit %s %s" % [d.ns, str(d.kind).to_lower(), d.name]])
@@ -3682,6 +3771,7 @@ func _build_modals() -> void:
 		kv.add_child(row)
 
 	# Port-forward: which port, and on which local port.
+	_build_github_panel()
 	_pf_panel = _modal(-1)
 	var pv := VBoxContainer.new()
 	pv.add_theme_constant_override("separation", 10)
@@ -3894,7 +3984,7 @@ func close_modals() -> bool:
 	if editor.visible:
 		editor.request_close()
 		return true
-	for p in [_confirm_panel, _build_panel, _guide_panel, _map_panel, _logs_panel, _view_panel, _vol_panel, _alarm_panel, _search_panel, _legend, kubi, watch]:
+	for p in [_confirm_panel, _build_panel, _gh_panel, _guide_panel, _map_panel, _logs_panel, _view_panel, _vol_panel, _alarm_panel, _search_panel, _legend, kubi, watch]:
 		if p.visible:
 			p.visible = false
 			_sync_view()
@@ -4196,7 +4286,7 @@ func _load_logs() -> void:
 ## Keeps side panels within the (UI-unit) screen size.
 func _layout_modals() -> void:
 	var full := _modal_layer.size
-	for p in [_confirm_panel, _build_panel, _kind_panel, _pf_panel]:
+	for p in [_confirm_panel, _build_panel, _kind_panel, _pf_panel, _gh_panel]:
 		if p.visible:
 			var ps: Vector2 = p.get_combined_minimum_size().min(full - Vector2(20, 20))
 			p.size = ps

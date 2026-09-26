@@ -64,3 +64,9 @@ secrets:
   # list on secrets lets the ServiceAccount read them: leave off unless you
   # trust the pod. Without it, Secrets are drawn from what pods reference.
   listNames: false
+
+github:
+  # GitOps with GitHub (see an Argo CD app's YAML in git, propose PRs):
+  # a Secret with key "token" holding a fine-grained token.
+  #   kubectl -n kubiverse create secret generic kubiverse-github --from-literal=token=github_pat_...
+  tokenSecret: ""

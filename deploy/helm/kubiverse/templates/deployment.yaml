@@ -44,6 +44,9 @@ spec:
             {{- if .Values.ingress.host }}
             - --allow-origin=https://{{ .Values.ingress.host }}
             {{- end }}
+            {{- if .Values.github.tokenSecret }}
+            - --github-token-file=/etc/kubiverse/github/token
+            {{- end }}
             - --llm-url={{ .Values.llm.url }}
             - --llm-model={{ .Values.llm.model }}
           env:
@@ -63,6 +66,9 @@ spec:
           volumeMounts:
             - {name: data, mountPath: /data}
             - {name: tmp, mountPath: /tmp}
+            {{- if .Values.github.tokenSecret }}
+            - {name: github, mountPath: /etc/kubiverse/github, readOnly: true}
+            {{- end }}
       volumes:
         - name: data
           {{- if .Values.persistence.enabled }}
@@ -72,6 +78,10 @@ spec:
           {{- end }}
         - name: tmp
           emptyDir: {}
+        {{- if .Values.github.tokenSecret }}
+        - name: github
+          secret: {secretName: {{ .Values.github.tokenSecret }}, items: [{key: token, path: token}]}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}

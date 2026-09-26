@@ -408,6 +408,12 @@ The bridge finds them by itself among the cluster's Services (kube-prometheus-st
 - **Common CRDs, when installed**: Argo CD Applications (sync and health; OutOfSync, Missing and Degraded raise alarms, and a workload managed by an app shows its status), cert-manager Certificates (not ready, or expiring in less than 14 days, raise alarms) and Gateway API HTTPRoutes, drawn in the Internet city like Ingress routes.
 - All of it is searchable (`kind:pvc`, `kind:app`, `kind:cert`), and the Helm chart's ServiceAccount can read it.
 
+## GitOps with GitHub
+
+For a workload an Argo CD Application deploys from a GitHub repo, **OPEN IN GIT** (in its inspector) shows its YAML as it is in the repo, how the cluster **drifted** from it (what Argo would put back), and lets you edit it: **PREVIEW** shows the change in git and what Argo would change in the cluster after syncing (a server dry run of `kubectl apply`), and **PROPOSE PR** opens a pull request (a `kubiverse/...` branch with the file changed) to the branch the app follows. Nothing changes in the cluster until it's merged and Argo syncs it.
+
+Connect GitHub from VIEW → GITHUB (GitOps) with a [fine-grained token](https://github.com/settings/personal-access-tokens/new): Repository access → only your GitOps repos; Contents: Read-only to look (Read and write to propose), Pull requests: Read and write to open PRs. The token stays with the bridge (`~/.kubecraft/github-token`, 0600), is never sent to the game or the AI; on a shared bridge it comes from a Secret (`--github-token-file`, Helm `github.tokenSecret`). Apps built with Kustomize or Helm generate their objects: the game links their folder instead. The demo has an app `shop` in a pretend `acme/platform` repo.
+
 ## Quick start
 
 Requirements: Go (version in `bridge/go.mod`), Godot 4.7 (`brew install --cask godot`), a working kubeconfig.
@@ -485,6 +491,7 @@ There are two ways to play in the browser:
 --prometheus URL     Prometheus for the history charts (auto: find it in the cluster; off)
 --alertmanager URL   Alertmanager for the alerts (auto / off; without it, Prometheus's firing rules)
 --loki URL           Loki for LOGS (all pods) (auto / off)
+--github-token-file F  GitHub token for GitOps from a file (a Secret); else the game can connect one
 --in-cluster         run inside the cluster with the pod's ServiceAccount (team mode)
 --auth-user-header H trust H (set by your OIDC proxy) as the signed-in user; changes impersonate them
 --auth-groups-header H  comma-separated groups header from the same proxy
@@ -545,6 +552,9 @@ The defaults expect oauth2-proxy answering `/oauth2/*` on the same host (see [va
 | GET | `/api/series?kind=pod\|workload\|node&ns=&name=&range=1h\|6h\|24h\|7d` | `{cpu, mem, restarts}` as `[[unix, value]...]` from Prometheus |
 | GET | `/api/logsearch?ns=&workload=&q=&since=1h&limit=300` | `{query, lines: [{t, pod, container, line}]}` from Loki, newest first |
 | GET | `/api/cani?ns=` | `{user, checks: [{what, ok, cmd}]}`: what you may do in a namespace |
+| GET · POST · DELETE | `/api/github` | GitHub connection: `{connected, login}` · `{"token"}` connects · forget it |
+| GET | `/api/gitops/source?kind=&ns=&name=` | the object in its Argo CD app's GitHub repo (`{source: {owner, repo, ref, file, yaml, url, can_write}, drift}`) |
+| POST | `/api/gitops/change` | `{kind, ns, name, yaml, title, propose}` → `{git_diff, cluster_diff, pr}` |
 | GET | `/api/rollout?ns=&name=` | a Deployment's revisions (newest first), paused, and its `hpa`, `pdb` and `gitops` owner |
 
 ## Layout

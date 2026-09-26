@@ -1082,3 +1082,32 @@ func can_i(ns: String) -> Dictionary:
 			["create deployments", true], ["edit services", true], ["read configmaps", true], ["read secrets", ns != "payments"], ["port-forward", true]]:
 		checks.append({"what": c[0], "ok": c[1], "cmd": "kubectl auth can-i ... -n %s" % ns})
 	return {"ok": true, "user": "", "checks": checks}
+
+
+# --- GitOps with GitHub (demo): shop is an Argo CD app in acme/platform ------
+
+var _git_edits := {}   # what a demo PR "merged" nothing: just remembers the last one
+
+func git_source(kind: String, ns: String, n: String) -> Dictionary:
+	var wl = workloads.get("%s/%s/%s" % [ns, kind, n])
+	if wl == null or not wl.has("gitops") or wl.gitops.tool != "argocd":
+		return {"ok": false, "error": "this object isn't managed by an Argo CD Application"}
+	var y := "apiVersion: apps/v1\nkind: %s\nmetadata:\n  name: %s\n  namespace: %s\n  labels:\n    app: %s\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: %s\n  template:\n    metadata:\n      labels:\n        app: %s\n    spec:\n      containers:\n        - name: %s\n          image: %s\n          resources:\n            requests:\n              cpu: 100m\n              memory: 128Mi\n" % [kind, n, ns, n, n, n, n, wl.image]
+	var src := {"app": "shop", "owner": "acme", "repo": "platform", "ref": "main", "path": "apps/shop", "file": "apps/shop/%s.yaml" % n, "doc": 0,
+		"yaml": y, "url": "https://github.com/acme/platform/blob/main/apps/shop/%s.yaml" % n, "tool": "plain", "can_write": true}
+	var drift := ""
+	if int(wl.desired) != 2:
+		drift = "--- cluster\n+++ after sync\n@@ spec @@\n-  replicas: %d\n+  replicas: 2\n" % int(wl.desired)
+	return {"ok": true, "source": src, "drift": drift}
+
+
+func git_change(kind: String, ns: String, n: String, y: String, propose: bool) -> Dictionary:
+	var src: Dictionary = git_source(kind, ns, n)
+	if not src.ok:
+		return src
+	var gd: String = TextDiff.lines(str(src.source.yaml), y)
+	var out := {"ok": true, "git_diff": gd, "cluster_diff": gd.replace("(git)", "cluster"), "source": src.source}
+	if propose:
+		out["pr"] = "https://github.com/acme/platform/pull/%d (demo: nothing was opened)" % (42 + _git_edits.size())
+		_git_edits[n] = y
+	return out

@@ -29,6 +29,7 @@ var _revealed := 0
 var _ann := []
 var _dirty_t := -1.0
 var _last_error := ""
+var git := {}           # GitOps mode: the object's source in its Argo CD app's GitHub repo
 const SCRAMBLE := "01<>{}[]$#%&*+=:;/\\|アイウエオカキクケコ"
 
 
@@ -117,7 +118,11 @@ func build(h) -> void:
 	_detail.custom_minimum_size.y = 64
 	v.add_child(_detail)
 	_result = hud._rich(20)
-	_result.meta_clicked.connect(func(_m): _ask_kubi_error())
+	_result.meta_clicked.connect(func(m):
+		if str(m).begins_with("http"):
+			OS.shell_open(str(m).get_slice(" ", 0))
+		else:
+			_ask_kubi_error())
 	v.add_child(_result)
 	var bar := HFlowContainer.new()
 	bar.add_theme_constant_override("h_separation", 10)
@@ -169,7 +174,41 @@ func _yaml_highlighter() -> CodeHighlighter:
 
 # ------------------------------------------------------------------ flow
 
-func open(k: String, n_s: String, n: String, focus := "") -> void:
+## GitOps: edit the object's YAML as it is in git (its Argo CD app's repo).
+## DIFF shows the change and what Argo would do to the cluster; APPLY
+## becomes PROPOSE PR.
+func open_git(k: String, n_s: String, n: String) -> void:
+	open(k, n_s, n, "", true)
+	_validate_btn.text = tr("PREVIEW (what Argo would do)")
+	_apply_btn.text = tr("PROPOSE PR")
+	_status.text = "[color=#00e436]%s[/color]" % tr("reading the app's repository on GitHub...")
+	K8s.git_source(k, n_s, n, func(ok: bool, data: Dictionary):
+		if not visible:
+			return
+		var src: Dictionary = data.get("source", {}) if data.get("source") != null else {}
+		if not ok or str(src.get("file", "")) == "":
+			_phase = "edit"
+			_frame.modulate.a = 1.0
+			_rain.density = 0.15
+			var why := str(data.get("error", "")) if not ok else tr("Its YAML isn't a plain file in %s/%s:%s (a %s app: it is generated there). Open the folder:") % [src.get("owner", ""), src.get("repo", ""), src.get("path", ""), src.get("tool", "")]
+			_status.text = "[color=#ff004d]%s[/color] %s" % [tr("NOT FOUND IN GIT:"), hud._esc(why)]
+			if str(src.get("url", "")) != "":
+				_result.text = "[url=%s][color=#29adff]%s[/color][/url]" % [src.url, src.url]
+			return
+		git = src
+		_readonly = false
+		_fetched = str(src.yaml).strip_edges() + "\n"
+		var drift := str(data.get("drift", ""))
+		_result.text = ("[color=#ffa300]%s[/color]\n%s" % [tr("DRIFT: the cluster differs from git (Argo would put back):"), _color_diff(drift)]) if drift.strip_edges() != "" \
+			else "[color=#00e436]%s[/color]" % tr("The cluster matches git.")
+		_result.text += "\n[url=%s][color=#29adff]%s[/color][/url]" % [src.url, src.url])
+
+
+func open(k: String, n_s: String, n: String, focus := "", keep_git := false) -> void:
+	if not keep_git:
+		git = {}
+		_validate_btn.text = tr("VALIDATE (dry run)")
+		_apply_btn.text = tr("APPLY")
 	kind = k
 	ns = n_s
 	obj_name = n
@@ -190,6 +229,8 @@ func open(k: String, n_s: String, n: String, focus := "") -> void:
 	_title.text = "EDIT // %s %s" % [kind.to_upper(), (ns + "/" if ns != "" else "") + obj_name]
 	_status.text = "[color=#00e436]%s[/color]" % tr("establishing link with the API server...")
 	Sfx.play("door")
+	if keep_git:
+		return
 	K8s.get_manifest(kind, ns, obj_name, func(ok: bool, text: String, ro: bool):
 		if not visible:
 			return
@@ -212,7 +253,9 @@ func _process(delta: float) -> void:
 	_notes.visible = not narrow
 	_title.add_theme_font_size_override("font_size", 10 if narrow else 14)
 	var full := "EDIT // %s %s" % [kind.to_upper(), (ns + "/" if ns != "" else "") + obj_name]
-	_title.text = ("EDIT // " + obj_name) if narrow else full
+	if not git.is_empty():
+		full = "GIT // %s/%s: %s @ %s" % [git.owner, git.repo, git.file, git.ref]
+	_title.text = (("GIT // " if not git.is_empty() else "EDIT // ") + obj_name) if narrow else full
 	var m := 8.0 if narrow else 30.0
 	_frame.offset_left = m
 	_frame.offset_top = m
@@ -327,8 +370,51 @@ func _update_detail() -> void:
 	_detail.text = t
 
 
+## A unified diff with its + and - lines coloured.
+func _color_diff(text: String) -> String:
+	var out := []
+	for l in text.split("\n"):
+		var c := "c2c3c7"
+		if l.begins_with("+") and not l.begins_with("+++"):
+			c = "00e436"
+		elif l.begins_with("-") and not l.begins_with("---"):
+			c = "ff004d"
+		elif l.begins_with("@@"):
+			c = "83769c"
+		out.append("[color=#%s]%s[/color]" % [c, hud._esc(l)])
+	return "\n".join(out)
+
+
+## Git mode: the change to the file and what Argo would do to the cluster.
+func _git_preview(propose: bool, title := "") -> void:
+	_result.text = "[color=#00e436]%s[/color]" % (tr("opening the pull request...") if propose else tr("asking the API server what Argo would change..."))
+	K8s.git_change(kind, ns, obj_name, _code.text, title, propose, func(ok: bool, data: Dictionary):
+		if not ok:
+			Sfx.play("error")
+			_result.text = "[color=#ff004d]%s[/color] %s" % [tr("REJECTED:"), hud._esc(str(data.get("error", "")))]
+			return
+		var t := ""
+		if propose:
+			Sfx.play("jingle")
+			var pr := str(data.get("pr", ""))
+			t += "[color=#00e436]%s[/color] [url=%s][color=#29adff]%s[/color][/url]\n" % [tr("PULL REQUEST OPENED:"), pr, pr]
+			hud.toast(tr("Pull request opened: when it's merged, Argo CD syncs it"), true)
+			_orig = _code.text
+			_annotate()
+		t += "[color=#ffec27]%s[/color]\n%s\n" % [tr("IN GIT:"), _color_diff(str(data.get("git_diff", ""))) if str(data.get("git_diff", "")) != "" else tr("no change")]
+		if str(data.get("cluster_error", "")) != "":
+			t += "[color=#ff004d]%s[/color] %s" % [tr("THE CLUSTER WOULD REJECT IT:"), hud._esc(str(data.cluster_error))]
+		else:
+			var cd := str(data.get("cluster_diff", ""))
+			t += "[color=#ffec27]%s[/color]\n%s" % [tr("IN THE CLUSTER, AFTER ARGO SYNCS:"), _color_diff(cd) if cd.strip_edges() != "" else tr("nothing changes")]
+		_result.text = t)
+
+
 ## The server's dry run against what is live: exactly what APPLY would change.
 func _diff() -> void:
+	if not git.is_empty():
+		_git_preview(false)
+		return
 	if _phase != "edit" or _orig == "":
 		return
 	_result.text = "[color=#00e436]%s[/color]" % tr("asking the API server what would change...")
@@ -356,6 +442,18 @@ func _diff() -> void:
 
 func _submit(dry: bool) -> void:
 	if _phase != "edit" or _orig == "":
+		return
+	if not git.is_empty():
+		if dry:
+			_git_preview(false)
+		elif _code.text == _orig:
+			_result.text = "[color=#83769c]%s[/color]" % tr("Nothing to propose: no changes.")
+		elif not git.get("can_write", false):
+			_result.text = "[color=#ff004d]%s[/color]" % tr("Your GitHub token can only read this repository: give it Contents and Pull requests: Read and write to propose changes.")
+		else:
+			var title := "Update %s %s/%s" % [kind, ns, obj_name]
+			hud.confirm(tr("Open a pull request in %s/%s with this change to %s? Nothing changes in the cluster until it's merged and Argo CD syncs it.") % [git.owner, git.repo, git.file],
+				func(): _git_preview(true, title), "git switch -c kubiverse/... && git commit && gh pr create")
 		return
 	if not dry and _code.text == _orig:
 		_result.text = "[color=#83769c]%s[/color]" % tr("Nothing to apply: no changes.")
