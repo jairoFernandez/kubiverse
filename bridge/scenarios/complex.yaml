@@ -116,7 +116,8 @@ spec:
       containers:
         - name: postgres
           image: postgres:16-alpine
-          env: [{name: POSTGRES_PASSWORD, value: kubecraft}]
+          # The password comes from a Secret (a pearl in the BANK).
+          env: [{name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: postgres-credentials, key: password}}}]
           resources: {requests: {cpu: 50m, memory: 64Mi}}
           volumeMounts: [{name: pgdata, mountPath: /var/lib/postgresql/data}]
   volumeClaimTemplates:
@@ -146,6 +147,9 @@ spec:
         - name: redis
           image: redis:7-alpine
           resources: {requests: {cpu: 10m, memory: 16Mi}}
+          volumeMounts: [{name: data, mountPath: /data}]
+      # Its data on a PersistentVolumeClaim (a book in the LIBRARY).
+      volumes: [{name: data, persistentVolumeClaim: {claimName: redis-data}}]
 ---
 apiVersion: v1
 kind: Service
@@ -243,6 +247,7 @@ spec:
       containers:
         - name: model
           image: registry.invalid/model-server:v2   # does not exist -> ImagePullBackOff
+      imagePullSecrets: [{name: regcred}]          # registry credentials (a blue pearl)
 ---
 apiVersion: v1
 kind: Service
@@ -368,3 +373,55 @@ spec:
       http:
         paths:
           - {path: /, pathType: Prefix, backend: {service: {name: prometheus, port: {number: 9090}}}}
+# --------------------------------------------- storage and secrets (LIBRARY / BANK)
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: postgres-credentials, namespace: ecommerce}
+type: Opaque
+stringData: {password: kubecraft, user: shop}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: storefront-config, namespace: ecommerce}
+data: {API_URL: "http://checkout-api", THEME: "retro", FEATURE_FLAGS: "new-cart"}
+---
+# Nobody uses it: a dusty notebook.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: old-banner, namespace: ecommerce}
+data: {TEXT: "Black Friday 2019"}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: redis-data, namespace: ecommerce}
+spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 1Gi}}}
+---
+# Asks for a class that doesn't exist: it stays Pending forever (a red request card).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: reports, namespace: data}
+spec: {accessModes: [ReadWriteOnce], storageClassName: fast-ssd, resources: {requests: {storage: 5Gi}}}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: regcred, namespace: ml}
+type: kubernetes.io/dockerconfigjson
+stringData: {.dockerconfigjson: '{"auths":{"registry.invalid":{"auth":"ZGVtbzpkZW1v"}}}'}
+---
+# Reads a Secret nobody created: CreateContainerConfigError (a cracked red pearl).
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: payments-worker, namespace: ecommerce}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: payments-worker}}
+  template:
+    metadata: {labels: {app: payments-worker}}
+    spec:
+      containers:
+        - name: worker
+          image: busybox:1.36
+          command: ["sh", "-c", "sleep 3600"]
+          envFrom: [{configMapRef: {name: storefront-config}}, {secretRef: {name: stripe-key}}]
+          resources: {requests: {cpu: 5m, memory: 8Mi}}

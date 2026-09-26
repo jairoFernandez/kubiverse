@@ -1713,6 +1713,37 @@ func _volume_lines(d: Dictionary) -> Array:
 	return out
 
 
+## Runs a read-only kubectl in the terminal and shows it.
+func _term_show(line: String) -> void:
+	if not Settings.terminal and not compact:
+		toggle_terminal()
+	_terminal.visible = true
+	term_run(line)
+
+
+## A button per pod (the first few) that takes you to it.
+func _pod_buttons(ns: String, pods) -> Array:
+	var out := []
+	for pn in (pods as Array).slice(0, 3) if pods != null else []:
+		out.append([tr("POD %s") % str(pn).left(22), func(): goto_requested.emit("pod", "%s/%s" % [ns, pn], ns), "", false, "kubectl -n %s get pod %s" % [ns, pn]])
+	return out
+
+
+## Nothing to see in the library / bank yet?
+func _storage_empty(lib: bool) -> bool:
+	var st := K8s.state
+	if lib:
+		return (st.get("pvs", []) as Array).is_empty() and (st.get("volumes", []) as Array).is_empty() and (st.get("configs", []) as Array).filter(func(c): return c.kind == "ConfigMap").is_empty()
+	return (st.get("configs", []) as Array).filter(func(c): return c.kind == "Secret").is_empty()
+
+
+## On a sandbox, the sample scenario fills them (PVCs, Secrets, ConfigMaps).
+func _fill_buttons() -> Array:
+	if K8s.mode != K8s.Mode.BRIDGE or K8s.is_prod() or K8s.is_readonly():
+		return []
+	return [["FILL WITH EXAMPLES", func(): _scenario(false), "", false, "kubectl apply -f bridge/scenarios/complex.yaml   # volumes, secrets, config"]]
+
+
 ## A Secret or ConfigMap: who uses it and how, never its values.
 func _config_lines(d: Dictionary) -> Array:
 	var out := []
@@ -3247,8 +3278,11 @@ func _refresh_inspector() -> void:
 			lines.append("[color=#83769c]%s[/color]" % (tr("Storage as a library: each StorageClass is a section (a bookshelf) and each PersistentVolume a book (thicker = bigger, the bookmark = how full). Claims still waiting are request cards on the desk. ConfigMaps are notebooks in the reference section.") if lib
 				else tr("Secrets as pearls in a vault: a tray per namespace, gold for TLS, blue for registry credentials. The ones pods ask for that don't exist are cracked red pearls on the MISSING counter. Their values are never read.")))
 			lines.append(_kv("", str(d.get("sub", ""))))
+			if _storage_empty(lib):
+				lines.append("[color=#ffec27]%s[/color]" % (tr("Empty for now: no volume claims in this cluster yet (a fresh cluster has none).") if lib else tr("Empty for now: no pod uses a Secret and there are none outside kube-system (a fresh cluster has none).")))
 			buttons.append(["ENTER [E]", func(): level_requested.emit("library" if lib else "bank"), "GoButton", false,
 				"kubectl get storageclass,pv,pvc -A" if lib else "kubectl get secrets -A"])
+			buttons.append_array(_fill_buttons())
 		"engine_hall":
 			_insp_title.text = tr("ENGINE ROOM")
 			lines.append("[color=#83769c]%s[/color]" % tr("How Kubernetes works inside. The control plane's machines (API server, etcd, controller manager, scheduler) and the kubelet of each node, piped together; every event of your cluster travels between them."))
@@ -3310,9 +3344,19 @@ func _refresh_inspector() -> void:
 		"volume":
 			_insp_title.text = tr("VOLUME CLAIM %s") % d.name
 			lines.append_array(_volume_lines(d))
+			buttons.append(["WHY? (EVENTS)", func(): _term_show("-n %s describe pvc %s" % [d.ns, d.name]), "GoButton", false, "kubectl -n %s describe pvc %s" % [d.ns, d.name]])
+			buttons.append_array(_pod_buttons(d.ns, d.get("pods", [])))
+			buttons.append(["GO TO ITS HALL", func(): goto_requested.emit("namespace", d.ns, d.ns), "", false, "kubectl -n %s get all" % d.ns])
 		"config":
 			_insp_title.text = ("SECRET %s" if d.kind == "Secret" else "CONFIGMAP %s") % d.name
 			lines.append_array(_config_lines(d))
+			var ck := "secret" if d.kind == "Secret" else "configmap"
+			if str(d.get("exists", "")) != "no":
+				buttons.append(["DESCRIBE", func(): _term_show("-n %s describe %s %s" % [d.ns, ck, d.name]), "GoButton", false,
+					"kubectl -n %s describe %s %s   # sizes, never values" % [d.ns, ck, d.name]])
+				buttons.append(["LIST ITS KEYS", func(): _term_show("-n %s get %s %s -o jsonpath={.data}" % [d.ns, ck, d.name] if d.kind != "Secret" else "-n %s describe secret %s" % [d.ns, d.name]), "", false,
+					"kubectl -n %s get %s %s -o go-template='{{range $k, $v := .data}}{{$k}}{{\"\\n\"}}{{end}}'" % [d.ns, ck, d.name]])
+			buttons.append_array(_pod_buttons(d.ns, d.get("missing", []) if str(d.get("exists", "")) == "no" and d.get("missing") != null else d.get("pods", [])))
 		"pv":
 			_insp_title.text = "PERSISTENT VOLUME %s" % d.name
 			lines.append(_kv("status", "[color=#%s]%s[/color]" % [Book.status_color(d).to_html(false), d.status]))
@@ -3328,6 +3372,14 @@ func _refresh_inspector() -> void:
 			lines.append(_kv("reclaim", str(d.get("reclaim", ""))))
 			lines.append(_kv("source", str(d.get("source", ""))))
 			lines.append(_kv("age", _age(d.get("age", 0))))
+			buttons.append(["DESCRIBE", func(): _term_show("describe pv %s" % d.name), "GoButton", false, "kubectl describe pv %s" % d.name])
+			if str(d.get("claim", "")) != "":
+				var cns := str(d.claim).get_slice("/", 0)
+				buttons.append(["ITS CLAIM", func(): _term_show("-n %s describe pvc %s" % [cns, str(d.claim).get_slice("/", 1)]), "", false, "kubectl -n %s describe pvc %s" % [cns, str(d.claim).get_slice("/", 1)]])
+				for v in K8s.state.get("volumes", []):
+					if "%s/%s" % [v.ns, v.name] == str(d.claim):
+						buttons.append_array(_pod_buttons(v.ns, v.get("pods", [])))
+				buttons.append(["GO TO ITS HALL", func(): goto_requested.emit("namespace", cns, cns), "", false, "kubectl -n %s get pvc" % cns])
 			match str(d.get("status", "")):
 				"Released":
 					lines.append("[color=#ffa300]%s[/color]" % tr("Its claim was deleted. With reclaim Retain the data is still there: back it up or delete the PV by hand; it won't be bound again as is."))
@@ -3342,6 +3394,12 @@ func _refresh_inspector() -> void:
 			lines.append(_kv("expansion", tr("volumes can grow") if d.get("expand", false) else tr("fixed size")))
 			var bound: Array = K8s.state.get("pvs", []).filter(func(p): return p.get("class", "") == d.name)
 			lines.append(_kv("volumes", "%d" % bound.size()))
+			if bound.is_empty():
+				lines.append("[color=#83769c]%s[/color]" % tr("No volumes of this class yet: a book appears here when a PersistentVolumeClaim asks for it (and, with WaitForFirstConsumer, a pod uses it)."))
+			buttons.append(["DESCRIBE", func(): _term_show("describe storageclass %s" % d.name), "GoButton", false, "kubectl describe storageclass %s" % d.name])
+			buttons.append(["ALL VOLUMES", func(): _term_show("get pv,pvc -A"), "", false, "kubectl get pv,pvc -A"])
+			if bound.is_empty():
+				buttons.append_array(_fill_buttons())
 		"node":
 			_insp_title.text = tr("NODE %s") % d.name
 			lines.append(_kv("status", ("[color=#00e436]Ready[/color]" if d.ready else "[color=#ff004d]NotReady[/color]") + ("  [color=#ffec27]%s[/color]" % tr("cordoned") if d.unschedulable else "")))

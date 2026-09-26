@@ -11,7 +11,7 @@ const DRAG_THRESHOLD := 6.0  # px before a click becomes a drag
 const ZOOM_MIN := 10.0
 const ZOOM_MAX := 70.0         # desktop; touch screens can zoom out twice as far
 
-const LEVEL_ZOOM := {"plant": 34.0, "power": 38.0, "engine": 40.0, "library": 30.0, "bank": 30.0}
+const LEVEL_ZOOM := {"plant": 34.0, "power": 38.0, "engine": 40.0, "library": 26.0, "bank": 26.0}
 
 var world: World
 var player: Player

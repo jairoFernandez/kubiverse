@@ -51,13 +51,13 @@ func update_data(d: Dictionary) -> void:
 			c = c.darkened(0.45)
 		var m := MeshInstance3D.new()
 		var sm := SphereMesh.new()
-		sm.radius = 0.22
-		sm.height = 0.44
+		sm.radius = 0.34
+		sm.height = 0.68
 		sm.radial_segments = 12
 		sm.rings = 6
 		m.mesh = sm
 		m.material_override = Vox.mat(c if not missing() else Color(1, 0.2, 0.3, 0.55), 0.0 if dull else 0.9, false)
-		m.position = Vector3(0, 0.22, 0)
+		m.position = Vector3(0, 0.34, 0)
 		_geo.add_child(m)
 		_glow = m
 		if missing():  # a crack

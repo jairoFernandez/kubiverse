@@ -671,7 +671,7 @@ func _apply_library(s: Dictionary) -> void:
 			var tz := fl.position.y + 3.0 + i * 3.6
 			Vox.box(_static, Vector3(3.0, 0.9, 2.0), Vector3(fl.position.x + 3.0, 0.45, tz), Color("8a6a4c"))
 		_add_door(Vector3(0, 0, fl.end.y - 2.0), "plant", "exit to the plant", Vox.YELLOW)
-		spawn = Vector3(0, 0, fl.end.y - 4.0)
+		spawn = Vector3(2.5, 0, fl.position.y + 6.0)   # among the shelves
 	_yard_notes = [{"pos": Vector3(0, 2.4, 5.0), "text": tr("DESK: claims waiting for a volume"), "color": Vox.YELLOW}]
 	if not ref_ns.is_empty():
 		_yard_notes.append({"pos": Vector3(fl.position.x + 3.0, 3.0, fl.position.y + 1.0), "text": tr("REFERENCE: ConfigMaps"), "color": Color("7ec8ff")})
@@ -715,6 +715,8 @@ func _apply_library(s: Dictionary) -> void:
 			x += w
 	if extra > 0:
 		_yard_notes.append({"pos": Vector3(0, 3.0, fl.position.y + 1.0), "text": "+%d %s" % [extra, tr("more volumes (search them)")], "color": Vox.SILVER})
+	if pvs.is_empty():
+		_yard_notes.append({"pos": Vector3(2.5, 5.2, fl.position.y + 2.0), "text": tr("NO BOOKS YET: no volume claims in this cluster (click a section to fill it with examples)"), "color": Vox.YELLOW})
 	for k in factories.keys():
 		if not fseen.has(k):
 			factories[k].queue_free()
@@ -796,13 +798,16 @@ func _apply_bank(s: Dictionary) -> void:
 				if (xi + zi) % 2 == 0:
 					Vox.box(_static, Vector3(2.0, 0.02, 2.0), Vector3(fl.position.x + 1.0 + xi * 2.0, 0.01, fl.position.y + 1.0 + zi * 2.0), Color("c4beb2"), 0.0, false)
 		Vox.box(_static, Vector3(fl.size.x, 4.0, 0.5), Vector3(c.x, 2.0, fl.position.y - 0.25), Color("bcb5a8"))
-		# The vault: thick steel walls with an open round door.
+		# The vault: a tall steel back wall, low steel rails on the other sides
+		# (the camera looks from the front: a tall front wall would hide the
+		# pearls) and the open round door.
 		var steel := Color("6c7280")
 		Vox.box(_static, Vector3(vault.size.x, 0.2, vault.size.y), Vector3(vault.get_center().x, 0.1, vault.get_center().y), Color("4a4f5a"), 0.0, false)
+		Vox.box(_static, Vector3(vault.size.x + 0.8, 3.6, 0.8), Vector3(vault.get_center().x, 1.8, vault.position.y), steel)
 		for x in [vault.position.x, vault.end.x]:
-			Vox.box(_static, Vector3(0.8, 3.6, vault.size.y), Vector3(x, 1.8, vault.get_center().y), steel)
-		Vox.box(_static, Vector3(vault.size.x * 0.5 - 2.2, 3.6, 0.8), Vector3(vault.position.x + (vault.size.x * 0.5 - 2.2) * 0.5, 1.8, vault.end.y), steel)
-		Vox.box(_static, Vector3(vault.size.x * 0.5 - 2.2, 3.6, 0.8), Vector3(vault.end.x - (vault.size.x * 0.5 - 2.2) * 0.5, 1.8, vault.end.y), steel)
+			Vox.box(_static, Vector3(0.6, 0.9, vault.size.y), Vector3(x, 0.45, vault.get_center().y), steel)
+		Vox.box(_static, Vector3(vault.size.x * 0.5 - 2.2, 0.9, 0.6), Vector3(vault.position.x + (vault.size.x * 0.5 - 2.2) * 0.5, 0.45, vault.end.y), steel)
+		Vox.box(_static, Vector3(vault.size.x * 0.5 - 2.2, 0.9, 0.6), Vector3(vault.end.x - (vault.size.x * 0.5 - 2.2) * 0.5, 0.45, vault.end.y), steel)
 		# The big round door, swung open.
 		var door := Node3D.new()
 		door.position = Vector3(3.2, 0, vault.end.y + 1.6)
@@ -816,7 +821,7 @@ func _apply_bank(s: Dictionary) -> void:
 			spoke.rotation.z = a * PI / 4.0
 		# The trays (one per namespace) inside the vault.
 		for i in trays.size():
-			var tp := Vector3(vault.position.x + 2.5 + (i % 4) * 5.2, 0, vault.position.y + 2.5 + floorf(i / 4.0) * 4.2)
+			var tp := _tray_pos(vault, i, trays.size())
 			Vox.box(_static, Vector3(3.2, 0.9, 2.0), tp + Vector3(0, 0.45, 0), Color("3a2d4a"))
 			Vox.box(_static, Vector3(3.0, 0.06, 1.8), tp + Vector3(0, 0.93, 0), Color("6a2c3a"), 0.0, false)   # velvet
 		# The counters of the hall, and the "missing" one.
@@ -825,17 +830,19 @@ func _apply_bank(s: Dictionary) -> void:
 			Vox.box(_static, Vector3(5.2, 0.1, 1.4), Vector3(x, 1.12, 4.0), Color("e8e4dc"))
 		Vox.box(_static, Vector3(4.0, 1.0, 1.4), Vector3(-12.0, 0.5, 9.0), Color("5a2a2a"))
 		_add_door(Vector3(0, 0, fl.end.y - 2.0), "plant", "exit to the plant", Vox.YELLOW)
-		spawn = Vector3(0, 0, fl.end.y - 4.0)
-	_yard_notes = [{"pos": Vector3(0, 4.4, vault.end.y), "text": tr("VAULT: a pearl per Secret (values never read)"), "color": Vox.YELLOW}]
+		spawn = Vector3(0, 0, vault.end.y - 3.0)   # inside the vault, among the trays
+	_yard_notes = [{"pos": Vector3(0, 4.4, vault.position.y + 0.5), "text": tr("VAULT: a pearl per Secret (values never read)"), "color": Vox.YELLOW}]
 	if not lost.is_empty():
 		_yard_notes.append({"pos": Vector3(-12.0, 2.2, 9.0), "text": tr("MISSING: pods ask for these, they don't exist"), "color": Vox.RED})
+	if here.is_empty():
+		_yard_notes.append({"pos": Vector3(0, 2.2, vault.get_center().y), "text": tr("THE VAULT IS EMPTY: no pod uses a Secret and there are none outside kube-system (the bank's door, outside, can fill it with examples)"), "color": Vox.YELLOW})
 	var cseen := {}
 	for i in trays.size():
 		var ns: String = trays[i]
-		var tp := Vector3(vault.position.x + 2.5 + (i % 4) * 5.2, 0, vault.position.y + 2.5 + floorf(i / 4.0) * 4.2)
+		var tp := _tray_pos(vault, i, trays.size())
 		_yard_notes.append({"pos": tp + Vector3(0, 1.8, -1.2), "text": ns, "color": Vox.ns_color(ns)})
 		var mine: Array = here.filter(func(c): return c.ns == ns)
-		for j in mini(mine.size(), 15):
+		for j in mini(mine.size(), 8):
 			var c: Dictionary = mine[j]
 			var ck := "%s/%s/%s" % [c.kind, c.ns, c.name]
 			cseen[ck] = true
@@ -846,7 +853,7 @@ func _apply_bank(s: Dictionary) -> void:
 				_entities.add_child(pr)
 				configs[ck] = pr
 			pr.update_data(c)
-			pr.target = tp + Vector3(-1.2 + (j % 5) * 0.6, 0.96, -0.5 + floorf(j / 5.0) * 0.5)
+			pr.target = tp + Vector3(-1.2 + (j % 4) * 0.8, 0.96, -0.38 + floorf(j / 4.0) * 0.76)
 			if pr.position == Vector3.ZERO:
 				pr.position = pr.target
 	for j in mini(lost.size(), 8):
@@ -867,6 +874,15 @@ func _apply_bank(s: Dictionary) -> void:
 		if not cseen.has(k):
 			configs[k].queue_free()
 			configs.erase(k)
+
+
+## Where the i-th of n trays sits: rows of up to four, centered in the vault
+## so the camera sees them all from the door.
+func _tray_pos(vault: Rect2, i: int, n: int) -> Vector3:
+	var cols := mini(n, 4)
+	var rows := ceili(n / 4.0)
+	var c := vault.get_center()
+	return Vector3(c.x + ((i % 4) - (cols - 1) * 0.5) * 5.2, 0, c.y + (floorf(i / 4.0) - (rows - 1) * 0.5) * 4.2)
 
 
 ## Inside a pod: its detail arrived (or was refreshed).
