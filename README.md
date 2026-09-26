@@ -343,7 +343,7 @@ With the watchtower open, each identity appears as a **ghost** that walks to wha
 
 ## First person (P)
 
-Perspective camera at helmet height: the mouse looks around (it's captured; ESC releases it), clicking inspects what's under the crosshair, and walking, running, jumping and physical limits all still apply.
+Perspective camera at helmet height: the mouse looks around (it's captured; ESC releases it; dragging with the right button also works, e.g. over a remote desktop, which sends no relative motion), clicking inspects what's under the crosshair, and walking, running, jumping and physical limits all still apply.
 
 ## Stats (F3)
 

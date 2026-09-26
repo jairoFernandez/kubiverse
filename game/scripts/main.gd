@@ -1142,6 +1142,38 @@ func _screenshot_and_quit(path: String) -> void:
 			await get_tree().create_timer(2.5).timeout
 			print("GHOSTS ", _ghosts.size(), " ", _ghosts.values().map(func(g): return g.global_position.round()))
 			print("KUBI ", _kubi.global_position.round(), " player ", player.global_position.round(), " visible ", _kubi.visible)
+	if "--fpv-drag-test" in OS.get_cmdline_user_args():
+		# Right button + drag turns the first-person view even when the
+		# mouse isn't captured (remote desktops).
+		if not _fpv:
+			_toggle_fpv()
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		await get_tree().process_frame
+		var before := _fyaw
+		var mid := get_viewport().get_visible_rect().size * 0.5
+		var b := InputEventMouseButton.new()
+		b.button_index = MOUSE_BUTTON_RIGHT
+		b.position = mid
+		b.pressed = true
+		Input.parse_input_event(b)
+		for i in 10:
+			var mv := InputEventMouseMotion.new()
+			mv.button_mask = MOUSE_BUTTON_MASK_RIGHT
+			mv.position = mid
+			mv.relative = Vector2(20, 0)
+			Input.parse_input_event(mv)
+			await get_tree().process_frame
+		b = b.duplicate()
+		b.pressed = false
+		Input.parse_input_event(b)
+		await get_tree().process_frame
+		var dragged := _fyaw
+		var mv2 := InputEventMouseMotion.new()
+		mv2.position = mid
+		mv2.relative = Vector2(200, 0)
+		Input.parse_input_event(mv2)
+		await get_tree().process_frame
+		print("FPVDRAG before=%.3f dragged=%.3f after_free_move=%.3f fpv=%s" % [before, dragged, _fyaw, _fpv])
 	if "--map" in OS.get_cmdline_user_args():
 		hud.toggle_map()
 		await get_tree().create_timer(0.5).timeout
@@ -1518,7 +1550,7 @@ func _toggle_fpv() -> void:
 		_fcam.current = true
 		if not hud.touch:  # on touch screens you look around by dragging
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-		hud.toast(tr("First person: move the mouse to look, click to inspect, ESC frees the mouse, P to go back."), true)
+		hud.toast(tr("First person: move the mouse to look (or drag with the right button), click to inspect, ESC frees the mouse, P to go back."), true)
 	else:
 		_cam.current = true
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -1903,9 +1935,15 @@ func _unhandled_input(event: InputEvent) -> void:
 ## First-person mouse handling. Returns true if the event was consumed.
 func _fpv_input(event: InputEvent) -> bool:
 	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
-	if event is InputEventMouseMotion and captured:
+	if event is InputEventMouseMotion and (captured or event.button_mask & MOUSE_BUTTON_MASK_RIGHT):
 		_fyaw -= event.relative.x * 0.0035
 		_fpitch = clampf(_fpitch - event.relative.y * 0.0035, -1.35, 1.2)
+		return true
+	# Right button + drag also looks around: it works where a captured mouse
+	# gets no motion (remote desktops send absolute positions).
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+		if event.pressed and captured:
+			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		return true
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		if not captured:
@@ -1917,7 +1955,7 @@ func _fpv_input(event: InputEvent) -> bool:
 		else:
 			hud.inspect(_hovered)
 		return true
-	if event is InputEventMouseButton and event.button_index in [MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE]:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_MIDDLE:
 		return true
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE and captured:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE

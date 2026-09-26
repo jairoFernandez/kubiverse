@@ -1220,7 +1220,7 @@ const ES := {
 	"tiny and fast, basic answers": "diminuto y rápido, respuestas básicas",
 	"%d identities": "%d identidades",
 	"%d suspicious": "%d sospechosas",
-	"First person: move the mouse to look, click to inspect, ESC frees the mouse, P to go back.": "Primera persona: mueve el ratón para mirar, clic para inspeccionar, ESC libera el ratón, P para volver.",
+	"First person: move the mouse to look (or drag with the right button), click to inspect, ESC frees the mouse, P to go back.": "Primera persona: mueve el ratón para mirar (o arrastra con el botón derecho), clic para inspeccionar, ESC libera el ratón, P para volver.",
 	"SPACE": "ESPACIO",
 	"DRAG": "ARRASTRAR",
 	"ENERGY": "ENERGÍA",
