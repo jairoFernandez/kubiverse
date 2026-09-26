@@ -40,6 +40,7 @@ var muted := false
 var click_to_move := true
 var touch := "auto"
 var intro := true           # opening fly-through when a cluster connects
+var skipped_version := ""   # a release the player said not to be told about again
 var show_finished := false   # draw every Completed pod (they can be thousands)   # on-screen touch controls: auto | on | off
 
 
@@ -79,6 +80,7 @@ func _ready() -> void:
 		touch = cf.get_value("controls", "touch", touch)
 		show_finished = cf.get_value("ui", "show_finished", show_finished)
 		intro = cf.get_value("ui", "intro", intro)
+		skipped_version = cf.get_value("updates", "skipped", skipped_version)
 		var version := int(cf.get_value("meta", "version", 1))
 		if version < 2:
 			# v2: click-to-move on and 100% text by default for everyone.
@@ -142,6 +144,7 @@ func save() -> void:
 	cf.set_value("controls", "touch", touch)
 	cf.set_value("ui", "show_finished", show_finished)
 	cf.set_value("ui", "intro", intro)
+	cf.set_value("updates", "skipped", skipped_version)
 	cf.save(PATH)
 	apply_audio()
 	changed.emit()

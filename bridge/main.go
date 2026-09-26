@@ -89,6 +89,10 @@ type client struct {
 	needFull bool
 }
 
+// version of this bridge, stamped at build time with
+// -ldflags "-X main.version=X.Y.Z" (release builds use the tag without v).
+var version = "dev"
+
 func main() {
 	var (
 		kubeconfig = flag.String("kubeconfig", "", "path to kubeconfig (default: $KUBECONFIG or ~/.kube/config)")
@@ -111,7 +115,12 @@ func main() {
 	groupsHeader := flag.String("auth-groups-header", "", "team mode: header with the user's groups (comma-separated), e.g. X-Auth-Request-Groups")
 	production := flag.String("production", "", "comma-separated contexts that are PRODUCTION for everyone: changes need a confirmation and the game can't mark them sandbox")
 	lan := flag.Bool("lan", false, "serve on the local network (phones/tablets): listens on all interfaces, requires a token (random if not given) and prints the URLs to open")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 	var lanURLs []string
 	if *lan {
 		lanURLs = lanSetup(addr, token, origins)
@@ -148,6 +157,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
+	mux.HandleFunc("GET /api/version", hub.auth(handleVersion))
 	mux.HandleFunc("GET /api/contexts", hub.auth(hub.handleContexts))
 	mux.HandleFunc("POST /api/kubeconfig", hub.auth(hub.handleAddKubeconfig))
 	mux.HandleFunc("DELETE /api/kubeconfig", hub.auth(hub.handleDeleteKubeconfig))
@@ -196,7 +206,7 @@ func main() {
 	if *lan {
 		scheme = "https"
 	}
-	log.Printf("k8s-bridge listening on %s://%s (readonly=%v)", scheme, *addr, *readOnly)
+	log.Printf("k8s-bridge %s listening on %s://%s (readonly=%v)", version, scheme, *addr, *readOnly)
 	if len(lanURLs) > 0 {
 		log.Printf("LAN mode (HTTPS): open one of these on your phone/tablet (same Wi-Fi). The browser warns once about the self-signed certificate: accept it. The token is in the URL: share it only with people you trust.")
 		for _, u := range lanURLs {
@@ -488,6 +498,12 @@ func (b *Bridge) handleWS(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// handleVersion tells the game which bridge it talks to, so it can say when
+// a newer release exists (the web build served at / comes inside the bridge).
+func handleVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"version": version})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

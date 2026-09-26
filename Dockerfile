@@ -3,11 +3,12 @@
 #   docker build -t kubiverse-bridge .
 FROM --platform=$BUILDPLATFORM golang:1.27 AS build
 ARG TARGETOS TARGETARCH
+ARG VERSION=dev
 WORKDIR /src/bridge
 COPY bridge/go.mod bridge/go.sum ./
 RUN go mod download
 COPY bridge/ ./
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/k8s-bridge .
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X main.version=${VERSION#v}" -o /out/k8s-bridge .
 
 # kubectl for the in-game terminal and the YAML editor, checksum-verified.
 FROM --platform=$BUILDPLATFORM alpine:3.22 AS kubectl

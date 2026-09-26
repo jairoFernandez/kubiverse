@@ -12,6 +12,28 @@ func _init() -> void:
 		assert(WebHost.is_local(o), o)
 	for o in ["https://jairo.github.io", "https://kubiverse.dev", "https://172.32.0.1", "https://8.8.8.8"]:
 		assert(not WebHost.is_local(o), o)
+	# Updates: semver, who is behind, how to update.
+	assert(Updates.compare("v0.1.10", "0.1.9") == 1, "numeric, not text")
+	assert(Updates.compare("0.2.0", "v0.2.0") == 0)
+	assert(Updates.compare("1.0.0-rc1", "1.0.0") == -1, "pre-release is older")
+	assert(Updates.is_newer("v0.1.8", "0.1.7"))
+	assert(not Updates.is_newer("v0.1.7", "0.1.7"))
+	for v in ["dev", "", "0.0.0", "1.2", "1.x.3", "v"]:
+		assert(not Updates.is_known(v), v)
+		assert(not Updates.is_newer("v9.9.9", v), "no nagging for " + v)
+	assert(Updates.targets("macos", "0.1.7", "", "v0.1.8") == (["macos"] as Array[String]))
+	assert(Updates.targets("linux", "0.1.8", "0.1.6", "v0.1.8") == (["bridge"] as Array[String]))
+	assert(Updates.targets("web_bridge", "0.1.2", "0.1.7", "v0.1.8") == (["bridge"] as Array[String]), "web comes inside the bridge")
+	assert(Updates.targets("web_pages", "0.1.2", "", "v0.1.8").is_empty(), "Pages is always the latest")
+	assert(Updates.targets("web_bridge", "0.1.2", "dev", "v0.1.8").is_empty(), "dev bridge")
+	var behind: Array[String] = ["macos"]
+	assert(Updates.should_notify("v0.1.8", behind, ""))
+	assert(not Updates.should_notify("v0.1.8", behind, "0.1.8"), "skipped")
+	assert(Updates.should_notify("v0.1.9", behind, "0.1.8"), "a newer one than the skipped")
+	assert(Updates.hints("macos")[0].cmd == "brew upgrade --cask jairofernandez/kubiverse/kubiverse")
+	assert(Updates.hints("windows")[0].has("url"))
+	assert(Updates.hints("bridge", "https://x.github.io")[1].cmd.ends_with("--allow-origin https://x.github.io"))
+	assert(Updates.summary("## What's new\r\n\r\n- **Fast** [docs](http://x)\n* `kubectl` ok\n\nmore", 3) == "What's new\n- Fast docs\n- kubectl ok")
 	# The way down to the Underground: ↑ ↑ ↓ ↓ ← → S T A R T (↑ ↑ ↑ still counts).
 	var sc := SecretCode.new()
 	var hits := 0

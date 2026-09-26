@@ -829,6 +829,50 @@ func fetch_logs(ns: String, pod: String, container: String, previous: bool, cb: 
 	)
 
 
+## GET a JSON document (no extra headers unless given, so from a browser it is
+## a simple CORS request). cb(code: int, data): code 0 when it failed.
+func fetch_json(url: String, cb: Callable, headers := PackedStringArray()) -> void:
+	var req := HTTPRequest.new()
+	req.timeout = 15.0
+	add_child(req)
+	req.request_completed.connect(func(result: int, code: int, _headers, raw: PackedByteArray):
+		req.queue_free()
+		if result != HTTPRequest.RESULT_SUCCESS:
+			cb.call(0, null)
+			return
+		cb.call(code, JSON.parse_string(raw.get_string_from_utf8())))
+	if req.request(url, headers) != OK:
+		req.queue_free()
+		cb.call(0, null)
+
+
+## Version of the bridge this game talks to: the connected one, or the one
+## serving this web page. cb(version: String): "" when unknown (no bridge,
+## offline), Updates.LEGACY_BRIDGE for bridges older than GET /api/version.
+func bridge_version(cb: Callable) -> void:
+	var url := ""
+	var tok := ""
+	if mode == Mode.BRIDGE:
+		url = base_url
+		tok = token
+	elif served_by_bridge():
+		url = normalize_url(default_bridge_url())
+		tok = web_query_param("token")
+	else:
+		cb.call("")
+		return
+	var headers := PackedStringArray()
+	if tok != "":
+		headers.append("X-Bridge-Token: " + tok)
+	fetch_json(url + "/api/version", func(code: int, data):
+		if code == 200 and typeof(data) == TYPE_DICTIONARY:
+			cb.call(str(data.get("version", "")))
+		elif code == 404:
+			cb.call(Updates.LEGACY_BRIDGE)
+		else:
+			cb.call(""), headers)
+
+
 func _http(method: int, path: String, body: String, cb: Callable) -> void:
 	_http_to(base_url, token, method, path, body, cb)
 
