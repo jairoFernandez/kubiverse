@@ -6,3 +6,5 @@ bridge/webdist/*
 
 # Promo video project (kept out of the repo for now)
 promo/
+game/scripts/reel.gd
+game/scripts/reel.gd.uid
