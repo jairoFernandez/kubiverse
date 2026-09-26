@@ -360,7 +360,7 @@ func _process(delta: float) -> void:
 		return
 	_poll -= delta
 	var busy_dl := false
-	for d in _st.get("downloads", []):
+	for d in (_st.get("downloads") if _st.get("downloads") != null else []):
 		busy_dl = busy_dl or d.status == "running"
 	if _poll <= 0.0:
 		_poll = 1.0 if busy_dl or _settings_page.visible else 6.0
@@ -398,7 +398,7 @@ func _fill_settings(st: Dictionary) -> void:
 		_engine_state.text = "[color=#ffa300]%s[/color] %s" % [tr("No AI:"), tr(str(st.get("why", "")))]
 	var ol: Dictionary = st.get("ollama", {})
 	var lc: Dictionary = st.get("llamacpp", {})
-	var models: Array = ol.get("models", []).filter(func(m): return not str(m).contains("cloud"))
+	var models: Array = (ol.get("models") if ol.get("models") != null else []).filter(func(m): return not str(m).contains("cloud"))
 	var sig := JSON.stringify([models, ol.get("up"), lc, st.get("gguf"), cfg])
 	if sig != _sig:
 		_sig = sig
@@ -412,8 +412,8 @@ func _fill_settings(st: Dictionary) -> void:
 				_ollama_model.select(_ollama_model.item_count - 1)
 		_ollama_model.disabled = not ol.get("up", false)
 		_fill_ollama(ol, models)
-		_fill_llama(lc, st.get("gguf", []), cfg)
-	_fill_downloads(st.get("downloads", []))
+		_fill_llama(lc, st.get("gguf") if st.get("gguf") != null else [], cfg)
+	_fill_downloads(st.get("downloads") if st.get("downloads") != null else [])
 
 
 func _fill_ollama(ol: Dictionary, models: Array) -> void:
@@ -427,7 +427,7 @@ func _fill_ollama(ol: Dictionary, models: Array) -> void:
 		_ollama_box.add_child(t)
 		return
 	_ollama_box.add_child(hud._label(tr("Download into Ollama:"), 20, Vox.LAVENDER))
-	for c in ol.get("catalog", []):
+	for c in (ol.get("catalog") if ol.get("catalog") != null else []):
 		var have: bool = models.any(func(m): return str(m) == c.name or str(m).trim_suffix(":latest") == c.name)
 		var r := HBoxContainer.new()
 		r.add_theme_constant_override("separation", 8)

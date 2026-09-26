@@ -185,7 +185,7 @@ func (a *aiState) status(ctx context.Context) map[string]any {
 	models, oerr := ollamaModels(ctx)
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	var olist []string
+	olist := []string{} // [] rather than null when Ollama isn't there
 	for _, m := range models {
 		if !strings.Contains(m, "embed") {
 			olist = append(olist, m)
