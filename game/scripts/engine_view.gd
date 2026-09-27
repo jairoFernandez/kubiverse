@@ -79,6 +79,35 @@ func _init(h: Node) -> void:
 	_show_tab("lessons")
 
 
+## Phones: no desktop width, and short scroll areas (the sheet sizes them).
+var _compact := false
+
+
+func set_compact(on: bool) -> void:
+	if on == _compact:
+		return
+	_compact = on
+	custom_minimum_size.x = 0.0 if on else 560.0
+	drag.min_size = Vector2(240, 160) if on else Vector2(460, 240)
+	_fit_mins(self)
+
+
+func _fit_mins(n: Node) -> void:
+	for c in n.get_children():
+		if c is Control and (c is ScrollContainer or c is RichTextLabel):
+			if not c.has_meta("min_y"):
+				c.set_meta("min_y", c.custom_minimum_size.y)
+			var cap := 120.0 if c.name == "StepScroll" else 70.0
+			c.custom_minimum_size.y = minf(c.get_meta("min_y"), cap) if _compact else c.get_meta("min_y")
+		_fit_mins(c)
+
+
+## True while the panel is open and not folded (on phones it then owns the
+## screen: no joystick or minimap on top of it).
+func covers() -> bool:
+	return visible and _body.visible
+
+
 func _show_tab(tab: String) -> void:
 	_tab = tab
 	_tabs[0].theme_type_variation = "GoButton" if tab == "lessons" else ""
@@ -94,6 +123,7 @@ func _show_tab(tab: String) -> void:
 
 func _build_catalog() -> void:
 	_catalog = VBoxContainer.new()
+	_catalog.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_catalog.add_theme_constant_override("separation", 4)
 	_body.add_child(_catalog)
 
@@ -127,12 +157,15 @@ func _fill_catalog() -> void:
 			b.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 			b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 			lv.add_child(b)
+	if _compact:
+		_fit_mins(_catalog)
 
 
 # ----------------------------------------------------------------- player
 
 func _build_player() -> void:
 	_player = VBoxContainer.new()
+	_player.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_player.add_theme_constant_override("separation", 6)
 	_player.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_body.add_child(_player)
@@ -146,6 +179,7 @@ func _build_player() -> void:
 	_player.add_child(ph)
 	# The step being explained, in a scrollable box.
 	var sc := ScrollContainer.new()
+	sc.name = "StepScroll"   # on phones it keeps more height than the rest
 	sc.custom_minimum_size = Vector2(0, 130)
 	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_player.add_child(sc)

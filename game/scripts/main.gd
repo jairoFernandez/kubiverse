@@ -2814,7 +2814,7 @@ func _want_touch() -> bool:
 
 func _touch_tick() -> void:
 	var tc := hud.touch_ctl
-	var show := hud.touch and not hud.is_connect_visible() and not hud.is_modal_open() and not hud._menu_panel.visible
+	var show := hud.touch and not hud.is_connect_visible() and not hud.is_modal_open() and not hud._menu_panel.visible and not hud.engine_covers()
 	if tc.visible != show:
 		tc.visible = show
 		tc.reset()

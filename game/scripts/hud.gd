@@ -71,6 +71,7 @@ var _menu_btn: Button
 var _menu_panel: PanelContainer
 var _compact_term := false
 var _was_compact := false
+var _engine_sheet := false     # the engine panel is laid out as a phone sheet
 var _kind_wanted := false   # the cluster-kind button has something to say
 var _close_fab: Button
 var editor: ManifestEditor
@@ -2362,6 +2363,50 @@ func _fit_row(box: HBoxContainer, droppable: Array, width: float, together := fa
 			c.visible = d[1]
 
 
+## Phones: the engine room panel is a sheet over the lower part of the
+## screen (held upright) or the right side (sideways), and while it's open
+## the joystick and the minimap stay out of its way. Folded ("_"), it's just
+## its title bar and you can walk again.
+func _layout_engine(sz: Vector2, top: float) -> void:
+	engine.set_compact(compact)
+	var sheet := compact and engine.visible and not engine.drag.is_floating()
+	if sheet:
+		var r: Rect2
+		if sz.y > sz.x:
+			r = Rect2(6.0, sz.y * 0.44, sz.x - 12.0, sz.y * 0.56 - 6.0)
+		else:
+			r = Rect2(sz.x * 0.42, top, sz.x * 0.58 - 6.0, sz.y - top - 6.0)
+		if not engine.covers():
+			# Folded: just its title bar, where the sheet starts (clear of
+			# the thumbs' buttons at the bottom).
+			r = Rect2(r.position, Vector2(r.size.x, engine.get_combined_minimum_size().y))
+		engine.anchor_left = 0.0
+		engine.anchor_top = 0.0
+		engine.anchor_right = 0.0
+		engine.anchor_bottom = 0.0
+		engine.grow_vertical = Control.GROW_DIRECTION_END
+		engine.position = r.position
+		engine.size = r.size
+		_engine_sheet = true
+	elif _engine_sheet:
+		_engine_sheet = false
+		if not engine.drag.is_floating():
+			engine.drag.dock()
+	if compact and map_mini:
+		map_mini.get_parent().visible = Settings.minimap and not stats.visible and not fpv and not engine_covers()
+	if _banner and _banner.visible:
+		var bw := minf(620.0, sz.x - 50.0)
+		if _banner_body.custom_minimum_size.x != bw:
+			_banner_body.custom_minimum_size.x = bw
+			_banner.size = Vector2.ZERO
+		_banner.position.x = roundf((sz.x - _banner.size.x) * 0.5)   # centered, whatever it was sized for
+
+
+## On a phone, the open engine room panel owns the screen.
+func engine_covers() -> bool:
+	return compact and engine != null and engine.covers() and not engine.drag.is_floating()
+
+
 ## Switches between the desktop layout and the compact (phone) one.
 func _apply_compact(on: bool) -> void:
 	compact = on
@@ -4641,6 +4686,7 @@ func _layout() -> void:
 	# Terminal and feed sit above the help bar.
 	if engine and engine.drag:
 		engine.drag.place(sz)   # the engine room panel, when dragged out
+		_layout_engine(sz, top)
 	var term_floating := _term_drag.place(sz)
 	if term_floating:
 		# Floating: its size is the player's; the text fills it.
