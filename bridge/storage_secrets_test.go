@@ -6,6 +6,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/cache"
 )
 
 func TestConfigRefsFromPods(t *testing.T) {
@@ -49,3 +52,35 @@ func TestConfigRefsFromPods(t *testing.T) {
 		t.Errorf("ledger-config: %+v", r)
 	}
 }
+
+// Refs every pod marks optional (argocd's dex TLS, coredns-custom) are absent
+// on purpose: not an alarm.
+func TestOptionalConfigRefIsNotMissing(t *testing.T) {
+	yes := true
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "dex-1"},
+		Spec: corev1.PodSpec{
+			ImagePullSecrets: []corev1.LocalObjectReference{{Name: "regcred"}},
+			Volumes: []corev1.Volume{
+				{Name: "tls", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "dex-tls", Optional: &yes}}},
+				{Name: "cfg", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "dex-cfg"}}}},
+			},
+		},
+	}
+	b := &Bridge{store: storeListers{secretMeta: emptyLister{}, cmMeta: emptyLister{}}}
+	s := &Snapshot{}
+	b.fillStorageAndConfig(s, []*corev1.Pod{pod}, time.Now())
+	got := map[string]string{}
+	for _, c := range s.Configs {
+		got[c.Name] = c.Exists
+	}
+	if got["dex-tls"] != "optional" || got["regcred"] != "optional" || got["dex-cfg"] != "no" {
+		t.Errorf("exists: %v", got)
+	}
+}
+
+type emptyLister struct{}
+
+func (emptyLister) List(labels.Selector) ([]runtime.Object, error)  { return nil, nil }
+func (emptyLister) Get(string) (runtime.Object, error)              { return nil, nil }
+func (emptyLister) ByNamespace(string) cache.GenericNamespaceLister { return nil }

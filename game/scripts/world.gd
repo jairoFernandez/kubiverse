@@ -570,7 +570,8 @@ func _apply_plant(s: Dictionary) -> void:
 	if nvol == 0:
 		nvol = (s.get("volumes", []) as Array).size() if s.get("volumes") != null else 0
 	library_bld.data["sub"] = tr("%d volumes in %d sections") % [nvol, (s.get("storage_classes", []) as Array).size() if s.get("storage_classes") != null else 0]
-	var secrets: Array = (s.get("configs", []) if s.get("configs") != null else []).filter(func(c): return c.kind == "Secret")
+	# Optional refs that don't exist aren't secrets of the cluster at all.
+	var secrets: Array = (s.get("configs", []) if s.get("configs") != null else []).filter(func(c): return c.kind == "Secret" and str(c.get("exists", "")) != "optional")
 	var lost := secrets.filter(func(c): return str(c.get("exists", "")) == "no").size()
 	bank_bld.data["sub"] = tr("%d secrets") % secrets.size() + ((" - " + tr("%d MISSING") % lost) if lost > 0 else "")
 	var yard_r := 28.0 + Landmark.W * 0.5
@@ -779,7 +780,7 @@ func _apply_library(s: Dictionary) -> void:
 ## cracked red pearls on the "missing" counter in the hall.
 func _apply_bank(s: Dictionary) -> void:
 	var secrets: Array = (s.get("configs", []) if s.get("configs") != null else []).filter(func(c): return c.kind == "Secret")
-	var here := secrets.filter(func(c): return str(c.get("exists", "")) != "no")
+	var here := secrets.filter(func(c): return not str(c.get("exists", "")) in ["no", "optional"])
 	var lost := secrets.filter(func(c): return str(c.get("exists", "")) == "no")
 	var trays: Array = []
 	for c in here:

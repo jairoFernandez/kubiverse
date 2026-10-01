@@ -86,6 +86,7 @@ var _view_intro: CheckBox
 var _view_touch: Button
 var _vol_panel: PanelContainer
 var _vol_mute: CheckBox
+var _connect_mute: CheckBox
 var _vol_btn: Button
 var map_mini: MapView
 var stats: StatsPanel
@@ -494,6 +495,18 @@ func _build_connect_ui() -> void:
 	ver.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	ver.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	v.add_child(ver)
+	# Sound before anything else: the music starts on this screen.
+	var snd := HFlowContainer.new()
+	snd.alignment = FlowContainer.ALIGNMENT_CENTER
+	snd.add_theme_constant_override("h_separation", 14)
+	snd.add_child(_volume_row("General", "master_volume"))
+	_connect_mute = _check("Mute everything", func():
+		Settings.muted = _connect_mute.button_pressed
+		Settings.save()
+		_sync_view())
+	_connect_mute.button_pressed = Settings.muted
+	snd.add_child(_connect_mute)
+	v.add_child(snd)
 
 	# ---- the demo first: what a first-time visitor is looking for
 	var demo := PanelContainer.new()
@@ -706,6 +719,8 @@ func _volume_row(label: String, key: String) -> HBoxContainer:
 	sl.custom_minimum_size = Vector2(200, 24)
 	sl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	sl.focus_mode = Control.FOCUS_NONE
+	# The same setting has a slider on the start screen and one in game.
+	sl.visibility_changed.connect(func(): sl.set_value_no_signal(Settings.get(key)))
 	sl.value_changed.connect(func(v):
 		Settings.set(key, v)
 		Settings.save()
@@ -1789,6 +1804,7 @@ func _config_lines(d: Dictionary) -> Array:
 	match str(d.get("exists", "")):
 		"yes": out.append(_kv("exists", "[color=#00e436]%s[/color]" % tr("yes") + ("  [color=#83769c](%s)[/color]" % (tr("created %s ago") % _age(d.get("age", 0))) if float(d.get("age", 0)) > 0 else "")))
 		"no": out.append(_kv("exists", "[color=#ff004d]%s[/color]" % tr("NO: it is referenced but doesn't exist")))
+		"optional": out.append(_kv("exists", "[color=#ffa300]%s[/color]" % tr("no, and that's fine: every pod marks it optional")))
 		_: out.append(_kv("exists", "[color=#83769c]%s[/color]" % tr("unknown (not allowed to list them): seen in the pods' specs")))
 	var keys: Array = d.get("keys", []) if d.get("keys") != null else []
 	if not keys.is_empty():
@@ -2218,6 +2234,8 @@ func _sync_view() -> void:
 		_view_intro.set_pressed_no_signal(Settings.intro)
 	if _view_touch:
 		_view_touch.text = tr("Touch controls: %s") % tr({"auto": "automatic", "on": "on", "off": "off"}[Settings.touch])
+	if _connect_mute:
+		_connect_mute.set_pressed_no_signal(Settings.muted)
 	if _vol_mute:
 		_vol_mute.set_pressed_no_signal(Settings.muted)
 		_vol_btn.text = tr("MUTED") if Settings.muted else "VOL"

@@ -56,7 +56,7 @@ type ConfigRef struct {
 	Keys      []string `json:"keys"`              // the keys pods read by name (env)
 	Pods      []string `json:"pods"`              // who uses it
 	How       []string `json:"how"`               // volume, env, envFrom, imagePull
-	Exists    string   `json:"exists"`            // yes | no | unknown (not allowed to list names)
+	Exists    string   `json:"exists"`            // yes | no | optional (absent, but every pod marks it optional) | unknown (not allowed to list names)
 	Missing   []string `json:"missing,omitempty"` // pods that can't start without it
 	Age       int64    `json:"age,omitempty"`
 	Cert      string   `json:"cert,omitempty"` // the cert-manager Certificate that writes it
@@ -167,7 +167,12 @@ func (b *Bridge) fillStorageAndConfig(s *Snapshot, pods []*corev1.Pod, now time.
 		}
 		return r
 	}
-	use1 := func(r *ConfigRef, pod, how, key string) {
+	// required: refs some pod can't start without (not marked optional).
+	required := map[*ConfigRef]bool{}
+	use1 := func(r *ConfigRef, pod, how, key string, optional *bool) {
+		if optional == nil || !*optional {
+			required[r] = true
+		}
 		if !contains(r.Pods, pod) {
 			r.Pods = append(r.Pods, pod)
 		}
@@ -181,18 +186,18 @@ func (b *Bridge) fillStorageAndConfig(s *Snapshot, pods []*corev1.Pod, now time.
 	for _, p := range pods {
 		for _, v := range p.Spec.Volumes {
 			if v.Secret != nil {
-				use1(get("Secret", p.Namespace, v.Secret.SecretName), p.Name, "volume", "")
+				use1(get("Secret", p.Namespace, v.Secret.SecretName), p.Name, "volume", "", v.Secret.Optional)
 			}
 			if v.ConfigMap != nil {
-				use1(get("ConfigMap", p.Namespace, v.ConfigMap.Name), p.Name, "volume", "")
+				use1(get("ConfigMap", p.Namespace, v.ConfigMap.Name), p.Name, "volume", "", v.ConfigMap.Optional)
 			}
 			if v.Projected != nil {
 				for _, src := range v.Projected.Sources {
 					if src.Secret != nil {
-						use1(get("Secret", p.Namespace, src.Secret.Name), p.Name, "volume", "")
+						use1(get("Secret", p.Namespace, src.Secret.Name), p.Name, "volume", "", src.Secret.Optional)
 					}
 					if src.ConfigMap != nil && !noiseConfig("ConfigMap", src.ConfigMap.Name) {
-						use1(get("ConfigMap", p.Namespace, src.ConfigMap.Name), p.Name, "volume", "")
+						use1(get("ConfigMap", p.Namespace, src.ConfigMap.Name), p.Name, "volume", "", src.ConfigMap.Optional)
 					}
 				}
 			}
@@ -203,25 +208,28 @@ func (b *Bridge) fillStorageAndConfig(s *Snapshot, pods []*corev1.Pod, now time.
 					continue
 				}
 				if r := e.ValueFrom.SecretKeyRef; r != nil {
-					use1(get("Secret", p.Namespace, r.Name), p.Name, "env", r.Key)
+					use1(get("Secret", p.Namespace, r.Name), p.Name, "env", r.Key, r.Optional)
 				}
 				if r := e.ValueFrom.ConfigMapKeyRef; r != nil {
-					use1(get("ConfigMap", p.Namespace, r.Name), p.Name, "env", r.Key)
+					use1(get("ConfigMap", p.Namespace, r.Name), p.Name, "env", r.Key, r.Optional)
 				}
 			}
 			for _, e := range c.EnvFrom {
 				if e.SecretRef != nil {
-					use1(get("Secret", p.Namespace, e.SecretRef.Name), p.Name, "envFrom", "")
+					use1(get("Secret", p.Namespace, e.SecretRef.Name), p.Name, "envFrom", "", e.SecretRef.Optional)
 				}
 				if e.ConfigMapRef != nil {
-					use1(get("ConfigMap", p.Namespace, e.ConfigMapRef.Name), p.Name, "envFrom", "")
+					use1(get("ConfigMap", p.Namespace, e.ConfigMapRef.Name), p.Name, "envFrom", "", e.ConfigMapRef.Optional)
 				}
 			}
 		}
 		for _, ips := range p.Spec.ImagePullSecrets {
 			r := get("Secret", p.Namespace, ips.Name)
 			r.Type = "registry"
-			use1(r, p.Name, "imagePull", "")
+			// A missing pull secret doesn't stop the pod: public images still
+			// pull, and a private one shows up as ImagePullBackOff anyway.
+			yes := true
+			use1(r, p.Name, "imagePull", "", &yes)
 		}
 		// "secret "x" not found": the pod can't start without it.
 		for _, st := range append(append([]corev1.ContainerStatus{}, p.Status.InitContainerStatuses...), p.Status.ContainerStatuses...) {
@@ -270,6 +278,9 @@ func (b *Bridge) fillStorageAndConfig(s *Snapshot, pods []*corev1.Pod, now time.
 		for k, r := range refs {
 			if strings.HasPrefix(k, kind+"/") && !seen[k] {
 				r.Exists = "no"
+				if !required[r] {
+					r.Exists = "optional"
+				}
 			}
 		}
 	}

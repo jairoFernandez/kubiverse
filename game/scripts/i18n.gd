@@ -149,6 +149,7 @@ const ES := {
 	"opaque (any data)": "opaco (cualquier dato)",
 	"created %s ago": "creado hace %s",
 	"NO: it is referenced but doesn't exist": "NO: se referencia pero no existe",
+	"no, and that's fine: every pod marks it optional": "no, y está bien: todos los pods lo marcan como opcional",
 	"unknown (not allowed to list them): seen in the pods' specs": "desconocido (sin permiso para listarlos): visto en la spec de los pods",
 	"keys read": "claves leídas",
 	"used by": "usado por",
