@@ -2118,6 +2118,12 @@ func _fill_help() -> void:
 	var keys := [["WASD", "walk"], ["SHIFT/X", "run"], ["SPACE", "jump"], ["Z", "jetpack"], ["P", "first person"], ["E", "enter/use"], ["DRAG", "camera"],
 		["TAB", "next problem"], ["M", "map"], ["J", "missions"], ["G", "legend + all keys"]]
 	_help.text = "   ".join(keys.map(func(k): return "[color=#ffec27]%s[/color] [color=#c2c3c7]%s[/color]" % [tr(k[0]), tr(k[1])]))
+	# Which build this is (and its bridge): "an old version" is then visible.
+	var app := _app_version()
+	var ver := ("v" + app) if app != "" else "dev"
+	if _upd_bridge != "":
+		ver += "  ·  bridge " + _upd_bridge
+	_help.text += "   [color=#83769c]%s[/color]" % ver
 
 
 ## Re-translate everything built from formatted strings.
@@ -4393,11 +4399,11 @@ func check_updates() -> void:
 
 ## The bridge may be older than the game (or the web build inside it is).
 func _check_bridge_version() -> void:
-	if _upd_latest.is_empty():
-		return
 	K8s.bridge_version(func(v: String):
 		_upd_bridge = v
-		_update_notice())
+		_fill_help()
+		if not _upd_latest.is_empty():
+			_update_notice())
 
 
 ## macos / windows / linux, or the web build served by a bridge / Pages.
