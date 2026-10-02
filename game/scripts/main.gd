@@ -366,6 +366,8 @@ func _screenshot_and_quit(path: String) -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--lang="):
 			I18n.set_lang(arg.substr(7))
+		if arg == "--view":  # the VIEW menu open
+			hud.toggle_view()
 		if arg.begins_with("--level="):
 			_go_level(arg.substr(8))
 			await get_tree().create_timer(2.5).timeout

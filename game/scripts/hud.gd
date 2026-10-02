@@ -175,6 +175,7 @@ var _conn_dot: ColorRect
 var _chaos_btn: Button
 
 var _view_panel: PanelContainer
+var _view_bridge: Label  # native: the game's bridge, in the VIEW menu
 var _view_sys: CheckBox
 var _view_nsf: LineEdit    # which namespaces to draw (big clusters)
 var _gh_panel: PanelContainer   # connect GitHub (GitOps)
@@ -811,6 +812,9 @@ func _on_local_bridge(st: String, detail: String) -> void:
 			col = Vox.RED
 	_local_label.text = msg
 	_local_label.add_theme_color_override("font_color", col)
+	if _view_bridge != null:
+		_view_bridge.text = msg
+		_view_bridge.add_theme_color_override("font_color", col)
 	if _install_box != null:
 		_install_box.visible = st in ["missing", "failed"]
 	if st in ["running", "started"]:
@@ -821,6 +825,13 @@ func _on_local_bridge(st: String, detail: String) -> void:
 	if _url_edit != null and (_url_edit.text == _auto_url or _url_edit.text == "") and u != _url_edit.text:
 		_url_edit.text = u
 	_auto_url = u
+
+
+## The game's own bridge again (a newer binary, after an update): it
+## reconnects by itself and the footer shows the new version.
+func restart_bridge() -> void:
+	toast(tr("Restarting the bridge..."), true)
+	K8s.start_local_bridge()
 
 
 func _restart_local_bridge() -> void:
@@ -1095,23 +1106,32 @@ func _build_game_ui() -> void:
 		_sync_view())
 	volv.add_child(_vol_mute)
 
-	# ---- View menu (drops down under the bar)
+	# ---- View menu (drops down under the bar): sections, and a scroll
+	# when it's taller than the screen (_layout sizes it).
 	_view_panel = PanelContainer.new()
 	_view_panel.anchor_left = 1.0
 	_view_panel.anchor_right = 1.0
-	_view_panel.offset_left = -420
+	_view_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	_view_panel.offset_right = -10
 	_view_panel.offset_top = TOP
 	_view_panel.visible = false
 	_game_root.add_child(_view_panel)
+	var vscroll := ScrollContainer.new()
+	vscroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vscroll.name = "Scroll"
+	_view_panel.add_child(vscroll)
 	var vv := VBoxContainer.new()
 	vv.add_theme_constant_override("separation", 8)
-	_view_panel.add_child(vv)
+	vv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vscroll.add_child(vv)
+
+	# What the world shows
 	vv.add_child(_section("VIEW"))
 	_view_sys = _check("System namespaces  [H]", toggle_system)
 	vv.add_child(_view_sys)
-	vv.add_child(_button("GITHUB (GitOps)", open_github))
-	vv.add_child(_label("Only these namespaces (this cluster; e.g. shop, team-*, or a word they contain):", 20, Vox.SILVER))
+	var nsl := _label("Only these namespaces (this cluster; e.g. shop, team-*, or a word they contain):", 20, Vox.SILVER)
+	nsl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vv.add_child(nsl)
 	_view_nsf = LineEdit.new()
 	_view_nsf.placeholder_text = tr("all of them")
 	_view_nsf.add_theme_font_size_override("font_size", 22)
@@ -1122,64 +1142,12 @@ func _build_game_ui() -> void:
 	vv.add_child(_view_nsf)
 	_view_lines = _check("All service lines  [K]", toggle_lines)
 	vv.add_child(_view_lines)
-	_view_term = _check("Terminal panel  [T]", toggle_terminal)
-	vv.add_child(_view_term)
-	_view_legend = _check("Legend  [G]", toggle_legend)
-	vv.add_child(_view_legend)
-	var sh := HBoxContainer.new()
-	sh.add_theme_constant_override("separation", 10)
-	sh.add_child(_label("Text size", 26))
-	sh.add_child(_button(" - ", func(): Settings.step_scale(-1)))
-	_view_scale = _label("", 26, Vox.YELLOW)
-	sh.add_child(_view_scale)
-	sh.add_child(_button(" + ", func(): Settings.step_scale(1)))
-	vv.add_child(sh)
-	vv.add_child(_lang_row())
-	_view_click = _check("Click to move (click the ground)", func():
-		Settings.click_to_move = not Settings.click_to_move
-		Settings.save())
-	vv.add_child(_view_click)
 	_view_finished = _check("Show every finished pod (Completed)", func():
 		Settings.show_finished = not Settings.show_finished
 		Settings.save()
 		if world:
 			world.apply_state(K8s.state))  # redraw with / without them
 	vv.add_child(_view_finished)
-	var ir := HBoxContainer.new()
-	_view_intro = _check("Intro when connecting", func():
-		Settings.intro = not Settings.intro
-		Settings.save())
-	ir.add_child(_view_intro)
-	ir.add_child(_button("PLAY INTRO", func():
-		close_top()
-		intro_requested.emit()))
-	vv.add_child(ir)
-	_view_touch = _button("", func():
-		Settings.touch = {"auto": "on", "on": "off", "off": "auto"}[Settings.touch]
-		Settings.save()
-		touch_mode_changed.emit()
-		_sync_view())
-	vv.add_child(_view_touch)
-	_view_run = _check("Always run  [X]", func():
-		Settings.always_run = not Settings.always_run
-		Settings.save())
-	vv.add_child(_view_run)
-	_view_minimap = _check("Minimap  [N]", toggle_minimap)
-	vv.add_child(_view_minimap)
-	_view_fpv = _check("First person view  [P]", func(): fpv_requested.emit())
-	vv.add_child(_view_fpv)
-	_view_jet = _check("Jetpack flight  [Z / SPACE x2]", func(): jetpack_requested.emit())
-	vv.add_child(_view_jet)
-	_view_stats = _check("Performance & cluster stats  [F3]", toggle_stats)
-	vv.add_child(_view_stats)
-	_view_challenge = _check("Jump challenge (Mario platforms)", func():
-		Settings.challenge = not Settings.challenge
-		Settings.save())
-	vv.add_child(_view_challenge)
-	_view_fastday = _check("Accelerated day/night cycle", func():
-		Settings.fast_day = not Settings.fast_day
-		Settings.save())
-	vv.add_child(_view_fastday)
 	_look_btn = _button("", func():
 		set_look(Look.next(Look.current)))
 	vv.add_child(_look_btn)
@@ -1205,16 +1173,91 @@ func _build_game_ui() -> void:
 	wrow.add_child(wbtn)
 	wrow.add_child(city)
 	vv.add_child(wrow)
+	_view_fastday = _check("Accelerated day/night cycle", func():
+		Settings.fast_day = not Settings.fast_day
+		Settings.save())
+	vv.add_child(_view_fastday)
+
+	# Panels on the screen, text and language
+	vv.add_child(_section("SCREEN"))
+	_view_term = _check("Terminal panel  [T]", toggle_terminal)
+	vv.add_child(_view_term)
+	_view_legend = _check("Legend  [G]", toggle_legend)
+	vv.add_child(_view_legend)
+	_view_minimap = _check("Minimap  [N]", toggle_minimap)
+	vv.add_child(_view_minimap)
+	_view_stats = _check("Performance & cluster stats  [F3]", toggle_stats)
+	vv.add_child(_view_stats)
+	var sh := HBoxContainer.new()
+	sh.add_theme_constant_override("separation", 10)
+	sh.add_child(_label("Text size", 26))
+	sh.add_child(_button(" - ", func(): Settings.step_scale(-1)))
+	_view_scale = _label("", 26, Vox.YELLOW)
+	sh.add_child(_view_scale)
+	sh.add_child(_button(" + ", func(): Settings.step_scale(1)))
+	vv.add_child(sh)
+	vv.add_child(_lang_row())
+
+	# Moving around
+	vv.add_child(_section("MOVING AROUND"))
+	_view_click = _check("Click to move (click the ground)", func():
+		Settings.click_to_move = not Settings.click_to_move
+		Settings.save())
+	vv.add_child(_view_click)
+	_view_run = _check("Always run  [X]", func():
+		Settings.always_run = not Settings.always_run
+		Settings.save())
+	vv.add_child(_view_run)
+	_view_fpv = _check("First person view  [P]", func(): fpv_requested.emit())
+	vv.add_child(_view_fpv)
+	_view_jet = _check("Jetpack flight  [Z / SPACE x2]", func(): jetpack_requested.emit())
+	vv.add_child(_view_jet)
+	_view_touch = _button("", func():
+		Settings.touch = {"auto": "on", "on": "off", "off": "auto"}[Settings.touch]
+		Settings.save()
+		touch_mode_changed.emit()
+		_sync_view())
+	vv.add_child(_view_touch)
 	vv.add_child(_button("Recenter camera  [HOME]", func(): recenter_requested.emit()))
-	vv.add_child(_button("Change log (what was changed)", func():
-		_view_panel.visible = false
-		open_audit()))
+
+	# The game: intro, missions, logs
+	vv.add_child(_section("GAME"))
+	var ir := HBoxContainer.new()
+	_view_intro = _check("Intro when connecting", func():
+		Settings.intro = not Settings.intro
+		Settings.save())
+	ir.add_child(_view_intro)
+	ir.add_child(_button("PLAY INTRO", func():
+		close_top()
+		intro_requested.emit()))
+	vv.add_child(ir)
+	_view_challenge = _check("Jump challenge (Mario platforms)", func():
+		Settings.challenge = not Settings.challenge
+		Settings.save())
+	vv.add_child(_view_challenge)
 	vv.add_child(_button("Mission log (all missions)", func():
 		_view_panel.visible = false
 		open_mission_log()))
 	vv.add_child(_button("Restart missions", func():
 		missions.restart()
 		_mission_panel.visible = true))
+	vv.add_child(_button("Change log (what was changed)", func():
+		_view_panel.visible = false
+		open_audit()))
+	vv.add_child(_button("GITHUB (GitOps)", open_github))
+
+	# Native: the bridge the game runs
+	if LocalBridge.supported():
+		vv.add_child(_section("BRIDGE"))
+		_view_bridge = _label("", 20, Vox.SILVER)
+		_view_bridge.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		vv.add_child(_view_bridge)
+		vv.add_child(_button("RESTART BRIDGE", restart_bridge))
+
+	# Long names wrap instead of pushing the panel off the screen.
+	for c in vv.get_children():
+		if c is Button:
+			c.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 
 	_build_level_strip()
 	_build_legend()
@@ -4689,11 +4732,15 @@ func open_update() -> void:
 			if OS.has_feature("web") and K8s.served_by_bridge():
 				tip = tr("This game comes inside the bridge: update it, restart it and reload this page.")
 			elif LocalBridge.supported() and K8s.local.status == "started":
-				tip = tr("Then press RESTART BRIDGE in SETTINGS, or restart Kubiverse.")
+				tip = tr("Then restart it (also in the VIEW menu):")
 			var tl := _label(tip, 20, Vox.SILVER)
 			tl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			tl.custom_minimum_size = Vector2(620, 0)
 			_upd_box.add_child(tl)
+			if LocalBridge.supported() and K8s.local.status == "started":
+				_upd_box.add_child(_button("RESTART BRIDGE", func():
+					_upd_panel.visible = false
+					restart_bridge()))
 	var bh := HBoxContainer.new()
 	bh.add_theme_constant_override("separation", 12)
 	bh.alignment = BoxContainer.ALIGNMENT_END
@@ -4934,6 +4981,13 @@ func _layout() -> void:
 	var lwant: float = scroll.get_child(0).get_combined_minimum_size().y
 	scroll.custom_minimum_size = Vector2(lw, clampf(lwant, 60, sz.y - top - bottom - 50))
 	_legend.size = Vector2.ZERO
+	# The VIEW menu: a fixed width on the right, scrolling when too tall.
+	var vw := (sz.x - 40.0) if compact else clampf(sz.x * 0.34, 380.0, 520.0)
+	var vscroll: ScrollContainer = _view_panel.get_node("Scroll")
+	var vwant: float = vscroll.get_child(0).get_combined_minimum_size().y
+	vscroll.custom_minimum_size = Vector2(vw, clampf(vwant, 60, sz.y - top - bottom - 50))
+	_view_panel.offset_left = _view_panel.offset_right - vw
+	_view_panel.size = Vector2.ZERO
 	var mm: Control = _game_root.get_node("Minimap")
 	var msz: Vector2 = mm.get_combined_minimum_size()
 	mm.offset_left = 10
