@@ -1,0 +1,14 @@
+# tr("...") keys that had no Spanish entry (I18n.ES) when tests/test_logic.gd
+# started checking. They are allowed to stay untranslated; any other missing
+# key fails the test. Remove a line once its key is in I18n.ES (the test says
+# when). One key per line, escaped like a GDScript string (\n, \").
+You: %s. The API server authenticates you, checks RBAC, validates the object and saves it in etcd; controllers react to the change.
+Controller manager (Deployment controller): %s — %s. Saved in etcd through the API server.
+Controller manager: %s — %s. The new pod has no node yet (Pending).
+Scheduler: %s. The binding is saved in etcd; the kubelet of that node picks it up.
+Kubelet + container runtime on %s: %s
+Kubelet on %s: %s. It reports the pod status to the API server.
+Kubelet on %s stops a container of %s (%s).
+Scheduler can't place %s: %s
+Kubelet on %s reports a problem with %s: %s
+Node %s: %s

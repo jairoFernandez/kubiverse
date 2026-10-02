@@ -2,7 +2,7 @@ GODOT  ?= godot
 BRIDGE := bridge/bin/kubiverse-bridge
 ADDR   ?= 127.0.0.1:8088
 
-.PHONY: serve-lan test metrics-server cluster cluster-delete cluster-ha cluster-ha-delete scenario scenario-delete play-kind serve-web-kind all bridge bridge-all bridge-bundle webdist game-import web macos linux windows native run-bridge play play-demo serve-web demo-apply demo-delete clean readme-shots
+.PHONY: serve-lan test test-go test-game lint-go test-race bench metrics-server cluster cluster-delete cluster-ha cluster-ha-delete scenario scenario-delete play-kind serve-web-kind all bridge bridge-all bridge-bundle webdist game-import web macos linux windows native run-bridge play play-demo serve-web demo-apply demo-delete clean readme-shots
 
 all: bridge web
 
@@ -66,9 +66,42 @@ serve-lan: bridge web
 	$(BRIDGE) --lan --web build/web
 
 ## --- tests ------------------------------------------------------------------
-test:
+## Headless Godot runs under a timeout so a hung test fails instead of blocking
+## (GNU timeout; on macOS gtimeout from coreutils, or no limit without it).
+TIMEOUT := $(shell command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null)
+GODOT_SCRIPT = $(if $(TIMEOUT),$(TIMEOUT) $(1) )$(GODOT) --headless --path game --script
+COVERAGE := bin/coverage.out
+
+test: test-go test-game
+
+test-go:
 	cd bridge && go test ./...
-	$(GODOT) --headless --path game --script res://tests/test_world.gd
+
+## A Godot test fails on a non-zero exit and also on any SCRIPT ERROR in its
+## output: a script error doesn't stop Godot, the rest of the test goes on.
+## $(call godot_test,<timeout s>,<res:// script>)
+define godot_test
+	@echo "$(2)"; out=$$($(call GODOT_SCRIPT,$(1)) $(2) 2>&1); rc=$$?; echo "$$out"; \
+	if [ $$rc -ne 0 ] || echo "$$out" | grep -q "SCRIPT ERROR"; then echo "FAIL: $(2) (exit $$rc)"; exit 1; fi
+endef
+
+test-game:
+	$(call godot_test,300,res://tests/test_world.gd)
+	$(call godot_test,300,res://tests/test_logic.gd)
+
+## What CI runs on the bridge: formatting, vet (e2e too), tests with the race
+## detector and a coverage summary line.
+lint-go:
+	@cd bridge && files=$$(gofmt -l .); [ -z "$$files" ] || { echo "gofmt needed:"; echo "$$files"; exit 1; }
+	cd bridge && go vet ./... && go vet -tags e2e ./...
+
+test-race:
+	cd bridge && mkdir -p bin && go test -race -coverprofile=$(COVERAGE) ./... && go tool cover -func=$(COVERAGE) | tail -1
+
+## Benchmarks as a smoke test: they must finish (60 s) without script errors.
+bench:
+	$(call godot_test,60,res://tests/bench_world.gd)
+	$(call godot_test,60,res://tests/bench_search.gd)
 
 ## --- sample workloads --------------------------------------------------------
 demo-apply:

@@ -1,5 +1,6 @@
 extends SceneTree
 ## Dev: godot --headless --path game --script res://tests/bench_world.gd -- /path/state.json
+## Without a path it measures the demo's "big" cluster (what CI runs).
 
 var _ran := false
 
@@ -12,8 +13,8 @@ func _process(_delta: float) -> bool:
 
 
 func _run() -> void:
-	var path: String = OS.get_cmdline_user_args()[0]
-	var s: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(path))
+	var args := OS.get_cmdline_user_args()
+	var s: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(args[0])) if args.size() > 0 else _big_demo()
 	for k in ["nodes", "namespaces", "pods", "workloads", "services", "ingresses"]:
 		if s.get(k) == null:
 			s[k] = []
@@ -43,3 +44,14 @@ func _run() -> void:
 	var idx := ClusterSearch.index(s)
 	print("search index %6.1f ms" % ((Time.get_ticks_usec() - t5) / 1000.0))
 	quit()
+
+
+func _big_demo() -> Dictionary:
+	var mock := MockCluster.new()
+	mock.scenario = "big"
+	root.add_child(mock)
+	var box := {}
+	mock.state_changed.connect(func(st): box["s"] = st)
+	mock.start()
+	mock.set_process(false)
+	return box["s"]

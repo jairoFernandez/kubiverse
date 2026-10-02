@@ -1,50 +1,50 @@
-extends SceneTree
+extends "res://tests/harness.gd"
 ## Headless checks: godot --headless --path game --script res://tests/test_world.gd
 
 func _init() -> void:
 	# Kubi runs only reading commands on its own.
 	for c in ["kubectl -n ml describe pod x", "kubectl get pods -A", "kubectl --namespace shop logs web --previous", "top nodes"]:
-		assert(Diagnose.is_read_only(c), c)
+		check(Diagnose.is_read_only(c), c)
 	for c in ["kubectl -n ml delete pod x", "kubectl -n get delete pod x", "kubectl rollout restart deploy/a", "kubectl -n shop set image deploy/a a=b"]:
-		assert(not Diagnose.is_read_only(c), c)
+		check(not Diagnose.is_read_only(c), c)
 	# Web build: same-origin bridge only on local hosts, not on a public static host.
 	for o in ["http://127.0.0.1:8088", "http://localhost:8088", "https://192.168.1.20:8088", "https://10.0.0.5:8088", "http://[::1]:8088", "http://mac.local:8088"]:
-		assert(WebHost.is_local(o), o)
+		check(WebHost.is_local(o), o)
 	for o in ["https://jairo.github.io", "https://kubiverse.dev", "https://172.32.0.1", "https://8.8.8.8"]:
-		assert(not WebHost.is_local(o), o)
+		check(not WebHost.is_local(o), o)
 	# Updates: semver, who is behind, how to update.
-	assert(Updates.compare("v0.1.10", "0.1.9") == 1, "numeric, not text")
-	assert(Updates.compare("0.2.0", "v0.2.0") == 0)
-	assert(Updates.compare("1.0.0-rc1", "1.0.0") == -1, "pre-release is older")
-	assert(Updates.is_newer("v0.1.8", "0.1.7"))
-	assert(not Updates.is_newer("v0.1.7", "0.1.7"))
+	check(Updates.compare("v0.1.10", "0.1.9") == 1, "numeric, not text")
+	check(Updates.compare("0.2.0", "v0.2.0") == 0, "Updates.compare(\"0.2.0\", \"v0.2.0\") == 0")
+	check(Updates.compare("1.0.0-rc1", "1.0.0") == -1, "pre-release is older")
+	check(Updates.is_newer("v0.1.8", "0.1.7"), "Updates.is_newer(\"v0.1.8\", \"0.1.7\")")
+	check(not Updates.is_newer("v0.1.7", "0.1.7"), "not Updates.is_newer(\"v0.1.7\", \"0.1.7\")")
 	for v in ["dev", "", "0.0.0", "1.2", "1.x.3", "v"]:
-		assert(not Updates.is_known(v), v)
-		assert(not Updates.is_newer("v9.9.9", v), "no nagging for " + v)
-	assert(Updates.targets("macos", "0.1.7", "", "v0.1.8") == (["macos"] as Array[String]))
-	assert(Updates.targets("linux", "0.1.8", "0.1.6", "v0.1.8") == (["bridge"] as Array[String]))
-	assert(Updates.targets("web_bridge", "0.1.2", "0.1.7", "v0.1.8") == (["bridge"] as Array[String]), "web comes inside the bridge")
-	assert(Updates.targets("web_pages", "0.1.2", "", "v0.1.8").is_empty(), "Pages is always the latest")
-	assert(Updates.targets("web_bridge", "0.1.2", "dev", "v0.1.8").is_empty(), "dev bridge")
+		check(not Updates.is_known(v), v)
+		check(not Updates.is_newer("v9.9.9", v), "no nagging for " + v)
+	check(Updates.targets("macos", "0.1.7", "", "v0.1.8") == (["macos"] as Array[String]), "Updates.targets(\"macos\", \"0.1.7\", \"\", \"v0.1.8\") == ([\"macos\"] as Array[String])")
+	check(Updates.targets("linux", "0.1.8", "0.1.6", "v0.1.8") == (["bridge"] as Array[String]), "Updates.targets(\"linux\", \"0.1.8\", \"0.1.6\", \"v0.1.8\") == ([\"bridge\"] as Array[String])")
+	check(Updates.targets("web_bridge", "0.1.2", "0.1.7", "v0.1.8") == (["bridge"] as Array[String]), "web comes inside the bridge")
+	check(Updates.targets("web_pages", "0.1.2", "", "v0.1.8").is_empty(), "Pages is always the latest")
+	check(Updates.targets("web_bridge", "0.1.2", "dev", "v0.1.8").is_empty(), "dev bridge")
 	var behind: Array[String] = ["macos"]
-	assert(Updates.should_notify("v0.1.8", behind, ""))
-	assert(not Updates.should_notify("v0.1.8", behind, "0.1.8"), "skipped")
-	assert(Updates.should_notify("v0.1.9", behind, "0.1.8"), "a newer one than the skipped")
-	assert(Updates.hints("macos")[0].cmd == "brew upgrade --cask jairofernandez/kubiverse/kubiverse")
-	assert(Updates.hints("windows")[0].has("url"))
-	assert(Updates.hints("bridge", "https://x.github.io")[1].cmd.ends_with("--allow-origin https://x.github.io"))
-	assert(Updates.summary("## What's new\r\n\r\n- **Fast** [docs](http://x)\n* `kubectl` ok\n\nmore", 3) == "What's new\n- Fast docs\n- kubectl ok")
+	check(Updates.should_notify("v0.1.8", behind, ""), "Updates.should_notify(\"v0.1.8\", behind, \"\")")
+	check(not Updates.should_notify("v0.1.8", behind, "0.1.8"), "skipped")
+	check(Updates.should_notify("v0.1.9", behind, "0.1.8"), "a newer one than the skipped")
+	check(Updates.hints("macos")[0].cmd == "brew upgrade --cask jairofernandez/kubiverse/kubiverse", "Updates.hints(\"macos\")[0].cmd == \"brew upgrade --cask jairofernandez/kubiverse/kubiverse\"")
+	check(Updates.hints("windows")[0].has("url"), "Updates.hints(\"windows\")[0].has(\"url\")")
+	check(Updates.hints("bridge", "https://x.github.io")[1].cmd.ends_with("--allow-origin https://x.github.io"), "Updates.hints(\"bridge\", \"https://x.github.io\")[1].cmd.ends_with(\"--allow-origin https://x.github.io\")")
+	check(Updates.summary("## What's new\r\n\r\n- **Fast** [docs](http://x)\n* `kubectl` ok\n\nmore", 3) == "What's new\n- Fast docs\n- kubectl ok", "Updates.summary(\"## What's new\\r\\n\\r\\n- **Fast** [docs](http://x)\\n* `kubectl` ok\\n\\nmore\", 3) == \"What's new\\n- Fast docs\\n- kubectl ok\"")
 	# The way down to the Underground: ↑ ↑ ↓ ↓ ← → S T A R T (↑ ↑ ↑ still counts).
 	var sc := SecretCode.new()
 	var hits := 0
 	for k in [KEY_UP, KEY_UP, KEY_UP, KEY_DOWN, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_S, KEY_T, KEY_A, KEY_R, KEY_T]:
 		if sc.feed(SecretCode.token(k)):
 			hits += 1
-	assert(hits == 1, "secret code")
+	check(hits == 1, "secret code")
 	for k in [KEY_UP, KEY_UP, KEY_DOWN, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_S, KEY_T]:
 		sc.feed(SecretCode.token(k))
-	assert(sc.armed() and sc.typed() == "ST", sc.typed())
-	assert(not sc.feed(SecretCode.token(KEY_X)) and sc.pos == 0, "a wrong letter resets it")
+	check(sc.armed() and sc.typed() == "ST", sc.typed())
+	check(not sc.feed(SecretCode.token(KEY_X)) and sc.pos == 0, "a wrong letter resets it")
 	# Global search: words, filters and "bad"; an ingress host goes to its service.
 	var cs_state := {"namespaces": [{"name": "shop"}, {"name": "payments"}],
 		"nodes": [{"name": "worker-a", "ready": true, "roles": []}],
@@ -53,13 +53,13 @@ func _init() -> void:
 		"workloads": [], "services": [{"ns": "shop", "name": "api", "type": "ClusterIP", "cluster_ip": "10.96.0.12", "ports": ["80/TCP"], "ready": 1, "selector": {"app": "api"}}],
 		"ingresses": [{"ns": "shop", "name": "web", "rules": [{"host": "shop.example.com", "path": "/", "service": "api", "port": "80"}]}]}
 	var found := ClusterSearch.find(cs_state, "api")
-	assert(found.size() >= 2 and found[0].title == "shop/api" and found[0].kind == "service", str(found))
-	assert(ClusterSearch.find(cs_state, "10.244.2")[0].key == "payments/ledger-1", "by IP")
-	assert(ClusterSearch.find(cs_state, "bad").size() == 1, "only what's broken")
-	assert(ClusterSearch.find(cs_state, "image:redis kind:pod").size() == 1, "filters")
+	check(found.size() >= 2 and found[0].title == "shop/api" and found[0].kind == "service", str(found))
+	check(ClusterSearch.find(cs_state, "10.244.2")[0].key == "payments/ledger-1", "by IP")
+	check(ClusterSearch.find(cs_state, "bad").size() == 1, "only what's broken")
+	check(ClusterSearch.find(cs_state, "image:redis kind:pod").size() == 1, "filters")
 	var host: Dictionary = ClusterSearch.find(cs_state, "shop.example")[0]
-	assert(host.kind == "service" and host.key == "shop/api", "host -> its service")
-	assert(ClusterSearch.find(cs_state, "ns:shop nothing-here").is_empty(), "all words must match")
+	check(host.kind == "service" and host.key == "shop/api", "host -> its service")
+	check(ClusterSearch.find(cs_state, "ns:shop nothing-here").is_empty(), "all words must match")
 	# History: memory that climbs and stays up has a "since"; flat noise has none; restarts too.
 	var climb := []
 	var flat := []
@@ -68,33 +68,33 @@ func _init() -> void:
 		climb.append([i * 60.0, 100.0 if i < 40 else 100.0 + (i - 40) * 30.0])
 		flat.append([i * 60.0, 100.0 + (i % 3)])
 		rst.append([i * 60.0, 0.0 if i < 50 else float(i - 49)])
-	assert(TrendChart.change_since(climb, "bytes") >= 40 * 60.0, "memory since")
-	assert(TrendChart.change_since(flat, "bytes") == 0.0, "noise is not a change")
-	assert(TrendChart.change_since(rst, "count") == 50 * 60.0, "restarts since")
+	check(TrendChart.change_since(climb, "bytes") >= 40 * 60.0, "memory since")
+	check(TrendChart.change_since(flat, "bytes") == 0.0, "noise is not a change")
+	check(TrendChart.change_since(rst, "count") == 50 * 60.0, "restarts since")
 	# An alert becomes a Kubi mission that ends when the alert stops firing.
 	var ast := {"pods": [], "nodes": [], "services": [], "ingresses": [], "workloads": [{"ns": "ml", "kind": "Deployment", "name": "trainer", "desired": 1, "ready": 1}],
 		"alerts": [{"id": "a1", "name": "ContainerMemoryNearLimit", "severity": "warning", "ns": "ml", "workload": "Deployment/trainer", "summary": "leak", "source": "alertmanager"}]}
 	var am: Array = KubiMissions.generate(ast).filter(func(m): return str(m.id).begins_with("k:alert:"))
-	assert(am.size() == 1, "alert mission")
+	check(am.size() == 1, "alert mission")
 	var last: Dictionary = am[0].steps[am[0].steps.size() - 1]
-	assert(not KubiMissions.check(last, "state", null, null, ast, {}), "still firing")
+	check(not KubiMissions.check(last, "state", null, null, ast, {}), "still firing")
 	ast.alerts = []
-	assert(KubiMissions.check(last, "state", null, null, ast, {}), "alert gone")
+	check(KubiMissions.check(last, "state", null, null, ast, {}), "alert gone")
 	# Search finds PVCs (to their tank), Argo CD apps and certificates (to their namespace).
 	var rs := {"volumes": [{"ns": "ml", "name": "datasets", "status": "Pending", "class": "fast-ssd", "request": "500Gi", "pods": []}],
 		"apps": [{"ns": "argocd", "name": "payments", "dest_ns": "payments", "sync": "OutOfSync", "health": "Degraded"}],
 		"certs": [{"ns": "shop", "name": "shop-tls", "dns": ["shop.example.com"], "ready": true}]}
 	var hv: Dictionary = ClusterSearch.find(rs, "datasets")[0]
-	assert(hv.kind == "volume" and hv.key == "ml/datasets" and hv.bad, str(hv))
+	check(hv.kind == "volume" and hv.key == "ml/datasets" and hv.bad, str(hv))
 	var hit_app: Dictionary = ClusterSearch.find(rs, "kind:app")[0]
-	assert(hit_app.kind == "app" and hit_app.key == "argocd/payments" and hit_app.ns == "payments", "app -> its dock, by its namespace")
-	assert(ClusterSearch.find(rs, "shop.example.com")[0].kind == "namespace", "cert -> namespace")
+	check(hit_app.kind == "app" and hit_app.key == "argocd/payments" and hit_app.ns == "payments", "app -> its dock, by its namespace")
+	check(ClusterSearch.find(rs, "shop.example.com")[0].kind == "namespace", "cert -> namespace")
 	# Secrets and PVs are searchable; a missing Secret is "bad".
 	var cs2 := {"configs": [{"kind": "Secret", "ns": "payments", "name": "stripe-key", "exists": "no", "pods": ["fraud-1"], "keys": []}],
 		"pvs": [{"name": "pvc-old", "status": "Released", "claim": "data/reports", "capacity": "50Gi"}]}
 	var hc: Dictionary = ClusterSearch.find(cs2, "kind:secret")[0]
-	assert(hc.kind == "config" and hc.key == "Secret/payments/stripe-key" and hc.bad, str(hc))
-	assert(ClusterSearch.find(cs2, "reports")[0].kind == "pv", "pv by its old claim")
+	check(hc.kind == "config" and hc.key == "Secret/payments/stripe-key" and hc.bad, str(hc))
+	check(ClusterSearch.find(cs2, "reports")[0].kind == "pv", "pv by its old claim")
 	# Kubi's dynamic missions: a hot node gives a bottleneck mission with the
 	# biggest pod named, and its VERIFY step passes once the node cools down.
 	var hs := {"nodes": [{"name": "n1", "cpu_m": 1000, "mem_bytes": 1 << 30}, {"name": "n2", "cpu_m": 1000, "mem_bytes": 1 << 30}],
@@ -104,13 +104,12 @@ func _init() -> void:
 		"services": [], "ingresses": []}
 	var gen := KubiMissions.generate(hs)
 	var hot: Array = gen.filter(func(m): return m.id == "k:hot:n1")
-	assert(hot.size() == 1, "hot node mission")
-	assert(str(hot[0].steps[1].text[1]).contains("api-1"), "names the biggest pod")
-	assert(not KubiMissions.check(hot[0].steps[-1], "state", null, null, hs, {}), "still hot")
+	check(hot.size() == 1, "hot node mission")
+	check(str(hot[0].steps[1].text[1]).contains("api-1"), "names the biggest pod")
+	check(not KubiMissions.check(hot[0].steps[-1], "state", null, null, hs, {}), "still hot")
 	hs.pods[0].cpu_req_m = 300
-	assert(KubiMissions.check(hot[0].steps[-1], "state", null, null, hs, {}), "cooled down")
+	check(KubiMissions.check(hot[0].steps[-1], "state", null, null, hs, {}), "cooled down")
 	await process_frame
-	var fails := 0
 	var mock := MockCluster.new()
 	root.add_child(mock)
 	var box := {}
@@ -272,15 +271,14 @@ func _init() -> void:
 			print("FAIL power/challenge: surface %d at y=%.1f is unreachable" % [i, y]); fails += 1
 	if world.coins.is_empty():
 		print("FAIL power/challenge: no coins"); fails += 1
-	print("world tests: %s" % ("OK" if fails == 0 else "%d FAILED" % fails))
-	quit(fails)
+	finish("world tests")
 
 
 
 ## Walks from the centre (edge of the central platform) to every island
 ## without jumping, like the player: returns the number of failures.
 func _walk_all(world: World, label: String) -> int:
-	var fails := 0
+	var failed := 0
 	var centre: Rect2 = world.walk_rects[0]
 	for isl in world.islands.values():
 		var t: Vector3 = isl.target
@@ -298,13 +296,13 @@ func _walk_all(world: World, label: String) -> int:
 			var np: Vector3 = world.move_player(p, to.normalized() * 0.08, feet)
 			var g: float = world.ground_below(Vector2(np.x, np.z), feet + world.STEP)
 			if g == -INF:
-				print("FAIL %s: fell walking to %s at %s" % [label, isl.key, np]); fails += 1
+				print("FAIL %s: fell walking to %s at %s" % [label, isl.key, np]); failed += 1
 				break
 			p = np
 			feet = g
 			if isl.contains_xz(p) and absf(feet - t.y) < 0.05:
 				reached = true
 				break
-		if not reached and fails == 0:
-			print("FAIL %s: could not walk onto %s (stuck at %s)" % [label, isl.key, p]); fails += 1
-	return fails
+		if not reached and failed == 0:
+			print("FAIL %s: could not walk onto %s (stuck at %s)" % [label, isl.key, p]); failed += 1
+	return failed
