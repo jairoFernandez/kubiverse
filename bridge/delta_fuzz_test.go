@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The property behind ?patch=1: whatever the cluster does, a game that
@@ -295,7 +296,7 @@ func (g *genCluster) snapshot() *Snapshot {
 				exp := g.expires[key]
 				left := int64(0)
 				if exp != 0 {
-					left = exp - g.time
+					left = expiresIn(time.Unix(exp, 0), time.Unix(g.time, 0))
 				}
 				s.Certs = append(s.Certs, Cert{Namespace: ns, Name: name, DNS: []string{}, Ready: c.chance(80), ExpiresIn: left})
 			} else {
