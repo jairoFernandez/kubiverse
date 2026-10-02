@@ -2,7 +2,7 @@ GODOT  ?= godot
 BRIDGE := bridge/bin/kubiverse-bridge
 ADDR   ?= 127.0.0.1:8088
 
-.PHONY: serve-lan test test-go test-game lint-go test-race bench metrics-server cluster cluster-delete cluster-ha cluster-ha-delete scenario scenario-delete play-kind serve-web-kind all bridge bridge-all bridge-bundle webdist game-import web macos linux windows native run-bridge play play-demo serve-web demo-apply demo-delete clean readme-shots
+.PHONY: serve-lan test test-go test-game lint-go test-race bench metrics-server cluster cluster-delete cluster-ha cluster-ha-delete scenario scenario-delete play-kind serve-web-kind all bridge bridge-all bridge-bundle webdist game-import web macos linux windows native run-bridge play play-demo serve-web demo-apply demo-delete clean readme-shots test-guard hooks
 
 all: bridge web
 
@@ -88,6 +88,15 @@ endef
 test-game:
 	$(call godot_test,300,res://tests/test_world.gd)
 	$(call godot_test,300,res://tests/test_logic.gd)
+
+## Existing tests and baselines only get stronger (see CONTRIBUTING.md):
+## what this branch changes since main; CI checks the pushed / PR range.
+test-guard:
+	scripts/test-guard.sh
+
+## Opt-in local hooks: the same check on each commit (commit-msg) and push.
+hooks:
+	git config core.hooksPath scripts/hooks && echo "hooks on (undo: git config --unset core.hooksPath)"
 
 ## What CI runs on the bridge: formatting, vet (e2e too), tests with the race
 ## detector and a coverage summary line.

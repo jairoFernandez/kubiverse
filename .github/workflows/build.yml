@@ -17,6 +17,25 @@ env:
   TEMPLATES_SHA512: ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079
 
 jobs:
+  # Existing tests and baselines only get stronger: removed/changed test
+  # lines, deleted tests, fewer assertions, new t.Skip or looser baselines
+  # fail unless a commit of the range has a "Test-Change: <why>" trailer
+  # (CONTRIBUTING.md). Full history: it diffs the PR / pushed range.
+  test-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Existing tests only get stronger
+        env:
+          TG_BASE: ${{ github.event.pull_request.base.sha }}
+          TG_HEAD: ${{ github.event.pull_request.head.sha }}
+          TG_BEFORE: ${{ github.event.before }}
+          TG_AFTER: ${{ github.event.after }}
+        run: scripts/test-guard.sh
+
   test:
     runs-on: ubuntu-latest
     steps:
