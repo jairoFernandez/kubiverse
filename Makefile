@@ -2,7 +2,7 @@ GODOT  ?= godot
 BRIDGE := bridge/bin/kubiverse-bridge
 ADDR   ?= 127.0.0.1:8088
 
-.PHONY: serve-lan test test-go test-game lint-go test-race bench metrics-server cluster cluster-delete cluster-ha cluster-ha-delete scenario scenario-delete play-kind serve-web-kind all bridge bridge-all bridge-bundle webdist game-import web macos linux windows native run-bridge play play-demo serve-web demo-apply demo-delete clean readme-shots test-guard hooks coverage-check coverage-bump
+.PHONY: serve-lan test test-go test-game lint-go test-race bench metrics-server cluster cluster-delete cluster-ha cluster-ha-delete scenario scenario-delete play-kind serve-web-kind all bridge bridge-all bridge-bundle webdist game-import web macos linux windows native run-bridge play play-demo serve-web demo-apply demo-delete clean readme-shots test-guard hooks coverage-check coverage-bump testlint
 
 all: bridge web
 
@@ -109,6 +109,13 @@ hooks:
 lint-go:
 	@cd bridge && files=$$(gofmt -l .); [ -z "$$files" ] || { echo "gofmt needed:"; echo "$$files"; exit 1; }
 	cd bridge && go vet ./... && go vet -tags e2e ./...
+	@$(MAKE) --no-print-directory testlint
+
+## Every Go TestXxx / FuzzXxx must be able to fail (tools/testlint, its own
+## module: never in the bridge binary).
+testlint:
+	@cd tools/testlint && files=$$(gofmt -l .); [ -z "$$files" ] || { echo "gofmt needed:"; echo "$$files"; exit 1; }
+	cd tools/testlint && go vet . && go test -count=1 . && go run . ../../bridge
 
 ## The total must stay within 0.2 points of bridge/coverage-baseline.txt.
 test-race:
