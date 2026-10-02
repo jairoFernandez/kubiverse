@@ -628,7 +628,7 @@ func _buttons(c: String, runnable := true) -> String:
 	var i := _cmd_refs.size()
 	_cmd_refs.append(c)
 	var out := ""
-	if not runnable:  # not kubectl: the game terminal can't run it
+	if not runnable or not TerminalRules.can_run(c):  # the game terminal can't run it
 		pass
 	elif not c.contains("<"):
 		out += "[url=run:%d][bgcolor=#123a1d][color=#00e436] %s [/color][/bgcolor][/url] " % [i, tr("RUN")]
