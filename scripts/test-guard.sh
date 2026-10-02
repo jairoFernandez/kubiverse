@@ -114,57 +114,70 @@ fi
 # side: "old" (base / HEAD) or "new" (head / index / worktree).
 old_rev() { if [ "$mode" = range ]; then echo "$base"; else echo HEAD; fi; }
 
-test_files() { # side -> the test files on that side
-	local side="$1"
-	{
-		if [ "$side" = old ]; then
-			git ls-tree -r --name-only "$(old_rev)"
-		elif [ "$mode" = range ]; then
-			git ls-tree -r --name-only "$head"
-		elif [ "$mode" = staged ]; then
-			git ls-files
-		else
-			git ls-files -co --exclude-standard | while read -r f; do [ -f "$f" ] && echo "$f"; done
+TEST_RE='^(bridge/.*_test\.go|game/tests/[^/]*\.gd)$'
+KEEP_RE='^(bridge/.*_test\.go|bridge/coverage-baseline\.txt|game/tests/[^/]*\.(gd|txt))$'
+
+# Each side's test files and baselines, extracted once into a temp dir (one
+# git archive per commit: fast enough for hooks).
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-guard.XXXXXX")" || die "mktemp failed"
+trap 'rm -rf "$TMP"' EXIT
+
+materialize() { # side
+	local side="$1" dir="$TMP/$1" rev="" p
+	mkdir -p "$dir"
+	if [ "$side" = old ]; then rev="$(old_rev)"; elif [ "$mode" = range ]; then rev="$head"; fi
+	if [ -n "$rev" ]; then
+		local paths=()
+		for p in bridge game/tests; do
+			git cat-file -e "$rev:$p" 2>/dev/null && paths+=("$p")
+		done
+		if [ ${#paths[@]} -gt 0 ]; then
+			git archive --format=tar "$rev" -- "${paths[@]}" | tar -xf - -C "$dir"
 		fi
-	} | grep -E '^(bridge/.*_test\.go|game/tests/[^/]*\.gd)$'
+	elif [ "$mode" = staged ]; then
+		git ls-files -- bridge game/tests | grep -E "$KEEP_RE" | git checkout-index --stdin --prefix="$dir/"
+	else
+		git ls-files -co --exclude-standard -- bridge game/tests | grep -E "$KEEP_RE" | while read -r p; do
+			[ -f "$p" ] && mkdir -p "$dir/$(dirname "$p")" && cp "$p" "$dir/$p"
+		done
+	fi
+}
+materialize old
+materialize new
+
+test_files() { # side -> the test files on that side
+	(cd "$TMP/$1" && find bridge game/tests -type f 2>/dev/null) | grep -E "$TEST_RE" | sort
 }
 
 show() { # side path
-	if [ "$1" = old ]; then
-		git show "$(old_rev):$2" 2>/dev/null
-	elif [ "$mode" = range ]; then
-		git show "$head:$2" 2>/dev/null
-	elif [ "$mode" = staged ]; then
-		git show ":$2" 2>/dev/null
-	else
-		cat "$2" 2>/dev/null
-	fi
+	cat "$TMP/$1/$2" 2>/dev/null
 }
 
 GO_ASSERT='((^|[^A-Za-z0-9_])(t|tb|b|f|tt)\.(Error|Errorf|Fatal|Fatalf|Fail|FailNow)\(|(^|[^A-Za-z0-9_.])(check|assert|require|must|expect)[A-Za-z0-9_]*\((t|tb)[,)])'
 GD_ASSERT='((^|[^A-Za-z0-9_.])check\(|fails[[:space:]]*\+=)'
 
+# One awk per side over every test file (hooks run this: few processes).
 count_asserts() { # side
-	local side="$1" n=0 f c
-	for f in $(test_files "$side"); do
-		case "$f" in
-			*.go) c=$(show "$side" "$f" | grep -Ev '^[[:space:]]*//' | grep -Eo "$GO_ASSERT" | wc -l) ;;
-			*.gd) c=$(show "$side" "$f" | grep -Ev '^[[:space:]]*#' | grep -Eo "$GD_ASSERT" | wc -l) ;;
-			*) c=0 ;;
-		esac
-		n=$((n + c))
-	done
-	echo "$n"
+	local files
+	files="$(test_files "$1")"
+	[ -n "$files" ] || { echo 0; return; }
+	(cd "$TMP/$1" && printf '%s\n' "$files" | GO_RE="$GO_ASSERT" GD_RE="$GD_ASSERT" xargs awk '
+		{ go_file = FILENAME ~ /\.go$/; re = go_file ? ENVIRON["GO_RE"] : ENVIRON["GD_RE"] }
+		go_file && /^[ \t]*\/\// { next }
+		!go_file && /^[ \t]*#/ { next }
+		{ l = $0; while (match(l, re)) { n++; l = substr(l, RSTART + (RLENGTH > 0 ? RLENGTH : 1)) } }
+		END { print n + 0 }')
 }
 
 test_funcs() { # side -> "dir/Name" (Go) and "file::name" (GDScript), sorted
-	local side="$1" f
-	for f in $(test_files "$side"); do
-		case "$f" in
-			*.go) show "$side" "$f" | sed -nE 's/^func ((Test|Fuzz|Benchmark|Example)[A-Za-z0-9_]*)\(.*/\1/p' | sed "s|^|$(dirname "$f")/|" ;;
-			*.gd) show "$side" "$f" | sed -nE 's/^(static )?func ([A-Za-z0-9_]+)\(.*/\2/p' | sed "s|^|$f::|" ;;
-		esac
-	done | sort -u
+	local files
+	files="$(test_files "$1")"
+	[ -n "$files" ] || return 0
+	(cd "$TMP/$1" && printf '%s\n' "$files" | xargs awk '
+		FILENAME ~ /\.go$/ && match($0, /^func (Test|Fuzz|Benchmark|Example)[A-Za-z0-9_]*\(/) {
+			d = FILENAME; sub(/\/[^\/]*$/, "", d); print d "/" substr($0, 6, RLENGTH - 6) }
+		FILENAME ~ /\.gd$/ && match($0, /^(static )?func [A-Za-z0-9_]+\(/) {
+			s = substr($0, 1, RLENGTH - 1); sub(/^(static )?func /, "", s); print FILENAME "::" s }') | sort -u
 }
 
 baseline_num() { # side path -> first number in the file, or empty
@@ -205,6 +218,8 @@ fi
 # 3. Fewer assertions in total.
 a_old=$(count_asserts old)
 a_new=$(count_asserts new)
+# Fail closed: a guard that can't count must not say OK.
+case "$a_old$a_new" in ''|*[!0-9]*) die "could not count assertions (old '$a_old', new '$a_new')" ;; esac
 if [ "$a_new" -lt "$a_old" ]; then
 	add "- assertions went down: $a_old -> $a_new (Go t.Error*/t.Fatal*/t.Fail*/check helpers, GDScript check( / fails +=)"
 fi
