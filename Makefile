@@ -77,8 +77,17 @@ test: test-go test-game
 test-go:
 	cd bridge && go test ./...
 
+## A Godot test fails on a non-zero exit and also on any SCRIPT ERROR in its
+## output: a script error doesn't stop Godot, the rest of the test goes on.
+## $(call godot_test,<timeout s>,<res:// script>)
+define godot_test
+	@echo "$(2)"; out=$$($(call GODOT_SCRIPT,$(1)) $(2) 2>&1); rc=$$?; echo "$$out"; \
+	if [ $$rc -ne 0 ] || echo "$$out" | grep -q "SCRIPT ERROR"; then echo "FAIL: $(2) (exit $$rc)"; exit 1; fi
+endef
+
 test-game:
-	$(call GODOT_SCRIPT,300) res://tests/test_world.gd
+	$(call godot_test,300,res://tests/test_world.gd)
+	$(call godot_test,300,res://tests/test_logic.gd)
 
 ## What CI runs on the bridge: formatting, vet (e2e too), tests with the race
 ## detector and a coverage summary line.
@@ -91,9 +100,8 @@ test-race:
 
 ## Benchmarks as a smoke test: they must finish (60 s) without script errors.
 bench:
-	@for b in bench_world bench_search; do \
-	  out=$$($(call GODOT_SCRIPT,60) res://tests/$$b.gd 2>&1); rc=$$?; echo "$$out"; \
-	  [ $$rc -eq 0 ] && ! echo "$$out" | grep -q "SCRIPT ERROR" || { echo "FAIL: $$b"; exit 1; }; done
+	$(call godot_test,60,res://tests/bench_world.gd)
+	$(call godot_test,60,res://tests/bench_search.gd)
 
 ## --- sample workloads --------------------------------------------------------
 demo-apply:

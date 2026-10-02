@@ -463,14 +463,15 @@ make web                 # build/web/          (HTML5/WASM, no threads → no CO
 make macos linux windows # build/<os>/          (needs Godot 4.7.2 export templates)
 make bridge-all          # bridge/bin/kubiverse-bridge-<os>-<arch>
 make bridge-bundle       # same, with the web build embedded (single file that serves the game)
-make test                # bridge tests (Go) + world/collisions (headless Godot)
+make test                # bridge tests (Go) + world/collisions and logic (headless Godot)
+make lint-go test-race   # gofmt, go vet, race detector + coverage (what CI runs)
 ```
 
 *Export templates* are installed from the editor (Editor → Manage Export Templates) or by unzipping `Godot_v4.7.2-stable_export_templates.tpz` into `~/Library/Application Support/Godot/export_templates/4.7.2.stable/` (macOS).
 
 ### CI, releases and web deployment
 
-- **Tests**: `make test` (Go unit tests and the game's headless tests), `helm lint`, and an **end-to-end** job: a two-node kind cluster, the real bridge, and [`bridge/e2e_test.go`](bridge/e2e_test.go) checking the production guard, patches over the WebSocket, pause/resume/rollback, the YAML diff, drain with a PodDisruptionBudget, permissions and the audit log. Locally, against a disposable cluster:
+- **Tests**: gofmt, `go vet`, the Go unit tests with the race detector (and a coverage line), the game's headless tests (each under a timeout, so a hang fails), the benchmarks as a smoke test, `helm lint`, and an **end-to-end** job: a two-node kind cluster, the real bridge, and [`bridge/e2e_test.go`](bridge/e2e_test.go) checking the production guard, patches over the WebSocket, pause/resume/rollback, the YAML diff, drain with a PodDisruptionBudget, permissions and the audit log. Locally, against a disposable cluster:
 
   ```bash
   kind create cluster --name kubiverse-e2e --config bridge/testdata/kind-e2e.yaml
@@ -602,6 +603,8 @@ game/                   Godot 4.7 project
   scripts/player.gd     character: walk, run, jump
   scripts/hud.gd        UI: bars, alarms, missions, inspector, terminal, logs, build, legend
   tests/test_world.gd   headless level and collision tests
+  tests/test_logic.gd   headless tests of pure helpers (search, charts, i18n...)
+  tests/harness.gd      check()/finish() and a watchdog shared by the tests
   scripts/vox.gd        PICO-8 palette, toon + outline materials, voxel helpers
 deploy/demo.yaml        sample workloads
 ```
