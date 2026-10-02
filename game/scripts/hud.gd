@@ -271,32 +271,40 @@ class LabelOverlay extends Control:
 		var sorted := items.duplicate()
 		sorted.sort_custom(func(a, b): return a.big and not b.big)
 		for it in sorted:
-			var size: int = roundi((23 if it.big else (18 if it.get("small", false) else 21)) * text_scale)
-			var sub_size := roundi(18 * text_scale)
+			var k: float = text_scale * float(it.get("scale", 1.0))
+			var alpha: float = it.get("alpha", 1.0)
+			var size: int = roundi((23 if it.big else (18 if it.get("small", false) else 21)) * k)
+			var sub_size := roundi(18 * k)
 			var sub: String = it.get("sub", "")
 			var w := font.get_string_size(it.text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
 			if sub != "":
 				w = maxf(w, font.get_string_size(sub, HORIZONTAL_ALIGNMENT_LEFT, -1, sub_size).x)
 			var h := font.get_height(size) + (font.get_height(sub_size) if sub != "" else 0.0)
 			var r := Rect2(it.screen - Vector2(w * 0.5 + PAD.x, h + PAD.y * 2), Vector2(w + PAD.x * 2, h + PAD.y * 2))
-			for _i in 8:
-				var hit := false
+			var tries := 8 if it.big or it.get("pinned", false) else 2
+			var hit := false
+			for _i in tries:
+				hit = false
 				for o in placed:
 					if o.intersects(r):
 						hit = true
 						r.position.y = o.position.y - r.size.y - 4
 				if not hit:
 					break
+			# A minor label that still overlaps is left out instead of
+			# stacking a tower of plates (hover the thing to see it).
+			if hit and not it.big and not it.get("pinned", false):
+				continue
 			placed.append(r)
 			if it.get("entity") != null:
 				hits.append([r, it.entity])
-			draw_rect(r, Color(0.043, 0.051, 0.102, 0.8 if it.big else 0.9))
-			draw_rect(Rect2(r.position, Vector2(4, r.size.y)), it.color)
+			draw_rect(r, Color(0.043, 0.051, 0.102, (0.8 if it.big else 0.9) * alpha))
+			draw_rect(Rect2(r.position, Vector2(4, r.size.y)), Color(it.color, alpha))
 			var y := r.position.y + PAD.y + font.get_ascent(size)
-			draw_string(font, Vector2(r.position.x + PAD.x, y), it.text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, it.color)
+			draw_string(font, Vector2(r.position.x + PAD.x, y), it.text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, Color(it.color, alpha))
 			if sub != "":
 				y += font.get_height(sub_size) + 1
-				draw_string(font, Vector2(r.position.x + PAD.x, y), sub, HORIZONTAL_ALIGNMENT_LEFT, -1, sub_size, Vox.SILVER)
+				draw_string(font, Vector2(r.position.x + PAD.x, y), sub, HORIZONTAL_ALIGNMENT_LEFT, -1, sub_size, Color(Vox.SILVER, alpha))
 
 
 func _ready() -> void:

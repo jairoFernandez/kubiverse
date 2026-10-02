@@ -1756,6 +1756,9 @@ func _update_labels() -> void:
 		# zoomed far out: titles without the second line.
 		var near_r := 14.0 + _zoom * 0.25
 		var kept := 0
+		# Zoomed out, labels step back: smaller and fainter, and past a point
+		# only the halls, what is in trouble and what you point at stay.
+		var far := clampf((_zoom - 32.0) / 26.0, 0.0, 1.0)
 		var all: Array = world.labels(me)
 		if hud.compact:
 			all.sort_custom(func(a, b): return a.pos.distance_to(me) < b.pos.distance_to(me))
@@ -1775,6 +1778,12 @@ func _update_labels() -> void:
 					l.sub = ""
 			if _zoom > 40.0 and not pinned:
 				l.sub = ""
+			if not pinned and far > 0.0:
+				if far > 0.35 and not l.get("big", false) and not _alarming(l.color):
+					continue
+				l["alpha"] = lerpf(1.0, 0.7, far)
+				l["scale"] = lerpf(1.0, 0.82, far)
+			l["pinned"] = pinned
 			l.screen = cam.unproject_position(l.pos) * _px / _ui
 			items.append(l)
 		# Kubi's speech bubble and the watchtower ghosts' name tags.
@@ -1789,6 +1798,15 @@ func _update_labels() -> void:
 				items.append(l)
 	hud.overlay.items = items
 	hud.overlay.queue_redraw()
+
+
+## Label colors that mean "look at this" (broken, waiting, out of sync).
+## Not pink: it is also the color of LoadBalancer Services.
+static func _alarming(c: Color) -> bool:
+	for a in [Vox.RED, Vox.ORANGE, Vox.YELLOW]:
+		if c.is_equal_approx(a):
+			return true
+	return false
 
 
 ## The charts of the chart repositories in this namespace, for the basement's
