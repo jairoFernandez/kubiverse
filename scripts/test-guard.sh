@@ -14,8 +14,8 @@
 #   - a t.Skip / SkipNow / Skipf added
 #   - a baseline loosened: a key added to game/tests/i18n_missing_baseline.txt,
 #     bridge/coverage-baseline.txt or game/tests/checks-baseline.txt lowered
-#   - lines removed from the guards themselves (this script, the hooks,
-#     tools/testlint, .claude/settings.json)
+#   - lines removed from the guards themselves (this script, the ratchet
+#     scripts, the hooks, tools/testlint, .claude/settings.json)
 # Pure additions (new tests, new assertions, new test files) always pass.
 #
 # Usage:
@@ -34,7 +34,7 @@ export LC_ALL=C
 
 TEST_SPECS=('bridge/*_test.go' 'game/tests/*.gd')
 BASELINES=('game/tests/i18n_missing_baseline.txt' 'bridge/coverage-baseline.txt' 'game/tests/checks-baseline.txt')
-GUARD_SPECS=('scripts/test-guard.sh' 'scripts/hooks/*' 'scripts/claude-hooks/*' 'tools/testlint/*.go' '.claude/settings.json')
+GUARD_SPECS=('scripts/test-guard.sh' 'scripts/coverage.sh' 'scripts/game-tests.sh' 'scripts/hooks/*' 'scripts/claude-hooks/*' 'tools/testlint/*.go' '.claude/settings.json')
 ZERO=0000000000000000000000000000000000000000
 
 die() { echo "test-guard: $*" >&2; exit 2; }
