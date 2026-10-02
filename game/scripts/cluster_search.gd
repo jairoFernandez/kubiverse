@@ -16,12 +16,13 @@ const KINDS := {
 	"ns": "namespace", "namespace": "namespace", "namespaces": "namespace",
 	"ing": "ingress", "ingress": "ingress", "host": "ingress",
 	"pvc": "volume", "volume": "volume", "storage": "volume",
+	"helm": "helm", "release": "helm", "chart": "helm", "umbrella": "helm",
 	"app": "app", "argo": "app", "application": "app", "flux": "app", "kustomization": "app", "helmrelease": "app", "gitops": "app",
 	"cert": "cert", "certificate": "cert", "tls": "cert",
 	"secret": "config", "secrets": "config", "configmap": "config", "cm": "config", "config": "config",
 	"pv": "pv", "persistentvolume": "pv",
 }
-const ORDER := {"namespace": 0, "workload": 1, "service": 2, "pod": 3, "node": 4, "ingress": 5, "volume": 6, "app": 7, "cert": 8, "config": 9, "pv": 10}
+const ORDER := {"namespace": 0, "workload": 1, "service": 2, "pod": 3, "node": 4, "ingress": 5, "volume": 6, "app": 7, "cert": 8, "config": 9, "pv": 10, "helm": 11}
 # Row layout (arrays are much cheaper than dictionaries here).
 enum { KIND, NAME, HAY, NS, NODE, STATUS, IMAGE, IPS, BAD, SRC, RULE }
 
@@ -62,6 +63,10 @@ static func index(s: Dictionary) -> Array:
 	for ap in _list(s, "apps"):
 		rows.append(["app", str(ap.name).to_lower(), ("%s %s %s %s %s %s %s" % [ap.ns, ap.get("dest_ns", ""), ap.get("repo", ""), ap.get("sync", ""), ap.get("health", ""), ap.get("tool", "argocd"), ap.get("kind", "")]).to_lower(),
 			str(ap.get("dest_ns", ap.ns)).to_lower(), "", ("%s %s" % [ap.get("sync", ""), ap.get("health", "")]).to_lower(), "", [], str(ap.get("health", "")) in ["Degraded", "Missing"], ap, null])
+	for hr in _list(s, "helm"):
+		var cnames: Array = (hr.get("charts", []) if hr.get("charts") != null else []).map(func(c): return "%s %s" % [c.name, c.version])
+		rows.append(["helm", str(hr.name).to_lower(), ("%s %s %s %s %s" % [hr.ns, hr.get("chart", ""), " ".join(cnames), hr.get("status", ""), "umbrella" if hr.get("umbrella", false) else ""]).to_lower(),
+			str(hr.ns).to_lower(), "", str(hr.get("status", "")).to_lower(), "", [], str(hr.get("status", "")) == "failed", hr, null])
 	for c in _list(s, "certs"):
 		var cdns: Array = c.dns if c.get("dns") != null else []
 		rows.append(["cert", str(c.name).to_lower(), ("%s %s %s" % [c.ns, " ".join(cdns), c.get("issuer", "")]).to_lower(),
@@ -166,6 +171,9 @@ static func _result(r: Array) -> Dictionary:
 		var dn := str(d.get("dest_ns", "")) if str(d.get("dest_ns", "")) != "" else str(d.ns)
 		return {"kind": "app", "key": "%s/%s" % [d.ns, d.name], "ns": dn, "title": "%s/%s" % [d.ns, d.name], "bad": r[BAD],
 			"detail": "%s · %s, %s → %s" % [GitOpsDock.what(d), d.get("sync", "?"), d.get("health", "?"), dn]}
+	if r[KIND] == "helm":
+		return {"kind": "helm", "key": "%s/%s" % [d.ns, d.name], "ns": d.ns, "title": "%s/%s" % [d.ns, d.name], "bad": r[BAD],
+			"detail": "%shelm release · %s · rev %d · %s" % ["umbrella " if d.get("umbrella", false) else "", d.get("chart", "") if str(d.get("chart", "")) != "" else "%d charts" % (d.get("charts", []) as Array).size(), int(d.get("revision", 0)), d.get("status", "")]}
 	if r[KIND] == "cert":
 		var cdns: Array = d.dns if d.get("dns") != null else []
 		return {"kind": "namespace", "key": d.ns, "ns": d.ns, "title": "%s/%s" % [d.ns, d.name], "bad": r[BAD],

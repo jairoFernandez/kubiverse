@@ -186,6 +186,7 @@ func main() {
 	mux.HandleFunc("GET /api/rollout", hub.cluster((*Bridge).handleRollout))
 	mux.HandleFunc("GET /api/obs", hub.cluster((*Bridge).handleObs))
 	mux.HandleFunc("GET /api/cani", hub.cluster((*Bridge).handleCanI))
+	mux.HandleFunc("GET /api/charts", hub.cluster((*Bridge).handleCharts))
 	mux.HandleFunc("/api/github", hub.auth(hub.handleGithub))
 	mux.HandleFunc("GET /api/gitops/source", hub.cluster((*Bridge).handleGitSource))
 	mux.HandleFunc("POST /api/gitops/change", hub.cluster((*Bridge).handleGitChange))

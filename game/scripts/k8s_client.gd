@@ -289,7 +289,7 @@ func _why_refused() -> void:
 			connection_changed.emit("offline", "bridge unreachable at %s — retrying" % base_url))
 
 
-const COLLECTIONS := ["nodes", "namespaces", "pods", "workloads", "services", "ingresses", "alerts", "volumes", "storage_classes", "apps", "certs", "pvs", "configs"]
+const COLLECTIONS := ["nodes", "namespaces", "pods", "workloads", "services", "ingresses", "alerts", "volumes", "storage_classes", "apps", "certs", "pvs", "configs", "helm", "chart_repos"]
 var _seq := -1   # the bridge's number for the state we have (patches build on it)
 
 
@@ -595,6 +595,20 @@ func can_i(ns: String, cb: Callable) -> void:
 	_http(HTTPClient.METHOD_GET, "/api/cani?ns=%s%s" % [ns.uri_encode(), _q(false)], "", func(ok: bool, data):
 		var good := ok and typeof(data) == TYPE_DICTIONARY and bool(data.get("ok", false))
 		cb.call(good, data if typeof(data) == TYPE_DICTIONARY else {"error": str(data)}))
+
+
+## The charts of a chart repository in the cluster (ChartMuseum). cb(ok, data)
+## data: {charts: [{name, version, app_version, description, versions}]}
+func charts(ns: String, svc: String, cb: Callable) -> void:
+	if mode == Mode.DEMO:
+		var res: Dictionary = _mock.repo_charts(ns, svc)
+		cb.call(res.ok, res)
+		return
+	if mode != Mode.BRIDGE:
+		cb.call(false, {"error": "not connected"})
+		return
+	_http(HTTPClient.METHOD_GET, "/api/charts?ns=%s&svc=%s%s" % [ns.uri_encode(), svc.uri_encode(), _q(false)], "", func(ok: bool, data):
+		cb.call(ok and typeof(data) == TYPE_DICTIONARY and bool(data.get("ok", false)), data if typeof(data) == TYPE_DICTIONARY else {"error": str(data)}))
 
 
 ## A Deployment's rollout history and who else has a say. cb(ok, data)

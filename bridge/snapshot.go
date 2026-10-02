@@ -32,7 +32,9 @@ type Snapshot struct {
 	Apps           []ArgoApp      `json:"apps"`  // Argo CD Applications
 	Certs          []Cert         `json:"certs"` // cert-manager Certificates
 	PVs            []PV           `json:"pvs"`
-	Configs        []ConfigRef    `json:"configs"` // Secrets and ConfigMaps (never their values)
+	Configs        []ConfigRef    `json:"configs"`     // Secrets and ConfigMaps (never their values)
+	Helm           []HelmRelease  `json:"helm"`        // installed Helm releases and their charts
+	ChartRepos     []ChartRepo    `json:"chart_repos"` // chart repositories in the cluster (ChartMuseum)
 }
 
 type Node struct {
@@ -100,6 +102,8 @@ type Workload struct {
 	Paused   bool    `json:"paused,omitempty"`   // Deployment rollout paused
 	Revision int64   `json:"revision,omitempty"` // Deployment rollout revision
 	Created  int64   `json:"created,omitempty"`  // unix seconds
+	Release  string  `json:"release,omitempty"`  // Helm release that installed it
+	Chart    string  `json:"chart,omitempty"`    // its chart (helm.sh/chart), a subchart in an umbrella
 }
 
 type Service struct {
@@ -205,7 +209,7 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 			Available: d.Status.AvailableReplicas, Image: firstImage(d.Spec.Template.Spec),
 			GitOps: gitOpsOf(d.ObjectMeta), HPA: b.hpaFor("Deployment", d.Namespace, d.Name),
 			PDB: b.pdbFor(d.Namespace, d.Spec.Template.Labels), Paused: d.Spec.Paused, Revision: revisionOf(d.ObjectMeta),
-			Created: d.CreationTimestamp.Unix(),
+			Created: d.CreationTimestamp.Unix(), Release: rel(d.ObjectMeta), Chart: chart(d.ObjectMeta),
 		})
 	}
 	sts, _ := b.stsLister.List(labels.Everything())
@@ -220,6 +224,7 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 			Available: d.Status.AvailableReplicas, Image: firstImage(d.Spec.Template.Spec),
 			GitOps: gitOpsOf(d.ObjectMeta), HPA: b.hpaFor("StatefulSet", d.Namespace, d.Name),
 			PDB: b.pdbFor(d.Namespace, d.Spec.Template.Labels), Created: d.CreationTimestamp.Unix(),
+			Release: rel(d.ObjectMeta), Chart: chart(d.ObjectMeta),
 		})
 	}
 	dss, _ := b.dsLister.List(labels.Everything())
@@ -229,6 +234,7 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 			Desired: d.Status.DesiredNumberScheduled, Ready: d.Status.NumberReady,
 			Updated: d.Status.UpdatedNumberScheduled, Available: d.Status.NumberAvailable,
 			Image: firstImage(d.Spec.Template.Spec), GitOps: gitOpsOf(d.ObjectMeta), Created: d.CreationTimestamp.Unix(),
+			Release: rel(d.ObjectMeta), Chart: chart(d.ObjectMeta),
 		})
 	}
 	sort.Slice(s.Workloads, func(i, j int) bool {
@@ -273,6 +279,8 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 	sort.Slice(s.Services, func(i, j int) bool {
 		return s.Services[i].Namespace+"/"+s.Services[i].Name < s.Services[j].Namespace+"/"+s.Services[j].Name
 	})
+	s.Helm = b.helmReleases(deps, sts, dss, svcs)
+	s.ChartRepos = chartRepos(deps, svcs)
 	s.Ingresses = []Ingress{}
 	if b.ingLister != nil {
 		ings, _ := b.ingLister.List(labels.Everything())

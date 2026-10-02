@@ -185,6 +185,25 @@ func _init() -> void:
 	if world.rolling_out(rk) or (world._sites.get(world.lines.get(rk)) != null and world._sites[world.lines.get(rk)].hold):
 		print("FAIL rollout: done, the site should close"); fails += 1
 	world.apply_state(st)
+	# Helm basement: a hatch in the hall; downstairs the umbrella release with
+	# its subcharts, and a ChartMuseum's charts on the shelves.
+	world.set_level("ns:monitoring")
+	if not world.doors.any(func(d): return str(d.to) == "helm:monitoring"):
+		print("FAIL helm: no hatch to the basement in the monitoring hall"); fails += 1
+	world.set_level("helm:monitoring")
+	var kps: HelmCrate = world.find_entity("helm", "monitoring/kube-prometheus-stack")
+	if kps == null or not kps.data.get("umbrella", false):
+		print("FAIL helm: no umbrella crate for kube-prometheus-stack"); fails += 1
+	if world.find_entity("chart", "monitoring/kube-prometheus-stack/kube-state-metrics") == null:
+		print("FAIL helm: the kube-state-metrics subchart has no crate"); fails += 1
+	if not world.can_stand(world.spawn) or not world.doors.any(func(d): return str(d.to) == "ns:monitoring"):
+		print("FAIL helm: basement spawn / way back up"); fails += 1
+	world.repo_charts["charts/chartmuseum"] = mock.repo_charts("charts", "chartmuseum")
+	world.set_level("helm:charts")
+	if world.crates.keys().filter(func(k): return k.begins_with("repochart|")).size() != 12:
+		print("FAIL helm: ChartMuseum shelves should hold its 12 charts, got %s" % str(world.crates.keys())); fails += 1
+	world.set_level("ns:shop")
+	world.apply_state(st)
 	# GitOps docks: one per app in front of its hall; a new revision from git
 	# is announced (and flown in by the cargo drone).
 	world.set_level("plant")

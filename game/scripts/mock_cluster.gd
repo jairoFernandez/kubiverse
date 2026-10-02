@@ -136,6 +136,17 @@ func _seed_shop() -> void:
 	workloads["shop/StatefulSet/redis"].gitops = {"tool": "helm", "name": "redis", "hint": "Helm release redis: the next helm upgrade puts back what its values say"}
 	workloads["shop/StatefulSet/redis"].pdb = {"name": "redis", "allowed": 0, "max_unavailable": "0"}
 	_svc("data", "broker", "ClusterIP", "broker", ["9092/TCP"], true)
+	# Helm: redis is a release; monitoring is an umbrella chart
+	# (kube-prometheus-stack and its subcharts); a ChartMuseum serves charts.
+	workloads["shop/StatefulSet/redis"].merge({"release": "redis", "chart": "redis-19.6.0"})
+	_wl("Deployment", "monitoring", "kps-operator", 1, "quay.io/prometheus-operator/prometheus-operator:v0.77", "ok")
+	_wl("Deployment", "monitoring", "kps-kube-state-metrics", 1, "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13", "ok")
+	workloads["monitoring/Deployment/kps-operator"].merge({"release": "kube-prometheus-stack", "chart": "kube-prometheus-stack-65.1.0"})
+	workloads["monitoring/Deployment/kps-kube-state-metrics"].merge({"release": "kube-prometheus-stack", "chart": "kube-state-metrics-5.25.1"})
+	workloads["monitoring/DaemonSet/node-exporter"].merge({"release": "kube-prometheus-stack", "chart": "prometheus-node-exporter-4.39.0"})
+	namespaces.append("charts")
+	_wl("Deployment", "charts", "chartmuseum", 1, "ghcr.io/helm/chartmuseum:v0.16.2", "ok")
+	workloads["charts/Deployment/chartmuseum"].merge({"release": "chartmuseum", "chart": "chartmuseum-3.10.3"})
 	# CI namespace full of finished Argo Workflow steps (they pile up in real clusters).
 	namespaces.append("ci")
 	var steps := ["checkout", "build", "test", "push-image", "deploy"]
@@ -152,6 +163,7 @@ func _seed_shop() -> void:
 	_svc("shop", "redis", "ClusterIP", "redis", ["6379/TCP"], true)
 	_svc("payments", "ledger", "NodePort", "ledger", ["9000/TCP"])
 	_svc("monitoring", "prometheus", "ClusterIP", "node-exporter", ["9100/TCP"])
+	_svc("charts", "chartmuseum", "ClusterIP", "chartmuseum", ["8080/TCP"])
 
 
 func _node(n: String, roles: Array) -> void:
@@ -610,7 +622,7 @@ func _emit() -> void:
 		var desired: int = nodes.size() if wl.kind == "DaemonSet" else wl.desired
 		var wo := {"kind": wl.kind, "ns": wl.ns, "name": wl.name, "desired": desired,
 			"ready": ready, "updated": mine.filter(func(p): return int(p.get("_gen", 0)) == int(wl.gen)).size(), "available": ready, "image": wl.image}
-		for k in ["gitops", "hpa", "pdb"]:
+		for k in ["gitops", "hpa", "pdb", "release", "chart"]:
 			if wl.has(k):
 				wo[k] = wl[k]
 		if wl.kind == "Deployment":
@@ -658,6 +670,7 @@ func _emit() -> void:
 		nu.mem_bytes += mem
 		m.nodes[p.node] = nu
 	s["metrics"] = m
+	_helm(s)
 	state_changed.emit(s)
 
 
@@ -1085,7 +1098,7 @@ func log_search(ns: String, wl_name: String, text: String, since: String) -> Dic
 ## The resources beyond workloads, like the bridge's snapshot has them.
 func _resources(s: Dictionary) -> void:
 	if scenario == "starter":   # no storage, secrets, GitOps or certificates yet
-		for k in ["volumes", "pvs", "configs", "apps", "certs"]:
+		for k in ["volumes", "pvs", "configs", "apps", "certs", "helm", "chart_repos"]:
 			s[k] = []
 		s["storage_classes"] = [{"name": "standard", "provisioner": "rancher.io/local-path", "reclaim": "Delete", "binding": "WaitForFirstConsumer", "default": true, "expand": false}]
 		return
@@ -1171,6 +1184,49 @@ func _resources(s: Dictionary) -> void:
 		{"ns": "shop", "name": "shop-tls", "secret": "shop-tls", "dns": ["shop.example.com"], "issuer": "ClusterIssuer/letsencrypt", "ready": true, "expires_in": 60 * 86400},
 		{"ns": "payments", "name": "pay-tls", "secret": "pay-tls", "dns": ["pay.example.com"], "issuer": "ClusterIssuer/letsencrypt", "ready": true, "expires_in": 5 * 86400},
 	]
+
+
+## Helm releases from the workloads' labels, like the bridge: an umbrella
+## when one release has objects from several charts.
+func _helm(s: Dictionary) -> void:
+	var rels := {}
+	for w in s.workloads:
+		if str(w.get("release", "")) == "":
+			continue
+		var rk: String = w.ns + "/" + w.release
+		if not rels.has(rk):
+			rels[rk] = {"ns": w.ns, "name": w.release, "revision": 3 + abs(rk.hash()) % 9, "status": "deployed", "charts": [], "umbrella": false, "chart": ""}
+		var cname: String = str(w.chart).substr(0, str(w.chart).rfind("-"))
+		var cver: String = str(w.chart).substr(str(w.chart).rfind("-") + 1)
+		var hit: Array = rels[rk].charts.filter(func(c): return c.name == cname)
+		if hit.is_empty():
+			rels[rk].charts.append({"name": cname, "version": cver, "workloads": [], "services": []})
+			hit = [rels[rk].charts[-1]]
+		hit[0].workloads.append("%s/%s" % [w.kind, w.name])
+	var out := []
+	for rk in rels:
+		var r: Dictionary = rels[rk]
+		r.umbrella = r.charts.size() > 1
+		for c in r.charts:
+			if c.name == r.name or r.charts.size() == 1:
+				r.chart = "%s-%s" % [c.name, c.version]
+		out.append(r)
+	s["helm"] = out
+	s["chart_repos"] = [{"ns": "charts", "service": "chartmuseum", "port": 8080, "kind": "chartmuseum"}] if namespaces.has("charts") else []
+
+
+## What the demo ChartMuseum serves.
+func repo_charts(ns: String, svc: String) -> Dictionary:
+	if ns != "charts" or svc != "chartmuseum":
+		return {"ok": false, "error": "no chart repository %s/%s" % [ns, svc]}
+	var list := []
+	for c in [["shop-frontend", "2.4.1", "nginx storefront of the shop", 14], ["cart", "1.9.0", "shopping cart service", 9], ["payments-ledger", "0.8.3", "double-entry ledger", 21],
+			["fraud-ai", "0.3.0", "fraud scoring model server", 4], ["trainer", "1.1.2", "GPU training jobs", 6], ["broker", "3.2.0", "event broker StatefulSet", 11],
+			["platform-base", "5.0.0", "namespaces, quotas and policies for every team", 30], ["observability", "2.2.0", "umbrella: dashboards and alerts", 7],
+			["ingress-defaults", "1.0.4", "TLS and rate limits for every Ingress", 5], ["backup-cronjobs", "0.6.1", "nightly volume snapshots", 8],
+			["feature-flags", "0.2.7", "flag service", 3], ["docs-site", "1.3.0", "the internal docs", 12]]:
+		list.append({"name": c[0], "version": c[1], "app_version": c[1], "description": c[2], "versions": c[3]})
+	return {"ok": true, "repo": {"ns": ns, "service": svc, "port": 8080, "kind": "chartmuseum"}, "charts": list}
 
 
 func can_i(ns: String) -> Dictionary:

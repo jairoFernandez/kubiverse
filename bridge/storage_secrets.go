@@ -95,7 +95,7 @@ func (b *Bridge) addStorageAndConfig(ctx context.Context, f informers.SharedInfo
 		inf := gi.Informer()
 		_ = inf.SetTransform(func(obj any) (any, error) {
 			if m, ok := obj.(*metav1.PartialObjectMetadata); ok {
-				m.Annotations, m.ManagedFields, m.Labels = nil, nil, nil
+				m.Annotations, m.ManagedFields, m.Labels = nil, nil, keepHelmLabels(m)
 			}
 			return obj, nil
 		})

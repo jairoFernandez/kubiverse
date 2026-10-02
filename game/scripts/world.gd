@@ -40,6 +40,8 @@ var _yard_notes: Array = []   # signs inside the library / bank
 var islands := {}    # node -> NodeIsland
 var pods := {}       # "ns/name" -> PodBot
 var docks := {}      # "ns/name" -> GitOpsDock (Argo CD / Flux app, in front of its hall)
+var crates := {}     # helm basement: "helm|ns/rel", "chart|ns/rel/chart", "repochart|ns/svc/chart" -> HelmCrate
+var repo_charts := {}   # "ns/svc" -> {ok, charts | error}: a ChartMuseum's charts (main fetches them)
 var _app_seen := {}  # "ns/name" -> [revision, operation] of each GitOps app
 var _sky_gate := Vector3(0, 10, -40)   # where cargo drones from git come in
 
@@ -178,6 +180,8 @@ static func parse_ns_filter(text: String) -> PackedStringArray:
 func current_ns() -> String:
 	if level.begins_with("pod:"):
 		return level.substr(4).get_slice("/", 0)
+	if level.begins_with("helm:"):
+		return level.substr(5)
 	return level.substr(3) if level.begins_with("ns:") else ""
 
 
@@ -199,6 +203,8 @@ func level_title() -> String:
 		return tr("BANK (secrets)")
 	if level.begins_with("pod:"):
 		return tr(Look.v("hall")) % current_ns() + "  >  " + tr("POD %s") % pod_key().get_slice("/", 1)
+	if level.begins_with("helm:"):
+		return tr(Look.v("hall")) % current_ns() + "  >  " + tr("HELM BASEMENT")
 	return tr(Look.v("hall")) % current_ns()
 
 
@@ -216,6 +222,7 @@ func all_entities() -> Array:
 	out.append_array(factories.values())
 	out.append_array(lines.values())
 	out.append_array(docks.values())
+	out.append_array(crates.values())
 	if gate and is_instance_valid(gate):
 		out.append(gate)
 	if home and is_instance_valid(home):
@@ -257,6 +264,7 @@ func find_entity(kind: String, key: String) -> Entity:
 		"landmark": return library_bld if key == "@library" else bank_bld
 		"workload": return lines.get(key)
 		"app": return docks.get(key)
+		"helm", "chart", "repochart": return crates.get(kind + "|" + key)
 	return null
 
 
@@ -290,6 +298,7 @@ func set_level(l: String) -> void:
 		pod_detail = {}
 	buildings.clear()
 	docks.clear()
+	crates.clear()
 	lines.clear()
 	services.clear()
 	volumes.clear()
@@ -330,6 +339,8 @@ func apply_state(s: Dictionary) -> void:
 		_apply_library(s)
 	elif level == "bank":
 		_apply_bank(s)
+	elif level.begins_with("helm:"):
+		_apply_helm(s, current_ns())
 	else:
 		_apply_hall(s, current_ns())
 	_apply_tunnels()
@@ -1577,7 +1588,8 @@ func _apply_hall(s: Dictionary, ns: String) -> void:
 	var depth := maxf(rows * LINE_GAP, svcs.size() * DOCK_GAP) + 6.0
 	var width := dock_x + 6.0
 	var fl := Rect2(-3.0, -depth + 3.0, width, depth + 4.0)
-	if _begin_static("hall|%s|%s|%d|%s" % [ns, str(fl), loose.size(), Look.current]):
+	var basement := has_helm(s, ns)
+	if _begin_static("hall|%s|%s|%d|%s|%s" % [ns, str(fl), loose.size(), Look.current, basement]):
 		var nsc := Vox.ns_color(ns)
 		_add_walk(fl)
 		var c := fl.get_center()
@@ -1600,6 +1612,14 @@ func _apply_hall(s: Dictionary, ns: String) -> void:
 		for x in [-1.2, 1.2]:
 			Vox.box(_static, Vector3(0.25, 2.8, 0.3), exit_pos + Vector3(x, 1.4, 0.4), Vox.YELLOW.darkened(0.3))
 		spawn = exit_pos + Vector3(1.6, 0, -1.2)
+		# Helm releases live downstairs: a hatch with a ladder, next to the exit.
+		if basement:
+			var hatch := exit_pos + Vector3(4.6, 0, -0.2)
+			_add_door(hatch, "helm:" + ns, "go down to the HELM BASEMENT", HelmCrate.NAVY.lightened(0.3))
+			Vox.box(_static, Vector3(1.9, 0.05, 1.3), hatch + Vector3(0, 0.05, 0), Color("101425"), 0.0, false)
+			for x in [-0.6, 0.6]:
+				Vox.box(_static, Vector3(0.1, 0.7, 0.1), hatch + Vector3(x, 0.35, -0.6), Vox.SILVER)
+			Vox.box(_static, Vector3(1.4, 0.5, 0.1), hatch + Vector3(0, 1.15, -0.62), HelmCrate.NAVY, 0.6)
 	blockers.clear()
 	for line in lines.values():
 		var lb: Array[Rect2] = line.blockers()
@@ -2259,6 +2279,136 @@ func _announce(fresh: Array) -> void:
 		construction_started.emit(items)
 
 
+# ----------------------------------------------------------- Helm basement
+
+## A hall has a basement when Helm installed something in its namespace or
+## a chart repository (ChartMuseum) runs there.
+func has_helm(s: Dictionary, ns: String) -> bool:
+	for r in (s.get("helm", []) if s.get("helm") != null else []):
+		if r.ns == ns:
+			return true
+	for c in (s.get("chart_repos", []) if s.get("chart_repos") != null else []):
+		if c.ns == ns:
+			return true
+	return false
+
+
+## The basement of a hall: each Helm release is a crate; an umbrella has its
+## subcharts around it, joined by pipes, each with the objects it made. A
+## ChartMuseum keeps its charts on shelves along the back wall.
+func _apply_helm(s: Dictionary, ns: String) -> void:
+	var rels: Array = (s.get("helm", []) if s.get("helm") != null else []).filter(func(r): return r.ns == ns)
+	var repos: Array = (s.get("chart_repos", []) if s.get("chart_repos") != null else []).filter(func(c): return c.ns == ns)
+	# Room width: a slot per release, wider for umbrellas.
+	var slots := []
+	var x := 0.0
+	for r in rels:
+		var subs: Array = (r.get("charts", []) as Array).filter(func(c): return "%s-%s" % [c.name, c.version] != str(r.get("chart", "")))
+		var w := maxf(9.0, subs.size() * 3.4 + 2.0)
+		slots.append({"r": r, "x": x + w * 0.5, "subs": subs})
+		x += w
+	var width := maxf(24.0, x + 6.0)
+	var depth := 20.0 + (9.0 if not repos.is_empty() else 0.0)
+	var fl := Rect2(-width * 0.5, -depth + 4.0, width, depth)
+	var off := -x * 0.5
+	var sig := "helm|%s|%s|%s" % [ns, str(fl), ",".join(slots.map(func(sl): return "%s:%d" % [sl.r.name, sl.subs.size()]))]
+	if _begin_static(sig):
+		_add_walk(fl)
+		var c := fl.get_center()
+		Vox.box(_static, Vector3(fl.size.x, 0.4, fl.size.y), Vector3(c.x, -0.2, c.y), Color("55586c"))
+		for zi in int(fl.size.y / 2.0):   # concrete slabs
+			Vox.box(_static, Vector3(fl.size.x, 0.02, 0.05), Vector3(c.x, 0.01, fl.position.y + zi * 2.0), Color("464a5c"), 0.0, false)
+		Vox.box(_static, Vector3(fl.size.x, 3.4, 0.5), Vector3(c.x, 1.7, fl.position.y - 0.25), Color("6a6e84"))
+		Vox.box(_static, Vector3(0.5, 3.4, fl.size.y), Vector3(fl.position.x - 0.25, 1.7, c.y), Color("5d6177"))
+		# Pipes along the back wall and bare bulbs: it's a basement.
+		for y in [2.6, 3.0]:
+			Vox.box(_static, Vector3(fl.size.x, 0.18, 0.18), Vector3(c.x, y, fl.position.y + 0.3), Color("6b6f80"))
+		for i in int(fl.size.x / 6.0):
+			Vox.box(_static, Vector3(0.25, 0.25, 0.25), Vector3(fl.position.x + 3.0 + i * 6.0, 3.2, fl.position.y + 1.0), Vox.YELLOW, 2.0, false)
+		# From each release to its subcharts: pipes on the floor.
+		for sl in slots:
+			var px: float = off + sl.x
+			for j in sl.subs.size():
+				var sx: float = px + (j - (sl.subs.size() - 1) * 0.5) * 3.4
+				var a := Vector3(px, 0.15, -3.0)
+				var b := Vector3(sx, 0.15, -7.8)
+				var mid := (a + b) * 0.5
+				var pipe := Vox.box(_static, Vector3(0.22, 0.22, a.distance_to(b)), mid, Color("8fa8ff").darkened(0.3), 0.3, false)
+				pipe.look_at_from_position(mid, b, Vector3.UP)
+		var exit_pos := Vector3(0, 0, fl.end.y - 1.2)
+		_add_door(exit_pos, "ns:" + ns, "back up to hall %s|" + ns, Vox.YELLOW)
+		spawn = exit_pos + Vector3(1.6, 0, -1.4)
+	_yard_notes = []
+	if rels.is_empty():
+		_yard_notes.append({"pos": Vector3(0, 2.6, 0), "text": tr("No Helm releases here: only a chart repository."), "color": Vox.SILVER})
+	var seen := {}
+	for sl in slots:
+		var r: Dictionary = sl.r
+		var rk := "%s/%s" % [r.ns, r.name]
+		var px: float = off + sl.x
+		_crate("helm", rk, r, Vector3(px, 0, -2.0), seen)
+		var parent := str(r.get("chart", ""))
+		if not r.get("umbrella", false):
+			continue
+		for j in sl.subs.size():
+			var ch: Dictionary = sl.subs[j].duplicate()
+			ch["parent"] = false
+			ch["release"] = r.name
+			ch["ns"] = r.ns
+			var sx: float = px + (j - (sl.subs.size() - 1) * 0.5) * 3.4
+			_crate("chart", "%s/%s" % [rk, ch.name], ch, Vector3(sx, 0, -8.5), seen)
+		if parent == "":
+			_yard_notes.append({"pos": Vector3(px, 4.6, -2.0), "text": tr("umbrella: only its subcharts make objects"), "color": Color("8fa8ff")})
+	# The chart repository's shelves (charts fetched by main, on demand).
+	var shelf_z := fl.position.y + 2.2
+	for i in repos.size():
+		var rp: Dictionary = repos[i]
+		var rk := "%s/%s" % [rp.ns, rp.service]
+		var got: Dictionary = repo_charts.get(rk, {})
+		var title := tr("CHART REPOSITORY: ChartMuseum %s") % rp.service
+		if got.is_empty():
+			title += "  " + tr("(loading charts...)")
+		elif not got.get("ok", false):
+			title += "  " + tr("(can't list it: %s)") % str(got.get("error", "")).left(60)
+		_yard_notes.append({"pos": Vector3(fl.position.x + 4.0 + i * 14.0, 3.8, shelf_z), "text": title, "color": Vox.YELLOW})
+		var charts: Array = got.get("charts", []) if got.get("ok", false) else []
+		for j in mini(charts.size(), 24):
+			var cd: Dictionary = (charts[j] as Dictionary).duplicate()
+			cd["repo"] = rk
+			cd["ns"] = rp.ns
+			var col := j % 8
+			var row := j / 8
+			_crate("repochart", "%s/%s" % [rk, cd.name], cd, Vector3(fl.position.x + 2.0 + i * 14.0 + col * 1.5, row * 1.0, shelf_z), seen)
+		if charts.size() > 24:
+			_yard_notes.append({"pos": Vector3(fl.position.x + 8.0 + i * 14.0, 3.2, shelf_z), "text": "+%d %s" % [charts.size() - 24, tr("more charts (helm search repo)")], "color": Vox.SILVER})
+	for k in crates.keys():
+		if not seen.has(k):
+			crates[k].queue_free()
+			crates.erase(k)
+	blockers.clear()
+	for cr in crates.values():
+		var h: float = cr.size * 0.5 + 0.1
+		var br := Rect2(cr.target.x - h, cr.target.z - h, h * 2.0, h * 2.0)
+		blockers.append(br)
+		blocker_heights[br] = cr.size + (cr.position.y if cr.kind == "repochart" else 0.0)
+	block_h = 2.6
+	fly_ceiling = 6.0
+
+
+func _crate(kind_: String, k: String, d: Dictionary, pos: Vector3, seen: Dictionary) -> void:
+	var ck := kind_ + "|" + k
+	seen[ck] = true
+	var cr: HelmCrate = crates.get(ck)
+	if cr == null:
+		cr = HelmCrate.new()
+		cr.world = self
+		_entities.add_child(cr)
+		crates[ck] = cr
+	cr.setup(kind_, d, k)
+	cr.target = pos
+	cr.position = pos
+
+
 # ------------------------------------------------------------ GitOps docks
 
 ## Each Argo CD / Flux app is a loading dock in front of the hall it deploys
@@ -2812,7 +2962,9 @@ func labels(player_pos: Vector3) -> Array:
 		out.append({"pos": tk.anchor(), "text": tk.label_text(), "sub": _hint(tk, tk.label_sub()), "color": tk.label_color(), "big": false, "entity": tk})
 	for t in tunnels.values():
 		out.append({"pos": t.anchor(), "text": t.label_text(), "sub": _hint(t, t.label_sub()), "color": t.label_color(), "big": false, "entity": t})
-	if level in ["library", "bank"]:
+	for cr in crates.values():
+		out.append({"pos": cr.anchor(), "text": cr.label_text(), "sub": _hint(cr, cr.label_sub()), "color": cr.label_color(), "big": cr.kind == "helm", "entity": cr})
+	if level in ["library", "bank"] or level.begins_with("helm:"):
 		for n in _yard_notes:
 			out.append({"pos": n.pos, "text": n.text, "sub": "", "color": n.color, "big": false, "small": true})
 	for f in _floaters:

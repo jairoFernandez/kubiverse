@@ -1264,6 +1264,11 @@ func _on_level_changed(l: String) -> void:
 		var lm: Landmark = world.library_bld if _prev_level == "library" else world.bank_bld
 		if lm:
 			player.teleport(_standable_near(lm.door_position() + Vector3(0, 0, 1.8)))
+	elif l.begins_with("ns:") and _prev_level == "helm:" + l.substr(3):
+		# Back up the ladder: next to the hatch.
+		for d in world.doors:
+			if str(d.to) == _prev_level:
+				player.teleport(_standable_near(d.pos + Vector3(0, 0, 1.4)))
 	elif l == "plant" and _prev_level != "plant":
 		var key := "@power" if _prev_level == "power" else _prev_level.substr(3)
 		var b: FactoryBuilding = world.buildings.get(key)
@@ -1272,6 +1277,9 @@ func _on_level_changed(l: String) -> void:
 	hud.engine.visible = l == "engine"
 	if l == "library":
 		hud.banner(tr("LIBRARY (storage)"), tr("A section per StorageClass, a book per volume (thicker = bigger, the bookmark = how full). Requests still waiting are on the desk; ConfigMaps are notebooks in the reference section."))
+	elif l.begins_with("helm:"):
+		hud.banner(tr("HELM BASEMENT"), tr("Each Helm release is a crate (lamp: green deployed, red failed, yellow pending). An umbrella chart has its subcharts around it, joined by pipes, each with the objects it made. A ChartMuseum keeps its charts on the shelves at the back."))
+		_load_repo_charts(world.current_ns())
 	elif l == "bank":
 		hud.banner(tr("BANK (secrets)"), tr("A pearl per Secret on its namespace's tray: gold TLS, blue registry, white the rest. Cracked red pearls: pods ask for them and they don't exist. Values are never read."))
 	if l == "engine":
@@ -1399,7 +1407,7 @@ func _goto(kind: String, key: String, ns: String) -> void:
 		_pan = Vector3.ZERO
 		hud.inspect(bl)
 		return
-	var l := "power" if kind == "node" else ("library" if kind in ["pv", "storageclass", "volume"] or (kind == "config" and key.begins_with("ConfigMap/")) else ("bank" if kind == "config" else ("plant" if kind == "app" else "ns:" + ns)))
+	var l := "power" if kind == "node" else ("library" if kind in ["pv", "storageclass", "volume"] or (kind == "config" and key.begins_with("ConfigMap/")) else ("bank" if kind == "config" else ("plant" if kind == "app" else ("helm:" + ns if kind in ["helm", "chart", "repochart"] else "ns:" + ns))))
 	if world.level != l:
 		_go_level(l)
 	var e := world.find_entity(kind, key)
@@ -1781,6 +1789,19 @@ func _update_labels() -> void:
 				items.append(l)
 	hud.overlay.items = items
 	hud.overlay.queue_redraw()
+
+
+## The charts of the chart repositories in this namespace, for the basement's
+## shelves.
+func _load_repo_charts(ns: String) -> void:
+	for rp in (K8s.state.get("chart_repos", []) if K8s.state.get("chart_repos") != null else []):
+		if rp.ns != ns:
+			continue
+		var k := "%s/%s" % [rp.ns, rp.service]
+		K8s.charts(rp.ns, rp.service, func(ok: bool, data: Dictionary):
+			world.repo_charts[k] = data if ok else {"ok": false, "error": str(data.get("error", "?"))}
+			if world.level == "helm:" + ns:
+				world.apply_state(K8s.state))
 
 
 ## Screen-space picking: nearest small entity under the cursor, otherwise

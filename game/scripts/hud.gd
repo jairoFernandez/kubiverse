@@ -1674,6 +1674,8 @@ func _resource_lines(kind: String, d: Dictionary) -> Array:
 					if (g.tool == "argocd" and ap.get("tool", "argocd") == "argocd" and ap.name == g.name) or \
 							(g.tool == "flux" and "%s %s/%s" % [ap.get("kind", ""), ap.ns, ap.name] == g.name):
 						out.append(_kv("argo cd" if g.tool == "argocd" else "flux", _app_status(ap)))
+			if str(d.get("release", "")) != "":
+				out.append(_kv("helm", "%s %s  [color=#83769c]%s[/color]" % [tr("release"), d.release, tr("chart %s (see the HELM BASEMENT)") % d.get("chart", "?")]))
 		"namespace":
 			var ns := str(d.get("name", ""))
 			if ns == "" or (is_instance_valid(_insp_target) and _insp_target is FactoryBuilding and _insp_target.is_power):
@@ -1705,6 +1707,9 @@ func _resource_lines(kind: String, d: Dictionary) -> Array:
 			for ap in st.get("apps", []):
 				if str(ap.get("dest_ns", "")) == ns:
 					out.append(_kv("gitops", "%s %s: %s" % [GitOpsDock.what(ap), ap.name, _app_status(ap)]))
+			for hr in (st.get("helm", []) if st.get("helm") != null else []):
+				if hr.ns == ns:
+					out.append(_kv("helm", "%s%s rev %d, %s" % [("umbrella " if hr.get("umbrella", false) else ""), hr.name, int(hr.get("revision", 0)), hr.get("status", "")]))
 			for c in st.get("certs", []):
 				if c.ns == ns:
 					out.append(_kv("tls", "%s %s  [color=#83769c]%s[/color]" % [c.name, ("[color=#00e436]%s[/color]" % tr("ready")) if c.ready else ("[color=#ff004d]%s[/color]" % tr("NOT READY")),
@@ -3535,6 +3540,42 @@ func _refresh_inspector() -> void:
 					"missing": "[color=#ff004d]%s[/color]" % tr("503: Service not found")}.get(r.status, r.status)
 				lines.append("[color=#%s]%s%s[/color]%s  ->  %s/%s:%s  %s" % [InternetCity.host_color(r.host).to_html(false),
 					r.host if r.host != "" else "*", r.path, "  [HTTPS]" if r.tls else "", r.ns, r.service, r.port, st])
+		"helm":
+			_insp_title.text = tr("HELM RELEASE %s") % d.name
+			lines.append(tr("Installed by [color=#8fa8ff]Helm[/color]: a chart (a package of templates) rendered with its values and applied as one release."))
+			lines.append(_kv("status", "[color=#%s]%s[/color]  rev %d" % [_insp_target.status_color().to_html(false), d.get("status", "?"), int(d.get("revision", 0))]))
+			if float(d.get("updated", 0)) > 0:
+				lines.append(_kv("updated", tr("%s ago") % _age(Time.get_unix_time_from_system() - float(d.updated))))
+			if str(d.get("chart", "")) != "":
+				lines.append(_kv("chart", str(d.chart)))
+			if d.get("umbrella", false):
+				lines.append("[color=#8fa8ff]%s[/color]" % tr("An UMBRELLA chart: it bundles other charts as dependencies (subcharts). Its crates are behind it, joined by pipes."))
+			for c in (d.get("charts", []) if d.get("charts") != null else []):
+				var objs: Array = (c.get("workloads", []) as Array) + (c.get("services", []) as Array).map(func(x): return "Service/" + x)
+				lines.append(_kv("  " + str(c.name), "%s  [color=#83769c]%s[/color]" % [c.version, ", ".join(objs.slice(0, 4)) + (" +%d" % (objs.size() - 4) if objs.size() > 4 else "")]))
+			lines.append("[color=#83769c]%s[/color]" % tr("Its values are never read: they can hold passwords."))
+			buttons.append(["ITS REVISIONS", func(): _term_show("-n %s get secrets -l owner=helm,name=%s" % [d.ns, d.name]), "GoButton", false,
+				"helm -n %s history %s   # or: kubectl -n %s get secrets -l owner=helm,name=%s" % [d.ns, d.name, d.ns, d.name]])
+			buttons.append(["BACK UP TO THE HALL", func(): level_requested.emit("ns:" + d.ns), "", false, "helm -n %s status %s" % [d.ns, d.name]])
+		"chart":
+			_insp_title.text = tr("SUBCHART %s") % d.name
+			lines.append(tr("A chart that release [color=#8fa8ff]%s[/color] brings as a dependency: its templates made these objects.") % d.get("release", ""))
+			lines.append(_kv("version", str(d.get("version", ""))))
+			for wk in (d.get("workloads", []) if d.get("workloads") != null else []):
+				var kn := str(wk).split("/")
+				buttons.append([str(wk).to_upper().left(28), func(): goto_requested.emit("workload", "%s/%s/%s" % [d.ns, kn[0], kn[1]], d.ns), "", false, "kubectl -n %s get %s %s" % [d.ns, kn[0].to_lower(), kn[1]]])
+			for sv in (d.get("services", []) if d.get("services") != null else []):
+				buttons.append([("SERVICE " + str(sv)).left(28), func(): goto_requested.emit("service", "%s/%s" % [d.ns, sv], d.ns), "", false, "kubectl -n %s get service %s" % [d.ns, sv]])
+		"repochart":
+			_insp_title.text = tr("CHART %s") % d.name
+			lines.append(tr("A chart in the cluster's own chart repository (ChartMuseum): ready to be installed."))
+			lines.append(_kv("latest", "%s%s" % [d.get("version", ""), ("  app %s" % d.app_version) if str(d.get("app_version", "")) != "" else ""]))
+			lines.append(_kv("versions", str(int(d.get("versions", 1)))))
+			if str(d.get("description", "")) != "":
+				lines.append(_kv("about", _esc(str(d.description))))
+			var repo := str(d.get("repo", "")).get_slice("/", 1)
+			buttons.append(["COPY INSTALL", func(): _copy("helm install %s %s/%s --version %s" % [d.name, repo, d.name, d.version]), "GoButton", false,
+				"helm repo add %s http://%s.%s:8080   # via a port-forward from outside\nhelm install %s %s/%s --version %s" % [repo, repo, d.ns, d.name, repo, d.name, d.version]])
 		"app":
 			var flux := str(d.get("tool", "")) == "flux"
 			_insp_title.text = "%s %s" % [GitOpsDock.what(d).to_upper(), d.name]
