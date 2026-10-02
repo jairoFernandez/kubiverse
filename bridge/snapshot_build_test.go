@@ -127,6 +127,7 @@ func TestBuildSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertSnapshotInvariants(t, s)
 	if s.Context != "test" || !s.ReadOnly || s.Time == 0 || len(s.Alerts) != 1 {
 		t.Errorf("header: %+v", s)
 	}
@@ -272,6 +273,7 @@ func TestBuildSnapshotEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertSnapshotInvariants(t, s)
 	if s.Alerts == nil || s.Ingresses == nil || len(s.Pods) != 0 || len(s.Workloads) != 0 || s.Helm == nil || s.ChartRepos == nil {
 		t.Errorf("empty snapshot: %+v", s)
 	}

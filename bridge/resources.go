@@ -330,6 +330,14 @@ func (b *Bridge) fillResources(s *Snapshot, pods []*corev1.Pod, now time.Time) {
 	s.Apps = append(b.argoApps(), b.fluxApps()...)
 	s.Certs = b.certs(now)
 	s.Ingresses = append(s.Ingresses, b.gatewayRoutes()...)
+	// One order per list, by its delta key: the game re-sorts that way after
+	// a patch (k8s_client.gd), a full state must agree.
+	sort.SliceStable(s.Apps, func(i, j int) bool {
+		return s.Apps[i].Namespace+"/"+s.Apps[i].Name < s.Apps[j].Namespace+"/"+s.Apps[j].Name
+	})
+	sort.SliceStable(s.Ingresses, func(i, j int) bool {
+		return s.Ingresses[i].Namespace+"/"+s.Ingresses[i].Name < s.Ingresses[j].Namespace+"/"+s.Ingresses[j].Name
+	})
 }
 
 func summarizeNetPol(np *networkingv1.NetworkPolicy) NetPol {
