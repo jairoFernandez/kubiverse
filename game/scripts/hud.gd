@@ -3612,7 +3612,9 @@ func _refresh_inspector() -> void:
 				var rec := "-n %s annotate %s %s reconcile.fluxcd.io/requestedAt=%s --overwrite" % [d.ns, res, d.name, now]
 				buttons.append(["RECONCILE NOW", func(): _term_fill(rec), "", ro, "flux reconcile %s %s -n %s   # or: kubectl %s" % [res, d.name, d.ns, rec]])
 			else:
-				var sync := "-n %s patch application %s --type merge -p {\"operation\":{\"sync\":{}}}" % [d.ns, d.name]
+				# Single quotes: the terminal splits like a shell, and would eat
+				# the JSON's double quotes otherwise.
+				var sync := "-n %s patch application %s --type merge -p '{\"operation\":{\"sync\":{}}}'" % [d.ns, d.name]
 				buttons.append(["SYNC NOW", func(): _term_fill(sync), "", ro, "argocd app sync %s   # or: kubectl %s" % [d.name, sync]])
 		"volume":
 			_insp_title.text = tr("VOLUME CLAIM %s") % d.name
