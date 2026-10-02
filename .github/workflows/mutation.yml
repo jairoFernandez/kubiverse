@@ -1,0 +1,70 @@
+name: mutation
+
+# Mutation testing of the bridge (gremlins): small changes to the code
+# (a < becomes <=, a + becomes -, a condition is negated...) that the tests
+# should notice. A mutant that LIVES is code no test really checks.
+# Informational: weekly and on demand, never on PRs, no threshold yet.
+on:
+  schedule:
+    - cron: "17 4 * * 1"   # Mondays 04:17 UTC
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "core (snapshot, delta, actions, helm: ~10 min) or full (every file: slow)"
+        type: choice
+        options: [core, full]
+        default: core
+      threshold:
+        description: "Minimum test efficacy % (0 = report only)"
+        default: "0"
+
+permissions:
+  contents: read
+
+env:
+  GREMLINS_VERSION: v0.6.0
+  # Everything but the core files (scope=core).
+  CORE_EXCLUDE: 'ai\.go|assistant\.go|embed\.go|github\.go|hub\.go|identity\.go|kubectl\.go|lan\.go|main\.go|manifest\.go|metrics\.go|observability\.go|operations\.go|podinfo\.go|policy\.go|portforward\.go|resources\.go|scenario\.go|static\.go|storage_secrets\.go|watch\.go'
+
+jobs:
+  gremlins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: bridge/go.mod
+          cache-dependency-path: bridge/go.sum
+      - name: Install gremlins
+        run: go install github.com/go-gremlins/gremlins/cmd/gremlins@${GREMLINS_VERSION}
+      - name: Unleash the gremlins
+        working-directory: bridge
+        env:
+          SCOPE: ${{ inputs.scope || 'core' }}
+          THRESHOLD: ${{ inputs.threshold || '0' }}
+        run: |
+          args=(--timeout-coefficient 20 -o "$RUNNER_TEMP/gremlins.json" --threshold-efficacy "$THRESHOLD")
+          if [ "$SCOPE" = core ]; then args+=(-E "$CORE_EXCLUDE"); fi
+          gremlins unleash "${args[@]}" | tee "$RUNNER_TEMP/gremlins.log"
+      - name: Score
+        if: always()
+        run: |
+          f="$RUNNER_TEMP/gremlins.json"
+          [ -f "$f" ] || exit 0
+          {
+            echo "## Mutation testing (${{ inputs.scope || 'core' }})"
+            jq -r '"Test efficacy (killed / killed+lived): **\(.test_efficacy | . * 10 | round / 10)%**  \nMutant coverage: \(.mutations_coverage | . * 10 | round / 10)%  \nKilled \(.mutants_killed), lived \(.mutants_lived), not covered \(.mutants_not_covered)"' "$f"
+            echo
+            echo "### Surviving mutants (code no test checks)"
+            jq -r '.files[] | .file_name as $f | .mutations[] | select(.status == "LIVED") | "- `\($f):\(.line):\(.column)` \(.type)"' "$f" | head -100
+          } >> "$GITHUB_STEP_SUMMARY"
+          jq -r '"test efficacy \(.test_efficacy)%, killed \(.mutants_killed), lived \(.mutants_lived)"' "$f"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gremlins-report
+          path: |
+            ${{ runner.temp }}/gremlins.json
+            ${{ runner.temp }}/gremlins.log
+          if-no-files-found: ignore
