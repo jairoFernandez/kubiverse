@@ -3004,12 +3004,13 @@ func labels(player_pos: Vector3) -> Array:
 	near.sort_custom(func(a, b): return a[0] < b[0])
 	var shown := near.slice(0, 1).map(func(x): return x[1])
 	for e in [hovered, selected]:
-		if e is PodBot and is_instance_valid(e) and not e in shown:
+		# Validity first: a deleted pod may still be hovered / selected.
+		if is_instance_valid(e) and e is PodBot and not e in shown:
 			shown.append(e)
 	for e in shown:
 		out.append({"pos": e.anchor(), "text": e.label_text(), "sub": _hint(e, e.label_sub()), "color": e.label_color(), "big": false, "entity": e})
 	for e in [hovered, selected]:
-		if e is PodBot and is_instance_valid(e):
+		if is_instance_valid(e) and e is PodBot:
 			for sv in services.values():
 				if e.data.name in sv.backends():
 					out.append({"pos": sv.beam_origin().lerp(_pod_top(e), 0.5), "text": tr("traffic from service %s") % sv.data.name, "sub": "", "color": ServicePortal.type_color(sv.data), "big": false, "small": true})

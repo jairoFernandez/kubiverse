@@ -27,7 +27,9 @@ func _draw() -> void:
 	for i in rows.size():
 		var r: Dictionary = rows[i]
 		var y0 := i * ROW
-		var pts: Array = r.points
+		# Prometheus can answer NaN / Inf (a pod that used no CPU, a rate over
+		# a gap): such points would make an invalid polygon for the renderer.
+		var pts: Array = (r.points as Array).filter(func(p): return is_finite(float(p[0])) and is_finite(float(p[1])))
 		var col: Color = r.get("color", LINE)
 		var area := Rect2(0, y0 + 30, size.x, ROW - 36)
 		draw_rect(area, Color(1, 1, 1, 0.04))
@@ -50,10 +52,13 @@ func _draw() -> void:
 			var x := area.position.x + (float(p[0]) - t0) / maxf(t1 - t0, 1.0) * area.size.x
 			var y := area.end.y - (float(p[1]) - base) / (hi - base) * area.size.y
 			line.append(Vector2(x, y))
+		# The filled area only when it has one: a flat line on the floor (a
+		# finished pod at 0 CPU) is a polygon that can't be triangulated.
 		var fill := line.duplicate()
 		fill.append(Vector2(area.end.x, area.end.y))
 		fill.append(Vector2(area.position.x, area.end.y))
-		draw_colored_polygon(fill, Color(col, 0.18))
+		if absf(_area(fill)) > 1.0:
+			draw_colored_polygon(fill, Color(col, 0.18))
 		draw_polyline(line, col, 2.0)
 		var now_v := float(pts[pts.size() - 1][1])
 		var txt := "%s  %s  (%s %s)" % [r.label, fmt(now_v, r.unit), tr("peak"), fmt(peak, r.unit)]
@@ -64,6 +69,15 @@ func _draw() -> void:
 			draw_line(Vector2(mark, area.position.y), Vector2(mark, area.end.y), Color(1, 0.93, 0.15, 0.8), 1.0)
 			txt += "   " + (tr("restarting for %s") if r.unit == "count" else tr("up since %s ago")) % _mins(mins)
 		draw_string(font, Vector2(0, y0 + 22), txt, HORIZONTAL_ALIGNMENT_LEFT, size.x, 20, Color(0.85, 0.85, 0.9))
+
+
+## Signed area of a polygon (shoelace).
+static func _area(p: PackedVector2Array) -> float:
+	var a := 0.0
+	for i in p.size():
+		var q := p[(i + 1) % p.size()]
+		a += p[i].x * q.y - q.x * p[i].y
+	return a * 0.5
 
 
 static func _mins(m: int) -> String:
