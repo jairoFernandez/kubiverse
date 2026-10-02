@@ -488,7 +488,7 @@ A `v*` tag builds everything and publishes the release with `SHA256SUMS.txt`, th
 | `WINDOWS_CERT_PFX` (base64 .pfx, code signing), `WINDOWS_CERT_PASSWORD` | Authenticode signature (timestamped) on Kubiverse.exe and the Windows bridges: SmartScreen trusts them as the certificate gains reputation |
 | `HOMEBREW_TAP_TOKEN` (a token that can push to `jairoFernandez/homebrew-kubiverse`) | copies the formula and the cask to the tap, so `brew install jairofernandez/kubiverse/...` gets each release |
 
-winget: the rendered `JairoFernandez.K8sBridge.yaml` goes to microsoft/winget-pkgs with `wingetcreate submit` (the first time it's reviewed by hand).
+winget: the rendered `JairoFernandez.KubiverseBridge.yaml` goes to microsoft/winget-pkgs with `wingetcreate submit` (the first time it's reviewed by hand).
 
 [`.github/workflows/build.yml`](.github/workflows/build.yml) runs the tests, exports Web, macOS, Linux and Windows with Godot 4.7.2 and builds the bridges with the web build embedded; each one is uploaded as a workflow artifact. Pushing a `v*` tag publishes a GitHub Release with every archive and `SHA256SUMS.txt`. The macOS app is ad-hoc signed, not notarized: the first time, open it with right-click → Open.
 
