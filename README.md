@@ -54,7 +54,7 @@ The native apps (smoother than the browser) are in the [latest release](https://
 - **Windows** (`kubiverse-windows-x86_64.zip`): unzip and run Kubiverse.exe; if SmartScreen stops it, More info → Run anyway.
 - **Linux** (`kubiverse-linux-x86_64.tar.gz`): `tar xzf kubiverse-linux-x86_64.tar.gz && ./kubiverse.x86_64`.
 
-They connect to the bridge on `http://127.0.0.1:8088` (started with the command above, no `--allow-origin` needed).
+They start the bridge by themselves, no terminal needed: on launch the app looks for one already answering (on its port, then on the classic `127.0.0.1:8088` of a hand-started one), and if there is none it runs `kubiverse-bridge` from the `PATH`, Homebrew (`/opt/homebrew/bin`, `/usr/local/bin`) or `~/.kubecraft/bin` (where the commands above put it) on **`127.0.0.1:28088`**, and stops it when you quit. If the game dies without stopping it, the bridge notices and stops too. The port is in the start screen (**Port** + **RESTART BRIDGE**) or `--bridge-port=N` on the command line; clusters saved against `127.0.0.1:8088` move to it. A bridge the app didn't start is never stopped, and you can still type any bridge URL (a team bridge, one on another machine).
 
 ## Intro
 

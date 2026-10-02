@@ -41,6 +41,9 @@ var team_user := ""
 var forwards: Array = []
 var _demo_fw_t := 0.0
 
+## Native: the bridge the game finds or starts by itself (see LocalBridge).
+var local := LocalBridge.new()
+
 var _ws: WebSocketPeer
 var _ws_last_state := -1
 var _reconnect_in := 0.0
@@ -58,7 +61,44 @@ func default_bridge_url() -> String:
 		var origin = JavaScriptBridge.eval("window.location.origin", true)
 		if origin != null and str(origin).begins_with("http") and served_by_bridge():
 			return str(origin)
-	return "http://127.0.0.1:8088"
+	if LocalBridge.supported():
+		if local.ready_url() != "":
+			return local.ready_url()
+		if local.status != "missing":
+			return LocalBridge.url_for(Settings.bridge_port)
+	return LocalBridge.url_for(LocalBridge.CLASSIC_PORT)
+
+
+func _ready() -> void:
+	add_child(local)
+	local.status_changed.connect(func(st: String, u: String):
+		if st == "started":
+			_rehome_saved(u))
+	start_local_bridge()
+
+
+## The game started its own bridge: clusters saved against a hand-started one
+## on 127.0.0.1:8088 move to it (same machine, same kubeconfigs), with their
+## production/sandbox mark, look and namespace filter.
+func _rehome_saved(to: String) -> void:
+	var r := LocalBridge.rehome_servers(Settings.servers, to)
+	if not r[1]:
+		return
+	Settings.servers = r[0]
+	Settings.cluster_kinds = LocalBridge.rehome_keys(Settings.cluster_kinds, to)
+	Settings.cluster_looks = LocalBridge.rehome_keys(Settings.cluster_looks, to)
+	Settings.ns_filters = LocalBridge.rehome_keys(Settings.ns_filters, to)
+	Settings.save()
+
+
+## Native: finds a running bridge or starts ours. --bridge-port=N overrides
+## the saved port for this run.
+func start_local_bridge() -> void:
+	var port := Settings.bridge_port
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--bridge-port="):
+			port = int(a.get_slice("=", 1))
+	local.start(port)
 
 
 var _served_by_bridge := -1

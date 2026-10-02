@@ -145,6 +145,9 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if exitWithParent() {
+		go watchParent(ctx, stop, os.Getppid, 2*time.Second)
+	}
 
 	hub := newHub(ctx, *kubeconfig, *kubectx, *dataDir, *readOnly, *token)
 	hub.pol = newPolicy(filepath.Dir(*dataDir), strings.Split(*production, ","))

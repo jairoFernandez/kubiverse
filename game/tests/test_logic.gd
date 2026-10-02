@@ -24,8 +24,49 @@ func _init() -> void:
 	_search_kinds()
 	_updates()
 	_i18n()
+	_local_bridge()
 	await _trend_draw()
 	finish("logic tests")
+
+
+func _local_bridge() -> void:
+	check(LocalBridge.DEFAULT_PORT != LocalBridge.CLASSIC_PORT, "the game's bridge port is not the classic 8088")
+	check(LocalBridge.valid_port(LocalBridge.DEFAULT_PORT), "default port is valid")
+	check(LocalBridge.DEFAULT_PORT < 32768, "default port is below the Linux ephemeral range")
+	check(not LocalBridge.valid_port(80) and not LocalBridge.valid_port(70000) and not LocalBridge.valid_port(0), "privileged/out-of-range ports rejected")
+	check(LocalBridge.url_for(28088) == "http://127.0.0.1:28088", "url_for")
+	var a := LocalBridge.args_for(31000)
+	check(a.size() == 2 and a[0] == "--addr" and a[1] == "127.0.0.1:31000", "listens on 127.0.0.1 only: %s" % [a])
+	var c := LocalBridge.candidates("/usr/bin:/bin", "/home/u", false)
+	check(c[0] == "/usr/bin/kubiverse-bridge" and c[1] == "/bin/kubiverse-bridge", "PATH first, in order: %s" % [c])
+	check(c.find("/home/u/.kubecraft/bin/kubiverse-bridge") == 2, "then ~/.kubecraft/bin: %s" % [c])
+	check(c.has("/opt/homebrew/bin/kubiverse-bridge") and c.has("/usr/local/bin/kubiverse-bridge"), "Homebrew even with a bare Finder PATH")
+	var dup := LocalBridge.candidates("/opt/homebrew/bin/:/opt/homebrew/bin", "/home/u", false)
+	check(dup.count("/opt/homebrew/bin/kubiverse-bridge") == 1, "no duplicates: %s" % [dup])
+	var w := LocalBridge.candidates("C:\\tools;C:\\bin\\", "C:\\Users\\u", true)
+	check(w[0] == "C:\\tools/kubiverse-bridge.exe" and w[1] == "C:\\bin/kubiverse-bridge.exe", "Windows: ; separator and .exe: %s" % [w])
+	check(not w.has("/opt/homebrew/bin/kubiverse-bridge.exe"), "no Homebrew folders on Windows")
+	var p := LocalBridge.widen_path("/usr/local/bin:/usr/bin", "/home/u")
+	check(p.begins_with("/usr/local/bin:/usr/bin:"), "widen_path keeps the PATH first: %s" % p)
+	check(p.count("/usr/local/bin") == 1 and "/opt/homebrew/bin" in p, "widen_path adds Homebrew once: %s" % p)
+	check(not LocalBridge.supported(), "headless runs never start a bridge")
+	var to := "http://127.0.0.1:28088"
+	var servers := [
+		{"name": "a", "url": "http://127.0.0.1:8088", "token": "", "context": "x"},
+		{"name": "b", "url": "http://localhost:8088/", "token": "t", "context": ""},
+		{"name": "c", "url": "https://team.example", "token": "", "context": "y"},
+	]
+	var r := LocalBridge.rehome_servers(servers, to)
+	check(r[1] and r[0][0].url == to and r[0][1].url == to, "saved local clusters move to the game's bridge: %s" % [r[0]])
+	check(r[0][2].url == "https://team.example" and r[0][1].token == "t", "remote ones and tokens untouched")
+	check(servers[0].url == "http://127.0.0.1:8088", "rehome_servers doesn't change its input")
+	check(not LocalBridge.rehome_servers([servers[2]], to)[1], "nothing to move: reported as such")
+	var kinds := {"http://127.0.0.1:8088|x": "prod", "http://localhost:8088|": "sandbox", "https://team.example|y": "prod", "demo": "sandbox"}
+	var k2 := LocalBridge.rehome_keys(kinds, to)
+	check(k2.get(to + "|x") == "prod" and k2.get(to + "|") == "sandbox", "production marks follow: %s" % [k2])
+	check(not k2.has("http://127.0.0.1:8088|x") and k2.get("https://team.example|y") == "prod" and k2.get("demo") == "sandbox", "old keys gone, others kept: %s" % [k2])
+	var k3 := LocalBridge.rehome_keys({"http://127.0.0.1:8088|x": "sandbox", to + "|x": "prod"}, to)
+	check(k3.size() == 1 and k3.get(to + "|x") == "prod", "an existing new key wins: %s" % [k3])
 
 
 func _pod_categories() -> void:

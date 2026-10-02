@@ -133,6 +133,10 @@ var _theme: Theme
 
 var _connect_root: Control
 var _url_edit: LineEdit
+var _port_edit: LineEdit
+var _local_label: Label
+var _install_box: VBoxContainer
+var _auto_url := ""  # the URL we put in _url_edit (replaced while the player hasn't typed one)
 var _token_edit: LineEdit
 var _connect_status: Label
 var _connect_scale: Label
@@ -561,7 +565,7 @@ func _build_connect_ui() -> void:
 	# ---- the desktop app (web only): a card per system, links in plain sight
 	if OS.has_feature("web"):
 		v.add_child(_section("DESKTOP APP"))
-		var ntext := "Smoother than the browser. It connects to the same bridge: start it with the command below (without --allow-origin), then CONNECT TO CLUSTER."
+		var ntext := "Smoother than the browser, and it starts kubiverse-bridge by itself (Homebrew, winget or the command below install it): no terminal needed."
 		if K8s.served_by_bridge():
 			ntext = "Smoother than the browser. It connects to the bridge serving this page: keep it running and press CONNECT TO CLUSTER in the app."
 		var nn := _label(ntext, 21, Vox.SILVER)
@@ -606,11 +610,35 @@ func _build_connect_ui() -> void:
 	_saved_list.add_theme_constant_override("separation", 6)
 	v.add_child(_saved_list)
 
-	# ---- run a bridge here (not needed when this page is served by one)
+	# ---- native: the game finds or starts its own bridge
+	if LocalBridge.supported():
+		var lh := HFlowContainer.new()
+		lh.add_theme_constant_override("h_separation", 10)
+		lh.add_theme_constant_override("v_separation", 8)
+		v.add_child(lh)
+		_local_label = _label("", 21, Vox.SILVER)
+		_local_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_local_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_local_label.custom_minimum_size.x = 320
+		lh.add_child(_local_label)
+		lh.add_child(_label("Port", 21, Vox.SILVER))
+		_port_edit = LineEdit.new()
+		_port_edit.text = str(Settings.bridge_port)
+		_port_edit.custom_minimum_size.x = 110
+		_port_edit.text_submitted.connect(func(_t): _restart_local_bridge())
+		lh.add_child(_port_edit)
+		lh.add_child(_button("RESTART BRIDGE", _restart_local_bridge))
+		K8s.local.status_changed.connect(_on_local_bridge)
+
+	# ---- run a bridge here (not needed when this page is served by one,
+	# nor natively once the game found or started one)
 	if not K8s.served_by_bridge():
+		_install_box = VBoxContainer.new()
+		_install_box.add_theme_constant_override("separation", 8)
+		v.add_child(_install_box)
 		var bn := _label("1. The game reaches your cluster through kubiverse-bridge, a small program that uses your kubeconfig like kubectl. Paste one of these in a terminal: it downloads the latest release, checks its SHA256 and starts it.", 21, Vox.SILVER)
 		bn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		v.add_child(bn)
+		_install_box.add_child(bn)
 		for pair in K8s.bridge_install_commands():
 			var row := HBoxContainer.new()
 			row.add_theme_constant_override("separation", 8)
@@ -623,9 +651,9 @@ func _build_connect_ui() -> void:
 			cmd.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			row.add_child(cmd)
 			row.add_child(_button("COPY", _copy.bind(pair[1])))
-			v.add_child(row)
+			_install_box.add_child(row)
 		var b2 := _label("2. Then connect:", 21, Vox.SILVER)
-		v.add_child(b2)
+		_install_box.add_child(b2)
 
 	# ---- new connection
 	var g := GridContainer.new()
@@ -637,6 +665,7 @@ func _build_connect_ui() -> void:
 	g.add_child(_label("kubiverse-bridge URL", 24, Vox.SILVER))
 	_url_edit = LineEdit.new()
 	_url_edit.text = K8s.default_bridge_url()
+	_auto_url = _url_edit.text
 	_url_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_url_edit.text_submitted.connect(func(_t): _load_contexts())
 	g.add_child(_url_edit)
@@ -703,6 +732,8 @@ func _build_connect_ui() -> void:
 	_connect_status = _label("Start the bridge first, then CONNECT TO CLUSTER.", 24, Vox.SILVER)
 	_connect_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(_connect_status)
+	if LocalBridge.supported():
+		_on_local_bridge(K8s.local.status, K8s.local.detail)
 
 	# ---- settings
 	var h2 := HFlowContainer.new()
@@ -754,6 +785,53 @@ func _lang_row() -> HBoxContainer:
 		_lang_btns.append(b)
 		h.add_child(b)
 	return h
+
+
+## Native: the bridge the game runs changed state (see LocalBridge).
+func _on_local_bridge(st: String, detail: String) -> void:
+	if _local_label == null:
+		return
+	var msg := ""
+	var col := Vox.SILVER
+	match st:
+		"probing":
+			msg = tr("Looking for the bridge on %s ...") % detail
+			col = Vox.YELLOW
+		"running":
+			msg = tr("Bridge found on %s.") % detail
+			col = Vox.GREEN
+		"started":
+			msg = tr("The game started its bridge on %s: it stops when you quit.") % detail
+			col = Vox.GREEN
+		"missing":
+			msg = tr("kubiverse-bridge is not installed (looked in PATH, Homebrew and ~/.kubecraft/bin). Install it with one of these, then RESTART BRIDGE:")
+			col = Vox.YELLOW
+		"failed":
+			msg = detail
+			col = Vox.RED
+	_local_label.text = msg
+	_local_label.add_theme_color_override("font_color", col)
+	if _install_box != null:
+		_install_box.visible = st in ["missing", "failed"]
+	if st in ["running", "started"]:
+		_status(tr("Bridge ready: pick a cluster or LOAD CONTEXTS."), Vox.GREEN)
+		_refresh_saved.call_deferred()  # saved clusters may have moved to it
+	# Follow the bridge while the player hasn't typed another URL.
+	var u := K8s.default_bridge_url()
+	if _url_edit != null and (_url_edit.text == _auto_url or _url_edit.text == "") and u != _url_edit.text:
+		_url_edit.text = u
+	_auto_url = u
+
+
+func _restart_local_bridge() -> void:
+	var p := int(_port_edit.text.strip_edges())
+	if not LocalBridge.valid_port(p):
+		_status(tr("Port %s is not valid (1024-65535).") % _port_edit.text, Vox.RED)
+		return
+	if p != Settings.bridge_port:
+		Settings.bridge_port = p
+		Settings.save()
+	K8s.start_local_bridge()
 
 
 func _status(msg: String, col: Color) -> void:
