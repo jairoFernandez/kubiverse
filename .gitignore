@@ -8,3 +8,7 @@ bridge/webdist/*
 promo/
 game/scripts/reel.gd
 game/scripts/reel.gd.uid
+
+# Claude Code: personal settings and agent worktrees
+.claude/settings.local.json
+.claude/worktrees/
