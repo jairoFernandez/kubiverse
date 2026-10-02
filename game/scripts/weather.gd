@@ -19,6 +19,7 @@ var _bolt_cd := 4.0
 var _real := {}                # {kind, amount, temp, city, t}
 var _real_t := -1.0
 var _geo := {}                 # city -> {lat, lon}
+var forced := {}               # dev (promo reels): {kind, amount, why} overrides the rest
 
 
 func _ready() -> void:
@@ -57,21 +58,24 @@ var _since_count := 99.0
 
 func tick(delta: float, focus: Vector3, state: Dictionary, is_outdoors: bool) -> void:
 	outdoors = is_outdoors
-	match Settings.weather:
-		"off":
-			_set_w("clear", 0.0, "")
-		"real":
-			_real_tick(delta)
-			if _real.is_empty():
-				_set_w("clear", 0.0, tr("real weather: set a city in VIEW") if Settings.weather_city == "" else tr("real weather: loading %s...") % Settings.weather_city)
-			else:
-				_set_w(_real.kind, _real.amount, "%s %d°C" % [Settings.weather_city, int(_real.temp)])
-		_:
-			# Counting every pod each frame hurts on big clusters: twice a second.
-			_since_count += delta
-			if _since_count >= 0.5 or kind == "":
-				_since_count = 0.0
-				_cluster(state)
+	if not forced.is_empty():
+		_set_w(forced.kind, forced.amount, forced.why)
+	else:
+		match Settings.weather:
+			"off":
+				_set_w("clear", 0.0, "")
+			"real":
+				_real_tick(delta)
+				if _real.is_empty():
+					_set_w("clear", 0.0, tr("real weather: set a city in VIEW") if Settings.weather_city == "" else tr("real weather: loading %s...") % Settings.weather_city)
+				else:
+					_set_w(_real.kind, _real.amount, "%s %d°C" % [Settings.weather_city, int(_real.temp)])
+			_:
+				# Counting every pod each frame hurts on big clusters: twice a second.
+				_since_count += delta
+				if _since_count >= 0.5 or kind == "":
+					_since_count = 0.0
+					_cluster(state)
 	global_position = Vector3(focus.x, 0, focus.z)
 	var want := 900 if kind == "storm" else int(250 + 650 * clampf(amount, 0.0, 1.0))
 	if kind in ["rain", "storm"] and absi(_rain.amount - want) > 120:

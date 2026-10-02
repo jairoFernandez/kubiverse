@@ -84,10 +84,14 @@ var _dragging := false
 var _screen := -1             # monitor the window is on
 
 
+## Optional, not in the repo: see the --reel= argument in _ready().
+const REEL := "res://scripts/reel.gd"
+
+
 func _ready() -> void:
 	# The project's 1280x720 px window is tiny on Retina and on big screens:
 	# open at a comfortable size of the screen the window is on, centered.
-	if not OS.has_feature("web") and not OS.has_feature("mobile") and not "--shot" in " ".join(OS.get_cmdline_user_args()):
+	if not OS.has_feature("web") and not OS.has_feature("mobile") and not "--shot" in " ".join(OS.get_cmdline_user_args()) and not "--reel" in " ".join(OS.get_cmdline_user_args()):
 		_fit_window.call_deferred()
 	_world_layer = CanvasLayer.new()
 	_world_layer.layer = -1
@@ -267,7 +271,7 @@ func _ready() -> void:
 			# The level only exists once the first snapshot arrives.
 			_need_spawn = false
 			player.teleport(world.spawn)
-			if Settings.intro and not "--shot" in " ".join(OS.get_cmdline_user_args()) or "--intro" in OS.get_cmdline_user_args():
+			if Settings.intro and not "--shot" in " ".join(OS.get_cmdline_user_args()) and not "--reel" in " ".join(OS.get_cmdline_user_args()) or "--intro" in OS.get_cmdline_user_args():
 				_start_intro.call_deferred()
 		missions.notify("state")
 		_kubi_dirty = true)
@@ -330,6 +334,10 @@ func _ready() -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--shot="):
 			_screenshot_and_quit(arg.substr(7))
+		# Promo footage: scripted gameplay from reel.gd, which lives outside
+		# this repo (the promo videos' own repo links it here).
+		if arg.begins_with("--reel=") and ResourceLoader.exists(REEL):
+			load(REEL).run(self, arg.substr(7))
 
 
 func _screenshot_and_quit(path: String) -> void:
