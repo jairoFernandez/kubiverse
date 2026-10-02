@@ -38,7 +38,8 @@ class KubiverseBridge < Formula
 
   def caveats
     <<~EOS
-      Start it and open the game in your browser (it comes inside):
+      The native app (brew install --cask jairofernandez/kubiverse/kubiverse)
+      starts it by itself. To play in the browser instead (the game comes inside):
         kubiverse-bridge
         open http://127.0.0.1:8088
     EOS

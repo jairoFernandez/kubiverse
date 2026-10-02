@@ -20,9 +20,8 @@ cask "kubiverse" do
       xattr -dr com.apple.quarantine /Applications/Kubiverse.app
 
     (that removes the "downloaded from the Internet" flag; or right-click
-    the app -> Open). Then start the bridge and open the app:
-
-      kubiverse-bridge
+    the app -> Open). The app starts kubiverse-bridge by itself (on
+    127.0.0.1:28088, changeable on its start screen) and stops it on quit.
   EOS
 
   zap trash: "~/Library/Application Support/Godot/app_userdata/Kubiverse"
