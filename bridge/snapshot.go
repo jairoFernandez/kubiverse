@@ -56,6 +56,7 @@ type Node struct {
 type Namespace struct {
 	Name    string      `json:"name"`
 	Phase   string      `json:"phase"`
+	Created int64       `json:"created,omitempty"` // unix seconds: the game builds young things in front of you
 	NetPols []NetPol    `json:"netpols,omitempty"`
 	Quota   []QuotaItem `json:"quota,omitempty"`
 	Limits  []string    `json:"limits,omitempty"` // LimitRanges in words
@@ -98,6 +99,7 @@ type Workload struct {
 	PDB      *PDBRef `json:"pdb,omitempty"`
 	Paused   bool    `json:"paused,omitempty"`   // Deployment rollout paused
 	Revision int64   `json:"revision,omitempty"` // Deployment rollout revision
+	Created  int64   `json:"created,omitempty"`  // unix seconds
 }
 
 type Service struct {
@@ -111,6 +113,7 @@ type Service struct {
 	Ready     int               `json:"ready"`      // matched pods that are ready (endpoints)
 	External  []string          `json:"external"`   // LoadBalancer IPs/hostnames, externalIPs
 	NodePorts []int32           `json:"node_ports"` // ports opened on every node
+	Created   int64             `json:"created,omitempty"`
 }
 
 // Ingress: how outside traffic (domains, paths) reaches Services.
@@ -121,6 +124,7 @@ type Ingress struct {
 	Rules     []IngressRule `json:"rules"`
 	TLS       []string      `json:"tls"`     // hosts served over HTTPS
 	Address   []string      `json:"address"` // where the ingress controller listens
+	Created   int64         `json:"created,omitempty"`
 }
 
 type IngressRule struct {
@@ -160,7 +164,7 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 		return nil, err
 	}
 	for _, ns := range nss {
-		s.Namespaces = append(s.Namespaces, Namespace{Name: ns.Name, Phase: string(ns.Status.Phase)})
+		s.Namespaces = append(s.Namespaces, Namespace{Name: ns.Name, Phase: string(ns.Status.Phase), Created: ns.CreationTimestamp.Unix()})
 	}
 	sort.Slice(s.Namespaces, func(i, j int) bool { return s.Namespaces[i].Name < s.Namespaces[j].Name })
 
@@ -201,6 +205,7 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 			Available: d.Status.AvailableReplicas, Image: firstImage(d.Spec.Template.Spec),
 			GitOps: gitOpsOf(d.ObjectMeta), HPA: b.hpaFor("Deployment", d.Namespace, d.Name),
 			PDB: b.pdbFor(d.Namespace, d.Spec.Template.Labels), Paused: d.Spec.Paused, Revision: revisionOf(d.ObjectMeta),
+			Created: d.CreationTimestamp.Unix(),
 		})
 	}
 	sts, _ := b.stsLister.List(labels.Everything())
@@ -214,7 +219,7 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 			Desired: desired, Ready: d.Status.ReadyReplicas, Updated: d.Status.UpdatedReplicas,
 			Available: d.Status.AvailableReplicas, Image: firstImage(d.Spec.Template.Spec),
 			GitOps: gitOpsOf(d.ObjectMeta), HPA: b.hpaFor("StatefulSet", d.Namespace, d.Name),
-			PDB: b.pdbFor(d.Namespace, d.Spec.Template.Labels),
+			PDB: b.pdbFor(d.Namespace, d.Spec.Template.Labels), Created: d.CreationTimestamp.Unix(),
 		})
 	}
 	dss, _ := b.dsLister.List(labels.Everything())
@@ -223,7 +228,7 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 			Kind: "DaemonSet", Namespace: d.Namespace, Name: d.Name,
 			Desired: d.Status.DesiredNumberScheduled, Ready: d.Status.NumberReady,
 			Updated: d.Status.UpdatedNumberScheduled, Available: d.Status.NumberAvailable,
-			Image: firstImage(d.Spec.Template.Spec), GitOps: gitOpsOf(d.ObjectMeta),
+			Image: firstImage(d.Spec.Template.Spec), GitOps: gitOpsOf(d.ObjectMeta), Created: d.CreationTimestamp.Unix(),
 		})
 	}
 	sort.Slice(s.Workloads, func(i, j int) bool {
@@ -235,7 +240,7 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 	for _, sv := range svcs {
 		out := Service{
 			Namespace: sv.Namespace, Name: sv.Name, Type: string(sv.Spec.Type),
-			ClusterIP: sv.Spec.ClusterIP, Selector: sv.Spec.Selector, Pods: []string{},
+			ClusterIP: sv.Spec.ClusterIP, Selector: sv.Spec.Selector, Pods: []string{}, Created: sv.CreationTimestamp.Unix(),
 		}
 		for _, p := range sv.Spec.Ports {
 			out.Ports = append(out.Ports, fmt.Sprintf("%d/%s", p.Port, p.Protocol))
@@ -272,7 +277,7 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 	if b.ingLister != nil {
 		ings, _ := b.ingLister.List(labels.Everything())
 		for _, ing := range ings {
-			out := Ingress{Namespace: ing.Namespace, Name: ing.Name, Rules: []IngressRule{}}
+			out := Ingress{Namespace: ing.Namespace, Name: ing.Name, Rules: []IngressRule{}, Created: ing.CreationTimestamp.Unix()}
 			if ing.Spec.IngressClassName != nil {
 				out.Class = *ing.Spec.IngressClassName
 			}

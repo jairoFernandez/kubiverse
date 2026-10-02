@@ -11,6 +11,8 @@ extends Node3D
 
 signal level_changed(level: String)
 signal shake_requested(amount: float)
+## Things the cluster just created (seen live): [{text, kind, key, ns}].
+signal construction_started(items: Array)
 
 const SYSTEM_NS := ["kube-system", "kube-public", "kube-node-lease", "local-path-storage"]
 const LINE_GAP := 6.5
@@ -102,6 +104,17 @@ var _particles := []
 var _t := 0.0
 var _any_beam := false
 var _rim: Node3D
+# Building sites: what the cluster creates is built in front of you, what it
+# deletes is torn down. Births are tracked per "collection|key" across levels.
+const BUILD_WINDOW := 180.0   # seconds: younger than this still counts as new
+const MAX_SITES := 14
+const TRACKED := ["namespaces", "workloads", "services", "ingresses", "volumes", "configs", "pvs", "nodes"]
+var _born := {}        # "coll|key" -> unix time it was created (0 = old / unknown)
+var _known := {}       # "coll|key" in the last snapshot
+var _known_ctx := ""
+var _gone := {}        # "coll|key" deleted by the last snapshot
+var _clock_off := 0.0  # bridge clock - local clock
+var _sites := {}       # Entity -> Construction
 
 
 func _ready() -> void:
@@ -286,6 +299,10 @@ func set_level(l: String) -> void:
 
 func apply_state(s: Dictionary) -> void:
 	state = s
+	_track_births(s)
+	for e in _sites.keys():
+		if not is_instance_valid(e) or not is_instance_valid(_sites[e]) or _sites[e].done:
+			_sites.erase(e)
 	swim_level = level.begins_with("pod:")
 	if level == "plant":
 		_apply_plant(s)
@@ -497,10 +514,10 @@ func _apply_plant(s: Dictionary) -> void:
 			_entities.add_child(b)
 			buildings[ns] = b
 		b.setup(ns, per[ns])
+		_site(b, "namespaces", ns, true, _ns_working(s, ns))
 	for k in buildings.keys():
 		if not seen.has(k):
-			buildings[k].queue_free()
-			buildings.erase(k)
+			_drop(buildings, k, "namespaces")
 	# Districts: the cluster's own namespaces, your apps, platform tools and
 	# observability, each one a block of halls on a grid with streets. Your
 	# apps sit in the middle (x = 0), in front of the Internet gate.
@@ -713,6 +730,7 @@ func _apply_library(s: Dictionary) -> void:
 				pv_tanks[p.name] = bk
 			bk.update_data(p, use.get(str(p.get("claim", "")), -1.0))
 			bk.position = sh.slot(x + w * 0.5, board)
+			_site(bk, "pvs", p.name, true)
 			x += w
 	if extra > 0:
 		_yard_notes.append({"pos": Vector3(0, 3.0, fl.position.y + 1.0), "text": "+%d %s" % [extra, tr("more volumes (search them)")], "color": Vox.SILVER})
@@ -724,8 +742,7 @@ func _apply_library(s: Dictionary) -> void:
 			factories.erase(k)
 	for k in pv_tanks.keys():
 		if not bseen.has(k):
-			pv_tanks[k].queue_free()
-			pv_tanks.erase(k)
+			_drop(pv_tanks, k, "pvs")
 	# Requests on the desk: claims still Pending.
 	var vseen := {}
 	var waiting: Array = claims.filter(func(v): return str(v.get("status", "")) != "Bound")
@@ -741,10 +758,10 @@ func _apply_library(s: Dictionary) -> void:
 			volumes[vk] = lc
 		lc.update_data(v, str(v.get("class", "")) != "" and not str(v.get("class", "")) in class_names)
 		lc.position = Vector3(-2.4 + (i % 4) * 1.4, 1.12, 4.7 + floorf(i / 4.0) * 0.6)
+		_site(lc, "volumes", vk, true)
 	for k in volumes.keys():
 		if not vseen.has(k):
-			volumes[k].queue_free()
-			volumes.erase(k)
+			_drop(volumes, k, "volumes")
 	# Notebooks (ConfigMaps) on the reference tables, one table per namespace.
 	var cseen := {}
 	for c in cfgmaps:
@@ -767,12 +784,12 @@ func _apply_library(s: Dictionary) -> void:
 		nb.target = Vector3(fl.position.x + 2.0 + (j % 4) * 0.7, 0.92, fl.position.y + 2.6 + ti * 3.6 + floorf(j / 4.0) * 0.8)
 		if nb.position == Vector3.ZERO:
 			nb.position = nb.target
+		_site(nb, "configs", ck, true)
 		if j == 0:
 			_yard_notes.append({"pos": Vector3(fl.position.x + 3.0, 1.9, fl.position.y + 3.0 + ti * 3.6), "text": c.ns, "color": Vox.ns_color(c.ns)})
 	for k in configs.keys():
 		if not cseen.has(k):
-			configs[k].queue_free()
-			configs.erase(k)
+			_drop(configs, k, "configs")
 
 
 ## The BANK: secrets. A vault behind a round door with a tray per namespace
@@ -857,6 +874,7 @@ func _apply_bank(s: Dictionary) -> void:
 			pr.target = tp + Vector3(-1.2 + (j % 4) * 0.8, 0.96, -0.38 + floorf(j / 4.0) * 0.76)
 			if pr.position == Vector3.ZERO:
 				pr.position = pr.target
+			_site(pr, "configs", ck, true)
 	for j in mini(lost.size(), 8):
 		var c: Dictionary = lost[j]
 		var ck := "%s/%s/%s" % [c.kind, c.ns, c.name]
@@ -873,8 +891,7 @@ func _apply_bank(s: Dictionary) -> void:
 			pr.position = pr.target
 	for k in configs.keys():
 		if not cseen.has(k):
-			configs[k].queue_free()
-			configs.erase(k)
+			_drop(configs, k, "configs")
 
 
 ## Where the i-th of n trays sits: rows of up to four, centered in the vault
@@ -1473,11 +1490,11 @@ func _apply_hall(s: Dictionary, ns: String) -> void:
 		line.target = Vector3(0, 0, -i * LINE_GAP)
 		if line.position == Vector3.ZERO:
 			line.position = line.target
+		_site(line, "workloads", k, _workload_done(w))
 		max_len = maxf(max_len, line.length)
 	for k in lines.keys():
 		if not seen.has(k):
-			lines[k].queue_free()
-			lines.erase(k)
+			_drop(lines, k, "workloads")
 	var rows: int = wls.size() + (1 if loose.size() > 0 else 0)
 	var loose_z: float = -wls.size() * LINE_GAP
 	# The workshop row: pods of Jobs, Workflows, bare pods... explained by a sign.
@@ -1509,10 +1526,10 @@ func _apply_hall(s: Dictionary, ns: String) -> void:
 		dk.target = Vector3(dock_x, 0, 1.0 - i * DOCK_GAP)
 		if dk.position == Vector3.ZERO:
 			dk.position = dk.target
+		_site(dk, "services", k, true)
 	for k in services.keys():
 		if not seen.has(k):
-			services[k].queue_free()
-			services.erase(k)
+			_drop(services, k, "services")
 	var pseen := {}
 	for k in owned:
 		var list: Array = owned[k]
@@ -1649,10 +1666,10 @@ func _apply_power(s: Dictionary) -> void:
 		isl.update_data(n, per_node.get(n.name, 0))
 		var r: Array = req.get(n.name, [0.0, 0.0])
 		isl.set_usage(r[0], r[1])
+		_site(isl, "nodes", n.name, bool(n.get("ready", true)))
 	for k in islands.keys():
 		if not seen.has(k):
-			islands[k].queue_free()
-			islands.erase(k)
+			_drop(islands, k, "nodes")
 	var names := islands.keys()
 	names.sort()
 	# The control-plane is the centre of the room (where you arrive); the
@@ -1984,6 +2001,179 @@ func collect_coins(p: Vector3) -> int:
 			poof(node.global_position, Vox.YELLOW)
 			got += 1
 	return got
+
+
+# ---------------------------------------------------------- building sites
+
+func _item_key(coll: String, it: Dictionary) -> String:
+	match coll:
+		"namespaces", "pvs", "nodes": return str(it.get("name", ""))
+		"workloads": return "%s/%s/%s" % [it.get("ns", ""), it.get("kind", ""), it.get("name", "")]
+		"configs": return "%s/%s/%s" % [it.get("kind", ""), it.get("ns", ""), it.get("name", "")]
+	return "%s/%s" % [it.get("ns", ""), it.get("name", "")]
+
+
+func _now() -> float:
+	return Time.get_unix_time_from_system() + _clock_off
+
+
+## Remembers when each thing appeared, and what the last snapshot deleted.
+## The first snapshot of a cluster only learns what is there: things are
+## new only by their age ("created" from the bridge) or, for bridges and the
+## demo without it, by appearing later while you watch.
+func _track_births(s: Dictionary) -> void:
+	var now := float(s.get("time", Time.get_unix_time_from_system()))
+	_clock_off = now - Time.get_unix_time_from_system()
+	var ctx := str(s.get("context", "")) + "@" + str(s.get("server", ""))
+	var first := _known.is_empty() or ctx != _known_ctx
+	if ctx != _known_ctx:
+		_born.clear()
+		_known.clear()
+	_known_ctx = ctx
+	var cur := {}
+	var fresh := []
+	for coll in TRACKED:
+		var list = s.get(coll)
+		if list == null:
+			continue
+		for it in list:
+			var k: String = coll + "|" + _item_key(coll, it)
+			cur[k] = true
+			if _born.has(k):
+				continue
+			var born := 0.0
+			if float(it.get("created", 0)) > 0.0:
+				born = float(it.created)
+			elif coll in ["volumes", "pvs", "nodes", "configs"] and float(it.get("age", 0)) > 0.0:
+				born = now - float(it.age)
+			elif not first:
+				born = now
+			_born[k] = born
+			if not first and born > 0.0 and now - born < BUILD_WINDOW:
+				fresh.append([coll, it])
+	_gone = {}
+	if not first:
+		for k in _known:
+			if not cur.has(k):
+				_gone[k] = true
+				_born.erase(k)
+	_known = cur
+	_announce(fresh)
+
+
+## Seconds since it was created, or -1 when it isn't new.
+func young(coll: String, key: String) -> float:
+	var born: float = _born.get(coll + "|" + key, 0.0)
+	if born <= 0.0:
+		return -1.0
+	var age := maxf(0.0, _now() - born)
+	return age if age < BUILD_WINDOW else -1.0
+
+
+func _workload_done(w: Dictionary) -> bool:
+	return int(w.get("ready", 0)) >= int(w.get("desired", 0))
+
+
+## A namespace is "working" while something new in it is still being built.
+func _ns_working(s: Dictionary, ns: String) -> bool:
+	for w in s.workloads:
+		if w.ns == ns and not _workload_done(w) and young("workloads", _item_key("workloads", w)) >= 0.0:
+			return true
+	return false
+
+
+## Opens (or updates) the building site of a new thing. finished: false keeps
+## it open after rising (pods not ready yet...). work_inside: an old thing
+## with new work in it gets a site too, without rising from the ground.
+func _site(e: Entity, coll: String, key: String, finished: bool, work_inside := false) -> void:
+	var c: Construction = _sites.get(e)
+	if c != null and is_instance_valid(c) and not c.done:
+		c.hold = not finished or work_inside
+		return
+	var age := young(coll, key)
+	var rises := age >= 0.0
+	if not rises and not work_inside:
+		return
+	if rises and finished and not work_inside and age >= Construction.DUR:
+		return
+	if _sites.size() >= MAX_SITES:
+		return
+	c = Construction.new()
+	_fx_root.add_child(c)
+	c.setup(e, self, maxf(age, 0.0), rises)
+	c.hold = not finished or work_inside
+	_sites[e] = c
+
+
+func sites() -> Array:
+	return _sites.values().filter(func(c): return is_instance_valid(c) and not c.done)
+
+
+## Removes an entity from its dictionary: torn down when the cluster deleted
+## it, simply dropped when it only left this view (filters, levels).
+func _drop(dict: Dictionary, k: String, coll: String) -> void:
+	var e: Entity = dict[k]
+	dict.erase(k)
+	if _gone.has(coll + "|" + k) and is_inside_tree():
+		_demolish(e)
+	else:
+		e.queue_free()
+
+
+## The cluster deleted it: it collapses into a heap of voxels and dust.
+func _demolish(e: Entity) -> void:
+	if selected == e:
+		selected = null
+	if hovered == e:
+		hovered = null
+	var c: Construction = _sites.get(e)
+	if c and is_instance_valid(c):
+		c.queue_free()
+	_sites.erase(e)
+	var bb := e.build_box()
+	e.reparent(_fx_root, true)
+	var col := e.label_color()
+	var big := bb.size.x * bb.size.z > 6.0
+	var n := 18 if big else 8
+	for i in n:
+		var lp := Vector3(randf_range(bb.position.x, bb.end.x), randf_range(0.2, bb.end.y), randf_range(bb.position.z, bb.end.z))
+		var sz := randf_range(0.25, 0.55) if big else randf_range(0.1, 0.2)
+		var m := Vox.box(_fx_root, Vector3.ONE * sz, e.to_global(lp), col if i % 3 else Vox.SLATE, 0.0, big)
+		var out := Vector3(randf_range(-1, 1), 0, randf_range(-1, 1)).normalized()
+		_particles.append({"m": m, "v": out * randf_range(1.0, 3.0) + Vector3(0, randf_range(1.5, 4.0), 0),
+			"life": randf_range(1.2, 2.0), "g": 14.0, "floor": e.global_position.y, "spin": Vector3(randf(), randf(), randf()) * 6.0})
+	for i in (8 if big else 3):
+		smoke(e.to_global(Vector3(randf_range(bb.position.x, bb.end.x), 0.4, randf_range(bb.position.z, bb.end.z))), Color("8a7f74"))
+	sfx("pod_death" if not big else "explosion", e.global_position)
+	if big:
+		shake_requested.emit(0.25)
+	var tw := create_tween()
+	tw.tween_property(e, "scale", Vector3(1.04, 0.02, 1.04), 1.0 if big else 0.5).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_callback(e.queue_free)
+
+
+## Tells the HUD what the cluster just created (live, in visible namespaces).
+func _announce(fresh: Array) -> void:
+	var items := []
+	for f in fresh:
+		var coll: String = f[0]
+		var it: Dictionary = f[1]
+		if coll in ["configs", "pvs"]:
+			continue
+		var ns := str(it.get("ns", it.get("name", "") if coll == "namespaces" else ""))
+		if ns != "" and not ns_visible(ns):
+			continue
+		var what: String = {"namespaces": "namespace", "workloads": str(it.get("kind", "")).to_lower(), "services": "service",
+			"ingresses": "ingress", "volumes": "volume claim", "nodes": "node"}[coll]
+		var kind: String = {"namespaces": "namespace", "workloads": "workload", "services": "service", "ingresses": "namespace",
+			"volumes": "volume", "nodes": "node"}[coll]
+		var key := _item_key(coll, it)
+		if coll == "ingresses":
+			key = ns
+		var name := str(it.get("name", ""))
+		items.append({"text": "%s %s" % [what, name if coll in ["namespaces", "nodes"] else ns + "/" + name], "kind": kind, "key": key, "ns": ns})
+	if not items.is_empty():
+		construction_started.emit(items)
 
 
 # -------------------------------------------------------------------- fx
@@ -2430,6 +2620,8 @@ func labels(player_pos: Vector3) -> Array:
 			out.append({"pos": n.pos, "text": n.text, "sub": "", "color": n.color, "big": false, "small": true})
 	for f in _floaters:
 		out.append({"pos": f.pos, "text": f.text, "sub": "", "color": f.color, "big": false, "small": true})
+	for c in sites():
+		out.append({"pos": c.sign_pos(), "text": c.sign_text(), "sub": "", "color": Vox.ORANGE, "big": false, "small": true})
 	if engine_hall and is_instance_valid(engine_hall):
 		out.append({"pos": engine_hall.anchor(), "text": engine_hall.label_text(), "sub": _hint(engine_hall, engine_hall.label_sub()), "color": engine_hall.label_color(), "big": true, "entity": engine_hall})
 	for m in machines.values():

@@ -52,6 +52,10 @@ func anchor() -> Vector3:
 	return global_position + Vector3(0, 2.6, 0)
 
 
+func build_box() -> AABB:
+	return AABB(Vector3(-1.0, 0, -1.2), Vector3(2.0, 2.4, 2.4))
+
+
 func beam_origin() -> Vector3:
 	return global_position + Vector3(0, 2.15, 0)
 

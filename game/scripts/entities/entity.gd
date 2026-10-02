@@ -38,3 +38,8 @@ func contains_xz(_p: Vector3) -> bool:
 
 func pick_radius() -> float:
 	return 22.0
+
+
+## Local box (base at y = 0) a building site wraps when this thing is new.
+func build_box() -> AABB:
+	return AABB(Vector3(-0.8, 0, -0.8), Vector3(1.6, 1.8, 1.6))

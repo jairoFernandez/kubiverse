@@ -116,6 +116,10 @@ func contains_xz(p: Vector3) -> bool:
 	return absf(l.x) <= w * 0.5 and absf(l.z) <= d * 0.5
 
 
+func build_box() -> AABB:
+	return AABB(Vector3(-w * 0.5, 0, -d * 0.5), Vector3(w, h + 1.0, d))
+
+
 func footprint() -> Rect2:
 	return Rect2(target.x - w * 0.5, target.z - d * 0.5, w, d)
 

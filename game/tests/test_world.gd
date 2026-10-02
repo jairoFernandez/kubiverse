@@ -144,6 +144,29 @@ func _init() -> void:
 	var line: ProductionLine = world.lines.values()[0]
 	if world.can_stand(line.target + Vector3(4, 0, 0)):
 		print("FAIL: can walk through a conveyor"); fails += 1
+	# Building sites: what appears while you watch is built, an old thing
+	# isn't, and what the cluster deletes is torn down (not just dropped).
+	world.set_level("ns:shop")
+	var grown: Dictionary = st.duplicate(true)
+	grown.workloads.append({"kind": "Deployment", "ns": "shop", "name": "brand-new", "desired": 2, "ready": 0, "updated": 0, "available": 0, "image": "x"})
+	world.apply_state(grown)
+	var fresh: ProductionLine = world.lines.get("shop/Deployment/brand-new")
+	if fresh == null or world.sites().size() != 1 or world._sites.get(fresh) == null:
+		print("FAIL sites: the new deployment has no building site (%d sites)" % world.sites().size()); fails += 1
+	elif not world._sites[fresh].hold:
+		print("FAIL sites: pods not ready, the site should stay open"); fails += 1
+	grown.workloads[-1].ready = 2
+	world.apply_state(grown)
+	if world.sites().size() == 1 and world._sites.get(fresh).hold:
+		print("FAIL sites: ready, the site should close"); fails += 1
+	grown.workloads.pop_back()
+	world.apply_state(grown)
+	if world.lines.has("shop/Deployment/brand-new") or not is_instance_valid(fresh) or fresh.get_parent() == world._entities:
+		print("FAIL sites: a deleted deployment should be demolished"); fails += 1
+	world.apply_state(st)
+	world.set_level("plant")
+	if not world.sites().is_empty():
+		print("FAIL sites: old halls got building sites"); fails += 1
 	# Energy room, easy mode (default): every surface touches another one
 	# whose height is within a normal step, i.e. you can WALK everywhere.
 	world.challenge = false

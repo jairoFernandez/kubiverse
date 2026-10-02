@@ -58,6 +58,10 @@ func anchor() -> Vector3:
 	return global_position + Vector3(0.6, 3.0, 0)
 
 
+func build_box() -> AABB:
+	return AABB(Vector3(-0.6, 0, -1.1), Vector3(length + 0.8, 2.6, 2.2))
+
+
 ## Solid parts the player cannot walk through (x, z, w, d in world space).
 func blockers() -> Array[Rect2]:
 	return [Rect2(target.x - 0.4, target.z - 1.0, 2.2, 2.0), Rect2(target.x + 1.8, target.z - 0.6, length - 1.8, 1.2)]

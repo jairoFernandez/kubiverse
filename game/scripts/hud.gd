@@ -21,7 +21,11 @@ const BG := Color(0.043, 0.051, 0.102, 0.92)
 const PANEL := Color(0.114, 0.169, 0.325, 0.96)
 const INK := Color("0b0d1a")
 
-var world: World
+var world: World:
+	set(v):
+		world = v
+		if v and not v.construction_started.is_connected(_on_construction):
+			v.construction_started.connect(_on_construction)
 var missions: Missions
 var chaos := false
 
@@ -2820,6 +2824,18 @@ func _on_state(s: Dictionary) -> void:
 	_stats_label.custom_minimum_size.x = maxf(60.0, _stats_label.get_content_width() + 4.0)
 
 
+## The cluster created something while you watch: a line in the terminal
+## (click it to go there) and a toast.
+func _on_construction(items: Array) -> void:
+	for it in items:
+		_term_text.append_text("[color=#ffa300]  %s %s[/color]  [url=goto:%s|%s|%s][color=#29adff]%s[/color][/url]\n" % [
+			tr("NEW, being built:"), _esc(str(it.text)), it.kind, it.key, it.ns, tr("GO SEE")])
+	if items.size() == 1:
+		toast(tr("Being built: %s") % items[0].text)
+	else:
+		toast(tr("%d new things being built (see the terminal)") % items.size())
+
+
 func add_event(ev: Dictionary) -> void:
 	var warn: bool = ev.get("etype", "") == "Warning"
 	_term_text.append_text("[color=%s]  %s %s %s/%s: %s[/color]\n" % ["#ff4d6d" if warn else "#6f7690", tr("event"), ev.get("reason", ""),
@@ -3166,6 +3182,11 @@ func _term_port_forward(line: String) -> void:
 
 ## "-> Kubi" link in the terminal: attach that output to Kubi's chat.
 func _term_meta(m: String) -> void:
+	if m.begins_with("goto:"):
+		var g := m.substr(5).split("|")
+		if g.size() == 3:
+			goto_requested.emit(g[0], g[1], g[2])
+		return
 	if not m.begins_with("kubi:"):
 		_term_fill(m)
 		return

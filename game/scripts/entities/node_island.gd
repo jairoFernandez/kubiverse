@@ -67,6 +67,10 @@ func is_area() -> bool:
 	return true
 
 
+func build_box() -> AABB:
+	return AABB(Vector3(-size * 0.5, 0, -size * 0.5), Vector3(size, 1.8, size))
+
+
 func contains_xz(p: Vector3) -> bool:
 	var l := p - global_position
 	return absf(l.x) <= size * 0.5 and absf(l.z) <= size * 0.5
