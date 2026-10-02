@@ -15,6 +15,7 @@ var services := {}   # "ns/name" -> {ns, name, type, cluster_ip, ports, app}
 var namespaces := ["default", "kube-system", "shop", "payments", "monitoring", "ml", "data"]
 
 var _clock := 0.0
+var _git_phase := ""   # GitOps demo: changes when a sync starts or ends
 var _tick := 0.0
 var _dirty := true
 var _ip := 10
@@ -182,6 +183,10 @@ func _process(delta: float) -> void:
 	if _tick >= 0.25:
 		_reconcile(_tick)
 		_tick = 0.0
+	var gp := "%d|%s" % [int(_clock / 45.0), fmod(_clock, 45.0) < 6.0]
+	if gp != _git_phase:
+		_git_phase = gp
+		_dirty = true
 	if _dirty:
 		_emit()
 	_watch_t -= delta
@@ -1128,11 +1133,21 @@ func _resources(s: Dictionary) -> void:
 	for n in s.nodes:
 		n["taints"] = ["nvidia.com/gpu=present:NoSchedule"] if n.name == "gpu-1" else (["node-role.kubernetes.io/control-plane:NoSchedule"] if n.name == "control-plane" else [])
 		n["conditions"] = ["DiskPressure"] if n.name == "worker-c" and fmod(Time.get_unix_time_from_system(), 600.0) < 240.0 else []
+	# GitOps: a new commit lands every 45 s on the shop app (the cargo drone
+	# brings it), the payments app is broken, Flux runs the data and ml halls.
+	var cycle := int(_clock / 45.0)
+	var syncing := cycle > 0 and fmod(_clock, 45.0) < 6.0
 	s["apps"] = [
-		{"ns": "argocd", "name": "shop", "project": "default", "repo": "https://github.com/acme/platform.git", "path": "apps/shop", "revision": "a1b2c3d4e5", "dest_ns": "shop",
-			"sync": "Synced", "health": "Healthy", "auto_sync": true, "self_heal": true},
-		{"ns": "argocd", "name": "payments", "project": "default", "repo": "https://github.com/acme/platform.git", "path": "apps/payments", "revision": "f00dbabe12", "dest_ns": "payments",
-			"sync": "OutOfSync", "health": "Degraded", "auto_sync": false, "self_heal": false, "message": "Deployment ledger: 0/2 replicas available"},
+		{"tool": "argocd", "kind": "Application", "ns": "argocd", "name": "shop", "project": "default", "repo": "https://github.com/acme/platform.git", "path": "apps/shop",
+			"revision": ("%x" % hash("shop%d" % cycle)).left(10), "dest_ns": "shop", "resources": 9,
+			"sync": "OutOfSync" if syncing else "Synced", "health": "Progressing" if syncing else "Healthy", "operation": "Running" if syncing else "Succeeded",
+			"auto_sync": true, "self_heal": true},
+		{"tool": "argocd", "kind": "Application", "ns": "argocd", "name": "payments", "project": "default", "repo": "https://github.com/acme/platform.git", "path": "apps/payments", "revision": "f00dbabe12", "dest_ns": "payments",
+			"sync": "OutOfSync", "health": "Degraded", "auto_sync": false, "self_heal": false, "message": "Deployment ledger: 0/2 replicas available", "resources": 6},
+		{"tool": "flux", "kind": "HelmRelease", "ns": "data", "name": "postgres", "repo": "https://charts.bitnami.com/bitnami", "path": "postgresql", "revision": "15.5.2", "dest_ns": "data",
+			"sync": "Synced", "health": "Healthy", "operation": "Succeeded", "auto_sync": true, "self_heal": true},
+		{"tool": "flux", "kind": "Kustomization", "ns": "flux-system", "name": "ml", "repo": "https://github.com/acme/ml-platform", "path": "./clusters/prod/ml", "revision": "main@9d8e7f6",
+			"dest_ns": "ml", "sync": "Synced", "health": "Healthy", "operation": "Succeeded", "auto_sync": true, "self_heal": true, "resources": 5},
 	]
 	s["certs"] = [
 		{"ns": "shop", "name": "shop-tls", "secret": "shop-tls", "dns": ["shop.example.com"], "issuer": "ClusterIssuer/letsencrypt", "ready": true, "expires_in": 60 * 86400},

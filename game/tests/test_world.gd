@@ -86,7 +86,8 @@ func _init() -> void:
 		"certs": [{"ns": "shop", "name": "shop-tls", "dns": ["shop.example.com"], "ready": true}]}
 	var hv: Dictionary = ClusterSearch.find(rs, "datasets")[0]
 	assert(hv.kind == "volume" and hv.key == "ml/datasets" and hv.bad, str(hv))
-	assert(ClusterSearch.find(rs, "kind:app")[0].key == "payments", "app -> its namespace")
+	var hit_app: Dictionary = ClusterSearch.find(rs, "kind:app")[0]
+	assert(hit_app.kind == "app" and hit_app.key == "argocd/payments" and hit_app.ns == "payments", "app -> its dock, by its namespace")
 	assert(ClusterSearch.find(rs, "shop.example.com")[0].kind == "namespace", "cert -> namespace")
 	# Secrets and PVs are searchable; a missing Secret is "bad".
 	var cs2 := {"configs": [{"kind": "Secret", "ns": "payments", "name": "stripe-key", "exists": "no", "pods": ["fraud-1"], "keys": []}],
@@ -167,6 +168,23 @@ func _init() -> void:
 	world.set_level("plant")
 	if not world.sites().is_empty():
 		print("FAIL sites: old halls got building sites"); fails += 1
+	# GitOps docks: one per app in front of its hall; a new revision from git
+	# is announced (and flown in by the cargo drone).
+	world.set_level("plant")
+	var apps: Array = st.get("apps", [])
+	if apps.is_empty() or world.docks.size() != apps.filter(func(ap): return world.buildings.has(ap.dest_ns)).size():
+		print("FAIL docks: %d docks for %d apps" % [world.docks.size(), apps.size()]); fails += 1
+	var dock: GitOpsDock = world.find_entity("app", "argocd/shop")
+	if dock == null or dock.global_position.distance_to(world.buildings["shop"].target) > 14.0:
+		print("FAIL docks: the shop app is not in front of the shop hall"); fails += 1
+	var got := []
+	world.gitops_delivery.connect(func(it): got.append(it))
+	var bumped: Dictionary = st.duplicate(true)
+	bumped.apps[0].revision = "c0ffee1234"
+	world.apply_state(bumped)
+	if got.size() != 1 or got[0].key != "argocd/shop":
+		print("FAIL docks: a new revision should be announced once, got %s" % str(got)); fails += 1
+	world.apply_state(st)
 	# Energy room, easy mode (default): every surface touches another one
 	# whose height is within a normal step, i.e. you can WALK everywhere.
 	world.challenge = false

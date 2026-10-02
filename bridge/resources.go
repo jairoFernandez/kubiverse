@@ -77,8 +77,12 @@ type QuotaItem struct {
 	Pct      float64 `json:"pct"`
 }
 
-// ArgoApp: an Argo CD Application.
+// ArgoApp: a GitOps app, an Argo CD Application or a Flux Kustomization /
+// HelmRelease (the same shape: where it comes from, where it goes, whether
+// the cluster matches git and is healthy).
 type ArgoApp struct {
+	Tool      string `json:"tool"` // argocd | flux
+	Kind      string `json:"kind"` // Application | Kustomization | HelmRelease
 	Namespace string `json:"ns"`
 	Name      string `json:"name"`
 	Project   string `json:"project"`
@@ -92,6 +96,8 @@ type ArgoApp struct {
 	Message   string `json:"message,omitempty"`
 	AutoSync  bool   `json:"auto_sync"`
 	SelfHeal  bool   `json:"self_heal"`
+	Resources int    `json:"resources,omitempty"` // objects it manages
+	Created   int64  `json:"created,omitempty"`   // unix seconds
 }
 
 // Cert: a cert-manager Certificate.
@@ -120,7 +126,23 @@ var (
 	gvrCerts    = schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "certificates"}
 	gvrRoutes   = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
 	gvrGateways = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
+	// Flux: the first version the cluster serves (newest first).
+	fluxGVRs = map[string][]schema.GroupVersionResource{
+		"fluxks":    fluxVersions("kustomize.toolkit.fluxcd.io", "kustomizations", "v1", "v1beta2"),
+		"fluxhr":    fluxVersions("helm.toolkit.fluxcd.io", "helmreleases", "v2", "v2beta2", "v2beta1"),
+		"gitrepos":  fluxVersions("source.toolkit.fluxcd.io", "gitrepositories", "v1", "v1beta2"),
+		"helmrepos": fluxVersions("source.toolkit.fluxcd.io", "helmrepositories", "v1", "v1beta2"),
+		"ocirepos":  fluxVersions("source.toolkit.fluxcd.io", "ocirepositories", "v1", "v1beta2"),
+	}
 )
+
+func fluxVersions(group, res string, versions ...string) []schema.GroupVersionResource {
+	out := make([]schema.GroupVersionResource, 0, len(versions))
+	for _, v := range versions {
+		out = append(out, schema.GroupVersionResource{Group: group, Version: v, Resource: res})
+	}
+	return out
+}
 
 // addResources probes what may be listed and registers its informers.
 func (b *Bridge) addResources(ctx context.Context, f informers.SharedInformerFactory, cs kubernetes.Interface, cfg *rest.Config, onChange cache.ResourceEventHandler) {
@@ -162,6 +184,17 @@ func (b *Bridge) addResources(ctx context.Context, f informers.SharedInformerFac
 		gi := df.ForResource(gvr)
 		add(gi.Informer())
 		b.res.dyn[key] = gi.Lister()
+	}
+	for key, gvrs := range fluxGVRs {
+		for _, gvr := range gvrs {
+			if _, err := dc.Resource(gvr).List(probe, one); err != nil {
+				continue
+			}
+			gi := df.ForResource(gvr)
+			add(gi.Informer())
+			b.res.dyn[key] = gi.Lister()
+			break
+		}
 	}
 	df.Start(ctx.Done())
 }
@@ -294,7 +327,7 @@ func (b *Bridge) fillResources(s *Snapshot, pods []*corev1.Pod, now time.Time) {
 			}
 		}
 	}
-	s.Apps = b.argoApps()
+	s.Apps = append(b.argoApps(), b.fluxApps()...)
 	s.Certs = b.certs(now)
 	s.Ingresses = append(s.Ingresses, b.gatewayRoutes()...)
 }
@@ -420,7 +453,7 @@ func summarizeLimits(lr *corev1.LimitRange) []string {
 func (b *Bridge) argoApps() []ArgoApp {
 	out := []ArgoApp{}
 	for _, u := range b.dynList("apps") {
-		a := ArgoApp{Namespace: u.GetNamespace(), Name: u.GetName()}
+		a := ArgoApp{Tool: "argocd", Kind: "Application", Namespace: u.GetNamespace(), Name: u.GetName(), Created: u.GetCreationTimestamp().Unix()}
 		a.Project, _, _ = unstructured.NestedString(u.Object, "spec", "project")
 		a.DestNS, _, _ = unstructured.NestedString(u.Object, "spec", "destination", "namespace")
 		a.Repo, _, _ = unstructured.NestedString(u.Object, "spec", "source", "repoURL")
@@ -447,10 +480,142 @@ func (b *Bridge) argoApps() []ArgoApp {
 		if len(a.Revision) > 10 {
 			a.Revision = a.Revision[:10]
 		}
+		if res, ok, _ := unstructured.NestedSlice(u.Object, "status", "resources"); ok {
+			a.Resources = len(res)
+		}
 		out = append(out, a)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Namespace+"/"+out[i].Name < out[j].Namespace+"/"+out[j].Name })
 	return out
+}
+
+// fluxApps: Flux Kustomizations and HelmReleases, with the URL of the
+// source (GitRepository, HelmRepository, OCIRepository) they come from.
+func (b *Bridge) fluxApps() []ArgoApp {
+	out := []ArgoApp{}
+	src := map[string]string{} // "Kind/ns/name" -> url
+	for key, kind := range map[string]string{"gitrepos": "GitRepository", "helmrepos": "HelmRepository", "ocirepos": "OCIRepository"} {
+		for _, u := range b.dynList(key) {
+			url, _, _ := unstructured.NestedString(u.Object, "spec", "url")
+			src[kind+"/"+u.GetNamespace()+"/"+u.GetName()] = url
+		}
+	}
+	for key, kind := range map[string]string{"fluxks": "Kustomization", "fluxhr": "HelmRelease"} {
+		for _, u := range b.dynList(key) {
+			out = append(out, fluxApp(u, kind, src))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Namespace+"/"+out[i].Name < out[j].Namespace+"/"+out[j].Name })
+	return out
+}
+
+func fluxApp(u *unstructured.Unstructured, kind string, src map[string]string) ArgoApp {
+	o := u.Object
+	a := ArgoApp{Tool: "flux", Kind: kind, Namespace: u.GetNamespace(), Name: u.GetName(), Created: u.GetCreationTimestamp().Unix(), AutoSync: true}
+	a.DestNS, _, _ = unstructured.NestedString(o, "spec", "targetNamespace")
+	var ref map[string]any
+	if kind == "Kustomization" {
+		ref, _, _ = unstructured.NestedMap(o, "spec", "sourceRef")
+		a.Path, _, _ = unstructured.NestedString(o, "spec", "path")
+		a.SelfHeal = true // Flux applies git again on every reconcile
+		if inv, ok, _ := unstructured.NestedSlice(o, "status", "inventory", "entries"); ok {
+			a.Resources = len(inv)
+		}
+	} else {
+		ref, _, _ = unstructured.NestedMap(o, "spec", "chart", "spec", "sourceRef")
+		if ref == nil {
+			ref, _, _ = unstructured.NestedMap(o, "spec", "chartRef")
+		}
+		a.Path, _, _ = unstructured.NestedString(o, "spec", "chart", "spec", "chart")
+		mode, _, _ := unstructured.NestedString(o, "spec", "driftDetection", "mode")
+		a.SelfHeal = mode == "enabled"
+		if a.DestNS == "" {
+			a.DestNS = a.Namespace // a release lives in its own namespace
+		}
+	}
+	if ref != nil {
+		rk, _ := ref["kind"].(string)
+		rn, _ := ref["name"].(string)
+		rns, _ := ref["namespace"].(string)
+		if rns == "" {
+			rns = a.Namespace
+		}
+		a.Repo = src[rk+"/"+rns+"/"+rn]
+		if a.Repo == "" {
+			a.Repo = rk + "/" + rn
+		}
+	}
+	applied, _, _ := unstructured.NestedString(o, "status", "lastAppliedRevision")
+	attempted, _, _ := unstructured.NestedString(o, "status", "lastAttemptedRevision")
+	if applied == "" { // HelmRelease v2: the installed chart version is in its history
+		if hist, ok, _ := unstructured.NestedSlice(o, "status", "history"); ok && len(hist) > 0 {
+			if h, ok := hist[0].(map[string]any); ok {
+				applied, _ = h["chartVersion"].(string)
+			}
+		}
+	}
+	a.Sync = "Synced"
+	if attempted != "" && applied != "" && attempted != applied {
+		a.Sync = "OutOfSync"
+	}
+	a.Revision = shortRevision(applied)
+	if a.Revision == "" {
+		a.Revision = shortRevision(attempted)
+	}
+	ready, reason, msg := "", "", ""
+	reconciling := false
+	conds, _, _ := unstructured.NestedSlice(o, "status", "conditions")
+	for _, x := range conds {
+		m, _ := x.(map[string]any)
+		switch m["type"] {
+		case "Ready":
+			ready, _ = m["status"].(string)
+			reason, _ = m["reason"].(string)
+			msg, _ = m["message"].(string)
+		case "Reconciling":
+			reconciling = m["status"] == "True"
+		}
+	}
+	switch {
+	case ready == "True":
+		a.Health, a.Operation = "Healthy", "Succeeded"
+	case ready == "False" && (reason == "Progressing" || reason == "DependencyNotReady"):
+		a.Health, a.Operation = "Progressing", "Running"
+	case ready == "False":
+		a.Health, a.Operation = "Degraded", "Failed"
+	default:
+		a.Health, a.Operation = "Progressing", "Running"
+	}
+	if reconciling {
+		a.Operation = "Running"
+	}
+	if suspended, _, _ := unstructured.NestedBool(o, "spec", "suspend"); suspended {
+		a.Health, a.AutoSync, a.SelfHeal = "Suspended", false, false
+	}
+	if ready != "True" {
+		a.Message = redact(msg)
+	}
+	return a
+}
+
+// shortRevision: "main@sha1:4f1c2e9a..." -> "main@4f1c2e9", a chart
+// version or a short id stays as it is.
+func shortRevision(r string) string {
+	if i := strings.Index(r, ":"); i >= 0 && strings.Contains(r[:i], "sha") {
+		branch := ""
+		if j := strings.LastIndex(r[:i], "@"); j >= 0 {
+			branch = r[:j+1]
+		}
+		h := r[i+1:]
+		if len(h) > 7 {
+			h = h[:7]
+		}
+		return branch + h
+	}
+	if len(r) > 16 {
+		return r[:16]
+	}
+	return r
 }
 
 func (b *Bridge) certs(now time.Time) []Cert {

@@ -26,6 +26,7 @@ var world: World:
 		world = v
 		if v and not v.construction_started.is_connected(_on_construction):
 			v.construction_started.connect(_on_construction)
+			v.gitops_delivery.connect(_on_delivery)
 var missions: Missions
 var chaos := false
 
@@ -1594,7 +1595,7 @@ func _compute_alarms(s: Dictionary) -> Array:
 					a.merge({"kind": "namespace", "key": d.ns, "ns": d.ns})
 				"app":
 					var dn := str(d.get("dest_ns", "")) if str(d.get("dest_ns", "")) != "" else str(d.ns)
-					a.merge({"kind": "namespace", "key": dn, "ns": dn})
+					a.merge({"kind": "app", "key": "%s/%s" % [d.ns, d.name], "ns": dn})
 				"cert":
 					a.merge({"kind": "namespace", "key": d.ns, "ns": d.ns})
 				_:
@@ -1612,7 +1613,7 @@ func _compute_alarms(s: Dictionary) -> Array:
 					"cfgmissing": a.text = tr("%s %s/%s is MISSING: %d pods can't start") % [str(d.kind).to_lower(), d.ns, d.name, (d.get("pods", []) as Array).size()]
 					"pvc": a.text = tr("%s/%s  volume %s (class %s)") % [d.ns, d.name, d.status, d.get("class", "")]
 					"quota": a.text = tr("%s: quota %s at %d%% (%s of %s)") % [d.ns, d.q.resource, int(d.q.pct), d.q.used, d.q.hard]
-					"app": a.text = tr("Argo CD app %s: %s, %s") % [d.name, d.get("sync", "?"), d.get("health", "?")]
+					"app": a.text = tr("%s %s: %s, %s") % [GitOpsDock.what(d), d.name, d.get("sync", "?"), d.get("health", "?")]
 					"cert": a.text = (tr("certificate %s/%s not ready: %s") % [d.ns, d.name, d.get("message", "")]) if not d.get("ready", false) else tr("certificate %s/%s expires in %s") % [d.ns, d.name, _age(d.get("expires_in", 0))]
 					"alert": a.text = "ALERT %s: %s" % [d.name, d.get("summary", "") if str(d.get("summary", "")) != "" else "%s/%s" % [d.get("ns", ""), d.get("pod", "")]]
 			out.append(a)
@@ -1667,10 +1668,12 @@ func _resource_lines(kind: String, d: Dictionary) -> Array:
 			out.append(_kv("network", tr("policies: %s") % ", ".join(nps) if not nps.is_empty() else "[color=#83769c]%s[/color]" % tr("no NetworkPolicy selects it: all traffic allowed")))
 		"workload":
 			var g = d.get("gitops")
-			if g != null and g.tool == "argocd":
+			if g != null and g.tool in ["argocd", "flux"]:
 				for ap in st.get("apps", []):
-					if ap.name == g.name:
-						out.append(_kv("argo cd", _app_status(ap)))
+					# Flux names its owner "Kustomization ns/name" (see the bridge's gitOpsOf).
+					if (g.tool == "argocd" and ap.get("tool", "argocd") == "argocd" and ap.name == g.name) or \
+							(g.tool == "flux" and "%s %s/%s" % [ap.get("kind", ""), ap.ns, ap.name] == g.name):
+						out.append(_kv("argo cd" if g.tool == "argocd" else "flux", _app_status(ap)))
 		"namespace":
 			var ns := str(d.get("name", ""))
 			if ns == "" or (is_instance_valid(_insp_target) and _insp_target is FactoryBuilding and _insp_target.is_power):
@@ -1701,7 +1704,7 @@ func _resource_lines(kind: String, d: Dictionary) -> Array:
 				out.append(_kv("storage", ", ".join(vols.map(func(v): return "%s %s (%s)" % [v.name, v.get("capacity", v.get("request", "")), v.status]))))
 			for ap in st.get("apps", []):
 				if str(ap.get("dest_ns", "")) == ns:
-					out.append(_kv("argo cd", "%s: %s" % [ap.name, _app_status(ap)]))
+					out.append(_kv("gitops", "%s %s: %s" % [GitOpsDock.what(ap), ap.name, _app_status(ap)]))
 			for c in st.get("certs", []):
 				if c.ns == ns:
 					out.append(_kv("tls", "%s %s  [color=#83769c]%s[/color]" % [c.name, ("[color=#00e436]%s[/color]" % tr("ready")) if c.ready else ("[color=#ff004d]%s[/color]" % tr("NOT READY")),
@@ -2836,6 +2839,13 @@ func _on_construction(items: Array) -> void:
 		toast(tr("%d new things being built (see the terminal)") % items.size())
 
 
+## A GitOps app is applying a new revision: the drone is on its way.
+func _on_delivery(it: Dictionary) -> void:
+	_term_text.append_text("[color=#29adff]  %s %s[/color]  [url=goto:%s|%s|%s][color=#29adff]%s[/color][/url]\n" % [
+		tr("GIT → the cluster:"), _esc(str(it.text)), it.kind, it.key, it.ns, tr("GO SEE")])
+	toast(tr("From git: %s") % it.text)
+
+
 func add_event(ev: Dictionary) -> void:
 	var warn: bool = ev.get("etype", "") == "Warning"
 	_term_text.append_text("[color=%s]  %s %s %s/%s: %s[/color]\n" % ["#ff4d6d" if warn else "#6f7690", tr("event"), ev.get("reason", ""),
@@ -3525,6 +3535,36 @@ func _refresh_inspector() -> void:
 					"missing": "[color=#ff004d]%s[/color]" % tr("503: Service not found")}.get(r.status, r.status)
 				lines.append("[color=#%s]%s%s[/color]%s  ->  %s/%s:%s  %s" % [InternetCity.host_color(r.host).to_html(false),
 					r.host if r.host != "" else "*", r.path, "  [HTTPS]" if r.tls else "", r.ns, r.service, r.port, st])
+		"app":
+			var flux := str(d.get("tool", "")) == "flux"
+			_insp_title.text = "%s %s" % [GitOpsDock.what(d).to_upper(), d.name]
+			lines.append(tr("A [color=#29adff]GitOps[/color] app: it keeps part of the cluster equal to what a git repo (or a chart) says."))
+			lines.append(_kv("status", _app_status(d)))
+			if str(d.get("operation", "")) == "Running":
+				lines.append(_kv("now", "[color=#29adff]%s[/color]" % tr("applying git to the cluster (the drone brings each new revision)")))
+			lines.append(_kv("source", "%s%s" % [d.get("repo", "?"), ("  [color=#83769c]%s[/color]" % d.path) if str(d.get("path", "")) != "" else ""]))
+			if str(d.get("revision", "")) != "":
+				lines.append(_kv("revision", str(d.revision)))
+			var dest := str(d.get("dest_ns", "")) if str(d.get("dest_ns", "")) != "" else tr("(several / where its manifests say)")
+			lines.append(_kv("deploys to", dest))
+			if int(d.get("resources", 0)) > 0:
+				lines.append(_kv("manages", tr("%d objects") % int(d.resources)))
+			if d.get("auto_sync", false):
+				lines.append("[color=#83769c]%s[/color]" % (tr("Changes made by hand are reverted on the next sync: change git instead.") if d.get("self_heal", false) else tr("It syncs on its own when git changes; manual changes show as OutOfSync.")))
+			var get_cmd := ("flux get %s %s -n %s" % ["kustomizations" if str(d.get("kind", "")) == "Kustomization" else "helmreleases", d.name, d.ns]) if flux else "argocd app get %s" % d.name
+			var res := ("kustomization" if str(d.get("kind", "")) == "Kustomization" else "helmrelease") if flux else "application"
+			buttons.append(["DESCRIBE", func(): _term_show("-n %s describe %s %s" % [d.ns, res, d.name]), "GoButton", false, get_cmd])
+			if str(d.get("dest_ns", "")) != "":
+				buttons.append(["GO TO ITS HALL", func(): goto_requested.emit("namespace", d.dest_ns, d.dest_ns), "", false, "kubectl -n %s get all" % d.dest_ns])
+			# Both through kubectl (the terminal runs kubectl): Flux reconciles when
+			# this annotation changes, Argo CD syncs when an operation is set.
+			if flux:
+				var now := Time.get_datetime_string_from_system(true)
+				var rec := "-n %s annotate %s %s reconcile.fluxcd.io/requestedAt=%s --overwrite" % [d.ns, res, d.name, now]
+				buttons.append(["RECONCILE NOW", func(): _term_fill(rec), "", ro, "flux reconcile %s %s -n %s   # or: kubectl %s" % [res, d.name, d.ns, rec]])
+			else:
+				var sync := "-n %s patch application %s --type merge -p {\"operation\":{\"sync\":{}}}" % [d.ns, d.name]
+				buttons.append(["SYNC NOW", func(): _term_fill(sync), "", ro, "argocd app sync %s   # or: kubectl %s" % [d.name, sync]])
 		"volume":
 			_insp_title.text = tr("VOLUME CLAIM %s") % d.name
 			lines.append_array(_volume_lines(d))

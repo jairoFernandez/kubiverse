@@ -16,7 +16,7 @@ const KINDS := {
 	"ns": "namespace", "namespace": "namespace", "namespaces": "namespace",
 	"ing": "ingress", "ingress": "ingress", "host": "ingress",
 	"pvc": "volume", "volume": "volume", "storage": "volume",
-	"app": "app", "argo": "app", "application": "app",
+	"app": "app", "argo": "app", "application": "app", "flux": "app", "kustomization": "app", "helmrelease": "app", "gitops": "app",
 	"cert": "cert", "certificate": "cert", "tls": "cert",
 	"secret": "config", "secrets": "config", "configmap": "config", "cm": "config", "config": "config",
 	"pv": "pv", "persistentvolume": "pv",
@@ -60,7 +60,7 @@ static func index(s: Dictionary) -> Array:
 		rows.append(["volume", str(v.name).to_lower(), ("%s %s %s %s" % [v.ns, v.get("status", ""), v.get("class", ""), " ".join(v.get("pods", []) if v.get("pods") != null else [])]).to_lower(),
 			str(v.ns).to_lower(), "", str(v.get("status", "")).to_lower(), "", [], str(v.get("status", "")) != "Bound", v, null])
 	for ap in _list(s, "apps"):
-		rows.append(["app", str(ap.name).to_lower(), ("%s %s %s %s %s" % [ap.ns, ap.get("dest_ns", ""), ap.get("repo", ""), ap.get("sync", ""), ap.get("health", "")]).to_lower(),
+		rows.append(["app", str(ap.name).to_lower(), ("%s %s %s %s %s %s %s" % [ap.ns, ap.get("dest_ns", ""), ap.get("repo", ""), ap.get("sync", ""), ap.get("health", ""), ap.get("tool", "argocd"), ap.get("kind", "")]).to_lower(),
 			str(ap.get("dest_ns", ap.ns)).to_lower(), "", ("%s %s" % [ap.get("sync", ""), ap.get("health", "")]).to_lower(), "", [], str(ap.get("health", "")) in ["Degraded", "Missing"], ap, null])
 	for c in _list(s, "certs"):
 		var cdns: Array = c.dns if c.get("dns") != null else []
@@ -164,8 +164,8 @@ static func _result(r: Array) -> Dictionary:
 			"detail": "pvc · %s · %s · %s" % [d.get("status", ""), d.get("capacity", d.get("request", "")), d.get("class", "")]}
 	if r[KIND] == "app":
 		var dn := str(d.get("dest_ns", "")) if str(d.get("dest_ns", "")) != "" else str(d.ns)
-		return {"kind": "namespace", "key": dn, "ns": dn, "title": "argocd/" + str(d.name), "bad": r[BAD],
-			"detail": "Argo CD app · %s, %s → %s" % [d.get("sync", "?"), d.get("health", "?"), dn]}
+		return {"kind": "app", "key": "%s/%s" % [d.ns, d.name], "ns": dn, "title": "%s/%s" % [d.ns, d.name], "bad": r[BAD],
+			"detail": "%s · %s, %s → %s" % [GitOpsDock.what(d), d.get("sync", "?"), d.get("health", "?"), dn]}
 	if r[KIND] == "cert":
 		var cdns: Array = d.dns if d.get("dns") != null else []
 		return {"kind": "namespace", "key": d.ns, "ns": d.ns, "title": "%s/%s" % [d.ns, d.name], "bad": r[BAD],

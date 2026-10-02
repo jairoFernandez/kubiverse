@@ -13,6 +13,8 @@ signal level_changed(level: String)
 signal shake_requested(amount: float)
 ## Things the cluster just created (seen live): [{text, kind, key, ns}].
 signal construction_started(items: Array)
+## A GitOps app is applying a new revision from git: {text, kind, key, ns}.
+signal gitops_delivery(item: Dictionary)
 
 const SYSTEM_NS := ["kube-system", "kube-public", "kube-node-lease", "local-path-storage"]
 const LINE_GAP := 6.5
@@ -37,6 +39,9 @@ var bank_bld: Landmark
 var _yard_notes: Array = []   # signs inside the library / bank
 var islands := {}    # node -> NodeIsland
 var pods := {}       # "ns/name" -> PodBot
+var docks := {}      # "ns/name" -> GitOpsDock (Argo CD / Flux app, in front of its hall)
+var _app_seen := {}  # "ns/name" -> [revision, operation] of each GitOps app
+var _sky_gate := Vector3(0, 10, -40)   # where cargo drones from git come in
 
 var doors := []                        # [{pos, to, text}]
 var spawn := Vector3.ZERO
@@ -108,7 +113,7 @@ var _rim: Node3D
 # deletes is torn down. Births are tracked per "collection|key" across levels.
 const BUILD_WINDOW := 180.0   # seconds: younger than this still counts as new
 const MAX_SITES := 14
-const TRACKED := ["namespaces", "workloads", "services", "ingresses", "volumes", "configs", "pvs", "nodes"]
+const TRACKED := ["namespaces", "workloads", "services", "ingresses", "volumes", "configs", "pvs", "nodes", "apps"]
 var _born := {}        # "coll|key" -> unix time it was created (0 = old / unknown)
 var _known := {}       # "coll|key" in the last snapshot
 var _known_ctx := ""
@@ -207,6 +212,7 @@ func all_entities() -> Array:
 	out.append_array(pv_tanks.values())
 	out.append_array(factories.values())
 	out.append_array(lines.values())
+	out.append_array(docks.values())
 	if gate and is_instance_valid(gate):
 		out.append(gate)
 	if home and is_instance_valid(home):
@@ -247,6 +253,7 @@ func find_entity(kind: String, key: String) -> Entity:
 		"storageclass": return factories.get(key)
 		"landmark": return library_bld if key == "@library" else bank_bld
 		"workload": return lines.get(key)
+		"app": return docks.get(key)
 	return null
 
 
@@ -279,6 +286,7 @@ func set_level(l: String) -> void:
 	if not l.begins_with("pod:"):
 		pod_detail = {}
 	buildings.clear()
+	docks.clear()
 	lines.clear()
 	services.clear()
 	volumes.clear()
@@ -300,6 +308,7 @@ func set_level(l: String) -> void:
 func apply_state(s: Dictionary) -> void:
 	state = s
 	_track_births(s)
+	_track_apps(s)
 	for e in _sites.keys():
 		if not is_instance_valid(e) or not is_instance_valid(_sites[e]) or _sites[e].done:
 			_sites.erase(e)
@@ -570,6 +579,7 @@ func _apply_plant(s: Dictionary) -> void:
 	pw.target = Vector3(0, 0, 12.0)
 	if pw.position == Vector3.ZERO:
 		pw.position = pw.target
+	_apply_docks(s)
 	# The LIBRARY (storage) and the BANK (secrets), east of the energy plant.
 	for w in ["library", "bank"]:
 		var lm: Landmark = library_bld if w == "library" else bank_bld
@@ -1370,6 +1380,7 @@ func _apply_internet(s: Dictionary, cell_w: float, grid_w: float, grid_d: float)
 		doors[ns] = b.door_position()
 		street[ns] = b.target.x + cell_w * 0.5
 	var gate_pos := Vector3(0, 0, -grid_d - 7.5)
+	_sky_gate = gate_pos + Vector3(0, 11.0, -6.0)
 	if gate == null or not is_instance_valid(gate):
 		gate = IngressGate.new()
 		gate.world = self
@@ -2164,16 +2175,130 @@ func _announce(fresh: Array) -> void:
 		if ns != "" and not ns_visible(ns):
 			continue
 		var what: String = {"namespaces": "namespace", "workloads": str(it.get("kind", "")).to_lower(), "services": "service",
-			"ingresses": "ingress", "volumes": "volume claim", "nodes": "node"}[coll]
+			"ingresses": "ingress", "volumes": "volume claim", "nodes": "node", "apps": GitOpsDock.what(it).to_lower()}[coll]
 		var kind: String = {"namespaces": "namespace", "workloads": "workload", "services": "service", "ingresses": "namespace",
-			"volumes": "volume", "nodes": "node"}[coll]
+			"volumes": "volume", "nodes": "node", "apps": "app"}[coll]
 		var key := _item_key(coll, it)
 		if coll == "ingresses":
 			key = ns
+		if coll == "apps":
+			ns = str(it.get("dest_ns", "")) if str(it.get("dest_ns", "")) != "" else str(it.get("ns", ""))
 		var name := str(it.get("name", ""))
-		items.append({"text": "%s %s" % [what, name if coll in ["namespaces", "nodes"] else ns + "/" + name], "kind": kind, "key": key, "ns": ns})
+		items.append({"text": "%s %s" % [what, name if coll in ["namespaces", "nodes", "apps"] else ns + "/" + name], "kind": kind, "key": key, "ns": ns})
 	if not items.is_empty():
 		construction_started.emit(items)
+
+
+# ------------------------------------------------------------ GitOps docks
+
+## Each Argo CD / Flux app is a loading dock in front of the hall it deploys
+## to (or, when that isn't drawn, the hall it lives in): up to four per hall,
+## right and left of the door.
+func _apply_docks(s: Dictionary) -> void:
+	var by_host := {}
+	for ap in (s.get("apps", []) if s.get("apps") != null else []):
+		var host := str(ap.get("dest_ns", ""))
+		if not buildings.has(host):
+			host = str(ap.get("ns", ""))
+		if not buildings.has(host):
+			continue
+		if not by_host.has(host):
+			by_host[host] = []
+		by_host[host].append(ap)
+	var seen := {}
+	for host in by_host:
+		var b: FactoryBuilding = buildings[host]
+		var list: Array = by_host[host]
+		var slots := 4 if b.w > 10.0 else 2
+		for i in mini(list.size(), slots):
+			var ap: Dictionary = list[i]
+			var k := "%s/%s" % [ap.ns, ap.name]
+			seen[k] = true
+			var gd: GitOpsDock = docks.get(k)
+			if gd == null:
+				gd = GitOpsDock.new()
+				gd.world = self
+				_entities.add_child(gd)
+				docks[k] = gd
+			gd.update_data(ap)
+			var side := 1.0 if i % 2 == 0 else -1.0
+			var x := side * (b.w * 0.5 - 1.3 - (i / 2) * 2.2)
+			gd.target = b.target + Vector3(x, 0, b.d * 0.5 + 1.3)
+			if gd.position == Vector3.ZERO:
+				gd.position = gd.target
+			_site(gd, "apps", k, not gd.syncing())
+	for k in docks.keys():
+		if not seen.has(k):
+			_drop(docks, k, "apps")
+
+
+## A new revision from git, or a sync starting: a cargo drone brings it.
+func _track_apps(s: Dictionary) -> void:
+	var first := _app_seen.is_empty()
+	var now := {}
+	for ap in (s.get("apps", []) if s.get("apps") != null else []):
+		var k := "%s/%s" % [ap.ns, ap.name]
+		var cur := [str(ap.get("revision", "")), str(ap.get("operation", ""))]
+		now[k] = cur
+		var prev = _app_seen.get(k)
+		if first or prev == null:
+			continue
+		var new_rev: bool = cur[0] != "" and cur[0] != prev[0]
+		var starts: bool = cur[1] == "Running" and prev[1] != "Running"
+		if new_rev or starts:
+			var dn := str(ap.get("dest_ns", "")) if str(ap.get("dest_ns", "")) != "" else str(ap.ns)
+			if not ns_visible(dn):
+				continue
+			gitops_delivery.emit({"text": "%s %s @%s" % [GitOpsDock.what(ap).to_lower(), ap.name, cur[0] if cur[0] != "" else "?"],
+				"kind": "app", "key": k, "ns": dn})
+			if level == "plant":
+				var gd: GitOpsDock = docks.get(k)
+				if gd != null:
+					deliver.call_deferred(gd)
+	_app_seen = now
+
+
+## The cargo drone: flies in from the Internet gate with a crate in the
+## tool's color, lowers it onto the dock and flies back.
+func deliver(gd: GitOpsDock) -> void:
+	if not is_instance_valid(gd) or not is_inside_tree():
+		return
+	var tc := GitOpsDock.tool_color(gd.data)
+	var drone := Node3D.new()
+	_fx_root.add_child(drone)
+	Vox.box(drone, Vector3(1.0, 0.3, 0.7), Vector3.ZERO, tc, 0.5)
+	Vox.box(drone, Vector3(0.4, 0.2, 0.3), Vector3(0, 0.22, 0), Vox.WHITE, 0.3)
+	for c in [Vector3(-0.7, 0.1, -0.5), Vector3(0.7, 0.1, -0.5), Vector3(-0.7, 0.1, 0.5), Vector3(0.7, 0.1, 0.5)]:
+		Vox.box(drone, Vector3(0.08, 0.06, 0.08), c, Vox.SLATE, 0.0, false)
+		var rotor := Vox.box(drone, Vector3(0.7, 0.04, 0.12), c + Vector3(0, 0.08, 0), Vox.WHITE, 1.5, false)
+		var spin := rotor.create_tween().set_loops()
+		spin.tween_property(rotor, "rotation:y", TAU, 0.15).as_relative()
+	var crate := Vox.box(drone, Vector3(0.55, 0.55, 0.55), Vector3(0, -0.5, 0), Color("c47a2c"))
+	Vox.box(crate, Vector3(0.58, 0.1, 0.12), Vector3(0, 0.12, 0), tc, 0.0, false)
+	var light := Vox.box(drone, Vector3(0.14, 0.14, 0.14), Vector3(0, -0.2, 0.36), Vox.RED, 3.0, false)
+	light.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var start := _sky_gate
+	var drop := gd.drop_point()
+	var hover := drop + Vector3(0, 7.0, 0)
+	var low := drop + Vector3(0, 1.4, 0)
+	drone.position = start
+	var tw := drone.create_tween()
+	tw.tween_property(drone, "position", hover, maxf(1.0, start.distance_to(hover) / 14.0)).set_trans(Tween.TRANS_SINE)
+	tw.tween_property(drone, "position", low, 0.9).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_callback(func():
+		if not is_instance_valid(crate):
+			return
+		var at := crate.global_position
+		crate.reparent(_fx_root, true)
+		_particles.append({"m": crate, "v": Vector3(0, -0.5, 0), "life": 1.6, "g": 14.0, "floor": drop.y})
+		poof(drop + Vector3(0, 0.3, 0), tc)
+		sfx("door", at)
+		if is_instance_valid(gd):
+			flash(gd.global_position + Vector3(0, 1.0, 0), tc, 0.8))
+	tw.tween_interval(0.5)
+	tw.tween_property(drone, "position", hover, 0.9).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_property(drone, "position", start, maxf(1.0, start.distance_to(hover) / 14.0)).set_trans(Tween.TRANS_SINE)
+	tw.tween_callback(drone.queue_free)
 
 
 # -------------------------------------------------------------------- fx
@@ -2608,6 +2733,8 @@ func labels(player_pos: Vector3) -> Array:
 		out.append({"pos": l.anchor(), "text": l.label_text(), "sub": _hint(l, l.label_sub()), "color": l.label_color(), "big": true, "entity": l})
 	for dk in services.values():
 		out.append({"pos": dk.anchor(), "text": dk.label_text(), "sub": _hint(dk, dk.label_sub()), "color": dk.label_color(), "big": false, "entity": dk})
+	for gd in docks.values():
+		out.append({"pos": gd.anchor(), "text": gd.label_text(), "sub": _hint(gd, gd.label_sub()), "color": gd.label_color(), "big": false, "entity": gd})
 	for lm in [library_bld, bank_bld]:
 		if lm and is_instance_valid(lm):
 			out.append({"pos": lm.anchor(), "text": lm.label_text(), "sub": _hint(lm, lm.label_sub()), "color": lm.label_color(), "big": true, "entity": lm})
