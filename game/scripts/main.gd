@@ -1760,8 +1760,9 @@ func _update_labels() -> void:
 		# only the halls, what is in trouble and what you point at stay.
 		var far := clampf((_zoom - 32.0) / 26.0, 0.0, 1.0)
 		var all: Array = world.labels(me)
-		if hud.compact:
-			all.sort_custom(func(a, b): return a.pos.distance_to(me) < b.pos.distance_to(me))
+		# Nearest first: the calm labels kept are the ones around you.
+		all.sort_custom(func(a, b): return a.pos.distance_squared_to(me) < b.pos.distance_squared_to(me))
+		var calm_kept := 0
 		for l in all:
 			if cam.is_position_behind(l.pos):
 				continue
@@ -1778,9 +1779,14 @@ func _update_labels() -> void:
 					l.sub = ""
 			if _zoom > 40.0 and not pinned:
 				l.sub = ""
-			if not pinned and far > 0.0:
-				if far > 0.35 and not l.get("big", false) and not _alarming(l.color):
+			# Calm labels (healthy, not a hall): only around you and only a few;
+			# zoomed out, none. Halls, what's wrong and what you point at stay.
+			if not pinned and not l.get("big", false) and not _alarming(l.color):
+				var dc: float = Vector2(l.pos.x - me.x, l.pos.z - me.z).length()
+				if far > 0.35 or dc > CALM_RADIUS or calm_kept >= CALM_MAX:
 					continue
+				calm_kept += 1
+			if not pinned and far > 0.0:
 				l["alpha"] = lerpf(1.0, 0.7, far)
 				l["scale"] = lerpf(1.0, 0.82, far)
 			l["pinned"] = pinned
@@ -1798,6 +1804,10 @@ func _update_labels() -> void:
 				items.append(l)
 	hud.overlay.items = items
 	hud.overlay.queue_redraw()
+
+
+const CALM_RADIUS := 18.0   # healthy things are labelled within this of the player
+const CALM_MAX := 10
 
 
 ## Label colors that mean "look at this" (broken, waiting, out of sync).
