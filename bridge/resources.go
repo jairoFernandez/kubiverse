@@ -645,7 +645,7 @@ func (b *Bridge) certs(now time.Time) []Cert {
 		}
 		if na, ok, _ := unstructured.NestedString(u.Object, "status", "notAfter"); ok {
 			if t, err := time.Parse(time.RFC3339, na); err == nil {
-				c.ExpiresIn = int64(t.Sub(now).Seconds())
+				c.ExpiresIn = expiresIn(t, now)
 			}
 		}
 		if c.DNS == nil {
@@ -782,4 +782,15 @@ func allowed(rules []authorizationv1.ResourceRule, verb, group, resource string)
 		}
 	}
 	return false
+}
+
+// expiresIn: seconds from now to notAfter for Cert.ExpiresIn, where 0 means
+// unknown. A known expiry is never 0: one due this very second is -1 (just
+// expired), or the game would stop counting it down.
+func expiresIn(notAfter, now time.Time) int64 {
+	s := int64(notAfter.Sub(now).Seconds())
+	if s == 0 {
+		return -1
+	}
+	return s
 }
