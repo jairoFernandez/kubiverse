@@ -50,10 +50,23 @@ jobs:
           curl -fsSL -o godot.zip "$base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
           echo "$GODOT_SHA512  godot.zip" | sha512sum -c -
           unzip -q godot.zip && sudo mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 /usr/local/bin/godot
-      # gofmt, go vet (also the e2e build tag)
+      # gofmt, go vet (also the e2e build tag), testlint (every Go test
+      # must be able to fail).
       - run: make lint-go
-      # Bridge tests with the race detector; prints the total coverage.
+      # Bridge tests with the race detector; the total coverage may not drop
+      # more than 0.2 points below bridge/coverage-baseline.txt.
       - run: make test-race
+      # Patches vs full states on random clusters: a fixed 20 s, fails only
+      # on a counterexample (saved under bridge/testdata/fuzz, uploaded).
+      - name: Fuzz the patches (FuzzDelta)
+        working-directory: bridge
+        run: go test -run '^$' -fuzz '^FuzzDelta$' -fuzztime 20s .
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-counterexample
+          path: bridge/testdata/fuzz
+          if-no-files-found: ignore
       - run: make game-import
       # Headless game tests, each under a timeout (a hang fails the job).
       - run: make test-game

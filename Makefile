@@ -94,6 +94,7 @@ test-game:
 	@scripts/game-tests.sh check
 	$(call godot_test,300,res://tests/test_world.gd,ok)
 	$(call godot_test,300,res://tests/test_logic.gd,ok)
+	$(call godot_test,300,res://tests/test_invariants.gd,ok)
 
 ## Existing tests and baselines only get stronger (see CONTRIBUTING.md):
 ## what this branch changes since main; CI checks the pushed / PR range.
