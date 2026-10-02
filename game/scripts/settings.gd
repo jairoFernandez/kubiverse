@@ -5,6 +5,10 @@ extends Node
 signal changed
 
 const PATH := "user://settings.cfg"
+# Headless tests (a SceneTree script under res://tests/) never touch the
+# player's settings: they get a fresh file of their own, in English.
+const TESTS_DIR := "res://tests/"
+const TEST_FILE := "kubiverse-test-settings-%d-%d.cfg"
 const UI_SCALES := [1.0, 1.25, 1.5, 1.75, 2.0, 2.5]
 # Bump when a default changes and saved settings should pick it up once.
 const VERSION := 3
@@ -43,12 +47,49 @@ var touch := "auto"
 var intro := true           # opening fly-through when a cluster connects
 var skipped_version := ""   # a release the player said not to be told about again
 var show_finished := false   # draw every Completed pod (they can be thousands)   # on-screen touch controls: auto | on | off
+var path := PATH            # the file load_file()/save() use
 
 
 func _ready() -> void:
+	if under_test():
+		use_test_file()
+		return
 	_migrate_old_name()
+	load_file()
+	apply_audio()
+
+
+## True when the running main loop is a headless test script.
+static func under_test() -> bool:
+	var ml := Engine.get_main_loop()
+	var s: Script = ml.get_script() if ml else null
+	return s != null and s.resource_path.begins_with(TESTS_DIR)
+
+
+## Tests: a fresh temporary file instead of the player's, and English
+## whatever the player chose (labels are checked by their English text).
+func use_test_file() -> void:
+	path = OS.get_temp_dir().path_join(TEST_FILE % [OS.get_process_id(), get_instance_id()])
+	_remove_test_file()
+	load_file()
+	lang = "en"
+	TranslationServer.set_locale(lang)
+	apply_audio()
+
+
+func _remove_test_file() -> void:
+	if path != PATH and FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_remove_test_file()
+
+
+func load_file() -> void:
 	var cf := ConfigFile.new()
-	if cf.load(PATH) == OK:
+	if cf.load(path) == OK:
 		ui_scale = cf.get_value("ui", "scale", ui_scale)
 		lines_all = cf.get_value("ui", "lines_all", lines_all)
 		terminal = cf.get_value("ui", "terminal", terminal)
@@ -95,7 +136,6 @@ func _ready() -> void:
 			muted = false
 		if version < VERSION:
 			save()
-	apply_audio()
 
 
 ## Master volume / mute are applied by Sfx to every sound and the music
@@ -148,7 +188,7 @@ func save() -> void:
 	cf.set_value("ui", "show_finished", show_finished)
 	cf.set_value("ui", "intro", intro)
 	cf.set_value("updates", "skipped", skipped_version)
-	cf.save(PATH)
+	cf.save(path)
 	apply_audio()
 	changed.emit()
 

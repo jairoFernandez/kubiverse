@@ -110,6 +110,7 @@ func _init() -> void:
 	hs.pods[0].cpu_req_m = 300
 	check(KubiMissions.check(hot[0].steps[-1], "state", null, null, hs, {}), "cooled down")
 	await process_frame
+	_tests_run_in_english()
 	var mock := MockCluster.new()
 	root.add_child(mock)
 	var box := {}
@@ -306,3 +307,30 @@ func _walk_all(world: World, label: String) -> int:
 		if not reached and failed == 0:
 			print("FAIL %s: could not walk onto %s (stuck at %s)" % [label, isl.key, p]); failed += 1
 	return failed
+
+
+## Labels are checked by their English text: the tests never read the
+## player's settings (a saved lang="es" would translate them) nor write them.
+func _tests_run_in_english() -> void:
+	# Autoloads aren't identifiers in a --script test: reach them in the tree.
+	var settings: Node = root.get_node("Settings")
+	var script: GDScript = load("res://scripts/settings.gd")
+	check(script.under_test(), "Settings knows it runs under a test")
+	check(settings.path != script.PATH and not settings.path.begins_with("user://"), "tests use their own settings file: " + settings.path)
+	check(settings.lang == "en", "tests run in English, not " + settings.lang)
+	check(TranslationServer.get_locale() == "en", "locale en, not " + TranslationServer.get_locale())
+	check(tr("UPDATE") == "UPDATE", "tr() is English: " + tr("UPDATE"))
+	# A settings file saved in Spanish (as a player's may be) still gives English.
+	var saved := OS.get_temp_dir().path_join("kubiverse-test-es-%d.cfg" % OS.get_process_id())
+	var cf := ConfigFile.new()
+	cf.set_value("ui", "lang", "es")
+	check(cf.save(saved) == OK, "write a Spanish settings file")
+	var s: Node = script.new()
+	s.path = saved
+	s.load_file()
+	check(s.lang == "es", "the Spanish file is read as Spanish: " + s.lang)
+	s.use_test_file()
+	check(s.lang == "en" and TranslationServer.get_locale() == "en", "but a test forces English: " + s.lang)
+	check(s.path != saved and s.path != script.PATH, "and never touches that file: " + s.path)
+	s.free()
+	DirAccess.remove_absolute(saved)
