@@ -4688,6 +4688,8 @@ func open_update() -> void:
 			var tip := tr("Then restart the bridge and connect again.")
 			if OS.has_feature("web") and K8s.served_by_bridge():
 				tip = tr("This game comes inside the bridge: update it, restart it and reload this page.")
+			elif LocalBridge.supported() and K8s.local.status == "started":
+				tip = tr("Then press RESTART BRIDGE in SETTINGS, or restart Kubiverse.")
 			var tl := _label(tip, 20, Vox.SILVER)
 			tl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			tl.custom_minimum_size = Vector2(620, 0)

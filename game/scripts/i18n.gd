@@ -22,6 +22,7 @@ const ES := {
 	"Download kubiverse-linux-x86_64.tar.gz": "Descarga kubiverse-linux-x86_64.tar.gz",
 	"OPEN RELEASE PAGE": "ABRIR PÁGINA DE LA VERSIÓN",
 	"Then restart the bridge and connect again.": "Luego reinicia el bridge y vuelve a conectar.",
+	"Then press RESTART BRIDGE in SETTINGS, or restart Kubiverse.": "Luego pulsa REINICIAR BRIDGE en AJUSTES, o reinicia Kubiverse.",
 	"This game comes inside the bridge: update it, restart it and reload this page.": "Este juego viene dentro del bridge: actualízalo, reinícialo y recarga esta página.",
 	"RELEASE PAGE": "PÁGINA DE LA VERSIÓN",
 	"REMIND ME LATER": "RECUÉRDAMELO LUEGO",

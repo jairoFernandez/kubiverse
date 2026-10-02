@@ -25,8 +25,36 @@ func _init() -> void:
 	_updates()
 	_i18n()
 	_local_bridge()
+	_local_bridge_pick()
+	_kubi_terminal_commands()
 	await _trend_draw()
 	finish("logic tests")
+
+
+## Kubi's suggestions get RUN only if the game terminal can run them.
+func _kubi_terminal_commands() -> void:
+	var ok := ["kubectl get pods -A", "kubectl -n kube-system logs <pod> --previous",
+		"kubectl -n shop describe pod api-1", "kubectl get pod -l k8s-app=kube-dns -o jsonpath='{.items[0].metadata.name}'"]
+	for c in ok:
+		check(TerminalRules.can_run(c), "runs in the terminal: " + c)
+	var bad := ["kubectl -n kube-system exec -it `kubectl -n kube-system get pod -o name` -- sh",
+		"kubectl -n kube-system exec coredns-1 -- ls", "kubectl get pods | grep api", "kubectl get pods -w",
+		"kubectl logs api-1 -f", "kubectl edit deploy api", "kubectl get pod $(cat name)", "kubectl apply -f x.yaml",
+		"kubectl --namespace shop port-forward svc/api 8080:80"]
+	for c in bad:
+		check(not TerminalRules.can_run(c), "copy only, the terminal refuses it: " + c)
+
+
+## The game starts the newest bridge it finds, not the first one.
+func _local_bridge_pick() -> void:
+	var old := "/home/u/.kubecraft/bin/kubiverse-bridge"
+	var brew := "/opt/homebrew/bin/kubiverse-bridge"
+	check(LocalBridge.pick([[old, "0.1.16"], [brew, "0.1.23"]]) == brew, "an upgraded Homebrew bridge beats an old ~/.kubecraft one")
+	check(LocalBridge.pick([[brew, "0.1.23"], [old, "0.1.16"]]) == brew, "order doesn't matter when versions differ")
+	check(LocalBridge.pick([[old, "0.1.23"], [brew, "0.1.23"]]) == old, "same version: the first one wins")
+	check(LocalBridge.pick([[old, ""], [brew, "0.1.2"]]) == brew, "a known version beats an unknown one")
+	check(LocalBridge.pick([[old, "dev"], [brew, ""]]) == old, "no known versions: the first one")
+	check(LocalBridge.pick([]) == "", "nothing found")
 
 
 func _local_bridge() -> void:

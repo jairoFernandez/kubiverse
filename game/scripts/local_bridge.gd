@@ -3,7 +3,7 @@ extends Node
 ## Native builds: the game runs its own kubiverse-bridge, so nobody has to
 ## start one in a terminal. On launch it looks for a bridge already answering
 ## (on our port, then on the classic 127.0.0.1:8088 of a hand-started one);
-## if there is none it finds the binary (PATH, Homebrew, ~/.kubecraft/bin) and
+## if there is none it finds the newest binary (PATH, Homebrew, ~/.kubecraft/bin) and
 ## starts it on 127.0.0.1:<Settings.bridge_port>, then stops it on exit.
 ## A bridge we didn't start is never stopped.
 
@@ -118,11 +118,29 @@ static func home_dir() -> String:
 	return OS.get_environment("USERPROFILE" if OS.has_feature("windows") else "HOME")
 
 
+## The newest of the binaries found, [[path, version], ...] in candidates()
+## order: an old copy in ~/.kubecraft/bin must not win over an upgraded
+## Homebrew one just because it comes first. Unknown versions lose; ties keep
+## the order.
+static func pick(found: Array) -> String:
+	var best := ""
+	var best_v := ""
+	for f in found:
+		var v := str(f[1])
+		if best == "" or (Updates.is_known(v) and (not Updates.is_known(best_v) or Updates.compare(v, best_v) > 0)):
+			best = str(f[0])
+			best_v = v
+	return best
+
+
 static func find_binary() -> String:
+	var found := []
 	for p in candidates(OS.get_environment("PATH"), home_dir(), OS.has_feature("windows")):
 		if FileAccess.file_exists(p):
-			return p
-	return ""
+			var out := []
+			OS.execute(p, ["--version"], out, true)
+			found.append([p, str(out[0]).strip_edges() if out.size() > 0 else ""])
+	return pick(found)
 
 
 ## Only native desktop builds manage a bridge (the web can't run programs);
