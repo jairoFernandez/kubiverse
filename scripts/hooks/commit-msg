@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Opt-in local hook (install: make hooks): refuses a commit that weakens
+# existing tests or baselines unless its message has a trailer
+#   Test-Change: <why>
+# Same rules as CI's test-guard job (scripts/test-guard.sh).
+root="$(git rev-parse --show-toplevel)" || exit 0
+[ -x "$root/scripts/test-guard.sh" ] || exit 0
+exec "$root/scripts/test-guard.sh" --staged "$1"

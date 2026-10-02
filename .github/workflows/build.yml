@@ -17,6 +17,25 @@ env:
   TEMPLATES_SHA512: ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079
 
 jobs:
+  # Existing tests and baselines only get stronger: removed/changed test
+  # lines, deleted tests, fewer assertions, new t.Skip or looser baselines
+  # fail unless a commit of the range has a "Test-Change: <why>" trailer
+  # (CONTRIBUTING.md). Full history: it diffs the PR / pushed range.
+  test-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Existing tests only get stronger
+        env:
+          TG_BASE: ${{ github.event.pull_request.base.sha }}
+          TG_HEAD: ${{ github.event.pull_request.head.sha }}
+          TG_BEFORE: ${{ github.event.before }}
+          TG_AFTER: ${{ github.event.after }}
+        run: scripts/test-guard.sh
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -31,10 +50,23 @@ jobs:
           curl -fsSL -o godot.zip "$base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
           echo "$GODOT_SHA512  godot.zip" | sha512sum -c -
           unzip -q godot.zip && sudo mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 /usr/local/bin/godot
-      # gofmt, go vet (also the e2e build tag)
+      # gofmt, go vet (also the e2e build tag), testlint (every Go test
+      # must be able to fail).
       - run: make lint-go
-      # Bridge tests with the race detector; prints the total coverage.
+      # Bridge tests with the race detector; the total coverage may not drop
+      # more than 0.2 points below bridge/coverage-baseline.txt.
       - run: make test-race
+      # Patches vs full states on random clusters: a fixed 20 s, fails only
+      # on a counterexample (saved under bridge/testdata/fuzz, uploaded).
+      - name: Fuzz the patches (FuzzDelta)
+        working-directory: bridge
+        run: go test -run '^$' -fuzz '^FuzzDelta$' -fuzztime 20s .
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-counterexample
+          path: bridge/testdata/fuzz
+          if-no-files-found: ignore
       - run: make game-import
       # Headless game tests, each under a timeout (a hang fails the job).
       - run: make test-game

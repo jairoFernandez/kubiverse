@@ -2,7 +2,7 @@ GODOT  ?= godot
 BRIDGE := bridge/bin/kubiverse-bridge
 ADDR   ?= 127.0.0.1:8088
 
-.PHONY: serve-lan test test-go test-game lint-go test-race bench metrics-server cluster cluster-delete cluster-ha cluster-ha-delete scenario scenario-delete play-kind serve-web-kind all bridge bridge-all bridge-bundle webdist game-import web macos linux windows native run-bridge play play-demo serve-web demo-apply demo-delete clean readme-shots
+.PHONY: serve-lan test test-go test-game lint-go test-race bench metrics-server cluster cluster-delete cluster-ha cluster-ha-delete scenario scenario-delete play-kind serve-web-kind all bridge bridge-all bridge-bundle webdist game-import web macos linux windows native run-bridge play play-demo serve-web demo-apply demo-delete clean readme-shots test-guard hooks coverage-check coverage-bump testlint
 
 all: bridge web
 
@@ -79,24 +79,61 @@ test-go:
 
 ## A Godot test fails on a non-zero exit and also on any SCRIPT ERROR in its
 ## output: a script error doesn't stop Godot, the rest of the test goes on.
-## $(call godot_test,<timeout s>,<res:// script>)
+## With a third argument the harness's "<label>: OK" line must be there too
+## (finish() really ran).
+## $(call godot_test,<timeout s>,<res:// script>[,ok])
 define godot_test
 	@echo "$(2)"; out=$$($(call GODOT_SCRIPT,$(1)) $(2) 2>&1); rc=$$?; echo "$$out"; \
-	if [ $$rc -ne 0 ] || echo "$$out" | grep -q "SCRIPT ERROR"; then echo "FAIL: $(2) (exit $$rc)"; exit 1; fi
+	if [ $$rc -ne 0 ] || echo "$$out" | grep -q "SCRIPT ERROR"; then echo "FAIL: $(2) (exit $$rc)"; exit 1; fi; \
+	if [ -n "$(3)" ] && ! echo "$$out" | grep -Eq '^[A-Za-z0-9 _-]+: OK$$'; then echo "FAIL: $(2) never reported OK (finish() not reached)"; exit 1; fi
 endef
 
+## scripts/game-tests.sh: every test file runs here, checks and finishes, and
+## the number of check( calls never goes below game/tests/checks-baseline.txt.
 test-game:
-	$(call godot_test,300,res://tests/test_world.gd)
-	$(call godot_test,300,res://tests/test_logic.gd)
+	@scripts/game-tests.sh check
+	$(call godot_test,300,res://tests/test_world.gd,ok)
+	$(call godot_test,300,res://tests/test_logic.gd,ok)
+	$(call godot_test,300,res://tests/test_invariants.gd,ok)
+
+## Existing tests and baselines only get stronger (see CONTRIBUTING.md):
+## what this branch changes since main; CI checks the pushed / PR range.
+test-guard:
+	scripts/test-guard.sh
+
+## Opt-in local hooks: the same check on each commit (commit-msg) and push.
+hooks:
+	git config core.hooksPath scripts/hooks && echo "hooks on (undo: git config --unset core.hooksPath)"
 
 ## What CI runs on the bridge: formatting, vet (e2e too), tests with the race
 ## detector and a coverage summary line.
 lint-go:
 	@cd bridge && files=$$(gofmt -l .); [ -z "$$files" ] || { echo "gofmt needed:"; echo "$$files"; exit 1; }
 	cd bridge && go vet ./... && go vet -tags e2e ./...
+	@$(MAKE) --no-print-directory testlint
 
+## Every Go TestXxx / FuzzXxx must be able to fail (tools/testlint, its own
+## module: never in the bridge binary).
+testlint:
+	@cd tools/testlint && files=$$(gofmt -l .); [ -z "$$files" ] || { echo "gofmt needed:"; echo "$$files"; exit 1; }
+	cd tools/testlint && go vet . && go test -count=1 . && go run . ../../bridge
+
+## The total must stay within 0.2 points of bridge/coverage-baseline.txt.
 test-race:
 	cd bridge && mkdir -p bin && go test -race -coverprofile=$(COVERAGE) ./... && go tool cover -func=$(COVERAGE) | tail -1
+	@scripts/coverage.sh check bridge/$(COVERAGE)
+
+## Coverage ratchet without the race detector (faster).
+coverage-check:
+	cd bridge && mkdir -p bin && go test -coverprofile=$(COVERAGE) ./... >/dev/null
+	@scripts/coverage.sh check bridge/$(COVERAGE)
+
+## After adding tests: raise both ratchets (bridge coverage, game check( count).
+## They never go down here; lowering one by hand needs a Test-Change: trailer.
+coverage-bump:
+	cd bridge && mkdir -p bin && go test -coverprofile=$(COVERAGE) ./... >/dev/null
+	@scripts/coverage.sh bump bridge/$(COVERAGE)
+	@scripts/game-tests.sh bump
 
 ## Benchmarks as a smoke test: they must finish (60 s) without script errors.
 bench:

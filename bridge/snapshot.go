@@ -145,6 +145,8 @@ func (b *Bridge) buildSnapshot() (*Snapshot, error) {
 		Server:   b.server,
 		ReadOnly: b.readOnly,
 		Time:     now.Unix(),
+		// Lists, never JSON null, even on an empty cluster (the game iterates them).
+		Nodes: []Node{}, Namespaces: []Namespace{}, Pods: []Pod{}, Workloads: []Workload{}, Services: []Service{},
 	}
 	b.mu.Lock()
 	s.Metrics = b.metrics
