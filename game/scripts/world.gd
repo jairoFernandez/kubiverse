@@ -120,6 +120,9 @@ var _known_ctx := ""
 var _gone := {}        # "coll|key" deleted by the last snapshot
 var _clock_off := 0.0  # bridge clock - local clock
 var _sites := {}       # Entity -> Construction
+const ROLLOUT_STUCK := 180.0      # seconds rolling out before the sign says STUCK
+const ROLLOUT_FORGET := 1800.0    # past this it's a problem for the alarms, not a site
+var _rollouts := {}    # "ns/kind/name" -> unix time its rollout started
 
 
 func _ready() -> void:
@@ -307,7 +310,9 @@ func set_level(l: String) -> void:
 
 func apply_state(s: Dictionary) -> void:
 	state = s
+	var first_seen := _known.is_empty() or str(s.get("context", "")) + "@" + str(s.get("server", "")) != _known_ctx
 	_track_births(s)
+	_track_rollouts(s, first_seen)
 	_track_apps(s)
 	for e in _sites.keys():
 		if not is_instance_valid(e) or not is_instance_valid(_sites[e]) or _sites[e].done:
@@ -524,6 +529,7 @@ func _apply_plant(s: Dictionary) -> void:
 			buildings[ns] = b
 		b.setup(ns, per[ns])
 		_site(b, "namespaces", ns, true, _ns_working(s, ns))
+		_site_note(b, _ns_note(s, ns))
 	for k in buildings.keys():
 		if not seen.has(k):
 			_drop(buildings, k, "namespaces")
@@ -1501,7 +1507,8 @@ func _apply_hall(s: Dictionary, ns: String) -> void:
 		line.target = Vector3(0, 0, -i * LINE_GAP)
 		if line.position == Vector3.ZERO:
 			line.position = line.target
-		_site(line, "workloads", k, _workload_done(w))
+		_site(line, "workloads", k, _workload_done(w), rolling_out(k))
+		_site_note(line, _rollout_note(k, w))
 		max_len = maxf(max_len, line.length)
 	for k in lines.keys():
 		if not seen.has(k):
@@ -2085,12 +2092,75 @@ func _workload_done(w: Dictionary) -> bool:
 	return int(w.get("ready", 0)) >= int(w.get("desired", 0))
 
 
-## A namespace is "working" while something new in it is still being built.
+## A namespace is "working" while something new in it is still being built
+## or one of its workloads is rolling out.
 func _ns_working(s: Dictionary, ns: String) -> bool:
 	for w in s.workloads:
-		if w.ns == ns and not _workload_done(w) and young("workloads", _item_key("workloads", w)) >= 0.0:
+		var k := _item_key("workloads", w)
+		if w.ns == ns and (rolling_out(k) or not _workload_done(w) and young("workloads", k) >= 0.0):
 			return true
 	return false
+
+
+## A rollout: the pod template changed (new image, restart, rollback...) and
+## not every replica runs the new one yet.
+static func is_rolling(w: Dictionary) -> bool:
+	return str(w.get("kind", "")) in ["Deployment", "StatefulSet", "DaemonSet"] and int(w.get("desired", 0)) > 0 \
+		and int(w.get("updated", w.get("desired", 0))) < int(w.get("desired", 0))
+
+
+func rolling_out(key: String) -> bool:
+	return _rollouts.has(key) and _now() - float(_rollouts[key]) < ROLLOUT_FORGET
+
+
+func _track_rollouts(s: Dictionary, first: bool) -> void:
+	if first:
+		_rollouts.clear()
+	var now := _now()
+	var still := {}
+	var started := []
+	for w in s.workloads:
+		if not is_rolling(w):
+			continue
+		var k := _item_key("workloads", w)
+		still[k] = true
+		if not _rollouts.has(k):
+			_rollouts[k] = now
+			if not first and ns_visible(str(w.ns)) and young("workloads", k) < 0.0:
+				started.append({"text": "%s %s/%s" % [str(w.kind).to_lower(), w.ns, w.name], "kind": "workload", "key": k, "ns": w.ns,
+					"verb": "ROLLOUT started:"})
+	for k in _rollouts.keys():
+		if not still.has(k):
+			_rollouts.erase(k)
+	if not started.is_empty():
+		construction_started.emit(started)
+
+
+func _rollout_note(k: String, w: Dictionary) -> String:
+	if not rolling_out(k):
+		return ""
+	var progress := "%d/%d" % [mini(int(w.get("updated", 0)), int(w.desired)), int(w.desired)]
+	if w.get("paused", false):
+		return tr("ROLLOUT PAUSED %s") % progress
+	if _now() - float(_rollouts[k]) > ROLLOUT_STUCK:
+		return tr("ROLLOUT STUCK %s") % progress
+	return tr("ROLLING OUT %s") % progress
+
+
+func _ns_note(s: Dictionary, ns: String) -> String:
+	var names := []
+	for w in s.workloads:
+		if w.ns == ns and rolling_out(_item_key("workloads", w)):
+			names.append(str(w.name))
+	if names.is_empty():
+		return ""
+	return tr("ROLLOUT: %s") % names[0] if names.size() == 1 else tr("%d ROLLOUTS") % names.size()
+
+
+func _site_note(e: Entity, note: String) -> void:
+	var c: Construction = _sites.get(e)
+	if c != null and is_instance_valid(c):
+		c.note = note
 
 
 ## Opens (or updates) the building site of a new thing. finished: false keeps

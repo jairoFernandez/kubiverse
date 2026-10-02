@@ -2832,9 +2832,9 @@ func _on_state(s: Dictionary) -> void:
 func _on_construction(items: Array) -> void:
 	for it in items:
 		_term_text.append_text("[color=#ffa300]  %s %s[/color]  [url=goto:%s|%s|%s][color=#29adff]%s[/color][/url]\n" % [
-			tr("NEW, being built:"), _esc(str(it.text)), it.kind, it.key, it.ns, tr("GO SEE")])
+			tr(str(it.get("verb", "NEW, being built:"))), _esc(str(it.text)), it.kind, it.key, it.ns, tr("GO SEE")])
 	if items.size() == 1:
-		toast(tr("Being built: %s") % items[0].text)
+		toast((tr("Rollout: %s") if items[0].has("verb") else tr("Being built: %s")) % items[0].text)
 	else:
 		toast(tr("%d new things being built (see the terminal)") % items.size())
 

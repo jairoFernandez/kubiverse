@@ -157,6 +157,7 @@ func _init() -> void:
 	elif not world._sites[fresh].hold:
 		print("FAIL sites: pods not ready, the site should stay open"); fails += 1
 	grown.workloads[-1].ready = 2
+	grown.workloads[-1].updated = 2
 	world.apply_state(grown)
 	if world.sites().size() == 1 and world._sites.get(fresh).hold:
 		print("FAIL sites: ready, the site should close"); fails += 1
@@ -168,6 +169,22 @@ func _init() -> void:
 	world.set_level("plant")
 	if not world.sites().is_empty():
 		print("FAIL sites: old halls got building sites"); fails += 1
+	# Rollouts: a Deployment whose new template isn't on every replica yet
+	# gets scaffolding on its line (and its hall), with the progress.
+	world.set_level("ns:shop")
+	var rolling: Dictionary = st.duplicate(true)
+	var wl0: Dictionary = rolling.workloads.filter(func(w): return w.ns == "shop" and w.kind == "Deployment")[0]
+	wl0.updated = 0
+	world.apply_state(rolling)
+	var rk := "shop/Deployment/%s" % wl0.name
+	var rsite = world._sites.get(world.lines.get(rk))
+	if rsite == null or not rsite.hold or not rsite.sign_text().begins_with("ROLLING OUT 0/"):
+		print("FAIL rollout: no rollout site on %s (%s)" % [rk, rsite.sign_text() if rsite else "none"]); fails += 1
+	wl0.updated = wl0.desired
+	world.apply_state(rolling)
+	if world.rolling_out(rk) or (world._sites.get(world.lines.get(rk)) != null and world._sites[world.lines.get(rk)].hold):
+		print("FAIL rollout: done, the site should close"); fails += 1
+	world.apply_state(st)
 	# GitOps docks: one per app in front of its hall; a new revision from git
 	# is announced (and flown in by the cargo drone).
 	world.set_level("plant")

@@ -20,6 +20,7 @@ var hold := false
 var rise := true          # false: the thing is old, only work is going on in it
 var done := false
 var _open := 0.0          # seconds since the site was opened
+var note := ""            # sign text set by the world (a rollout's progress...)
 var _small := false
 var _jib: Node3D
 var _beacon: MeshInstance3D
@@ -104,6 +105,8 @@ func progress() -> float:
 
 ## Text for the floating label over the site.
 func sign_text() -> String:
+	if note != "":
+		return note
 	if rise and progress() < 1.0:
 		return tr("BUILDING %d%%") % roundi(progress() * 100.0)
 	return tr("UNDER CONSTRUCTION")

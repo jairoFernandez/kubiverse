@@ -281,6 +281,21 @@ func _reconcile(dt: float) -> void:
 	for wkey in workloads:
 		var wl: Dictionary = workloads[wkey]
 		var mine := pods.values().filter(func(p): return p._wl == wkey and not p.deleting)
+		# Rolling update (maxSurge 1, maxUnavailable 0): one new pod at a
+		# time; an old one goes only once the new one is ready.
+		var old := mine.filter(func(p): return int(p.get("_gen", 0)) != int(wl.gen))
+		if not old.is_empty() and wl.kind != "DaemonSet":
+			if wl.get("paused", false):
+				continue
+			var fresh := mine.filter(func(p): return int(p.get("_gen", 0)) == int(wl.gen))
+			if fresh.any(func(p): return not (p.status == "Running" and p.ready == p.total)):
+				continue
+			if mine.size() <= wl.desired and fresh.size() < wl.desired:
+				_new_pod(wkey, wl, "")
+			else:
+				old.sort_custom(func(a, b): return a.age > b.age)
+				_kill(old[0])
+			continue
 		if wl.kind == "DaemonSet":
 			for n in nodes:
 				if not mine.any(func(p): return p.node == n or p.get("_want_node", "") == n):
@@ -293,6 +308,18 @@ func _reconcile(dt: float) -> void:
 			mine.sort_custom(func(a, b): return a.age < b.age)
 			for i in mine.size() - wl.desired:
 				_kill(mine[i])
+
+
+## A new pod template (restart, new image, rollback): Deployments and
+## StatefulSets roll their pods over one by one (_reconcile); DaemonSets
+## replace them all.
+func _roll(wkey: String, wl: Dictionary) -> void:
+	wl.gen += 1
+	_dirty = true
+	if wl.kind == "DaemonSet":
+		for p in pods.values():
+			if p._wl == wkey:
+				_kill(p)
 
 
 func _new_pod(wkey: String, wl: Dictionary, want_node: String) -> void:
@@ -309,7 +336,7 @@ func _new_pod(wkey: String, wl: Dictionary, want_node: String) -> void:
 		"ns": wl.ns, "name": n, "node": "", "phase": "Pending", "status": "Pending",
 		"ready": 0, "total": wl.containers.size(), "restarts": 0, "owner_kind": wl.kind,
 		"owner_name": wl.name, "containers": wl.containers, "images": wl.containers.map(func(_c): return wl.image),
-		"ip": "", "age": 0.0, "deleting": false, "_t": 0.0, "_wl": wkey, "_want_node": want_node,
+		"ip": "", "age": 0.0, "deleting": false, "_t": 0.0, "_wl": wkey, "_want_node": want_node, "_gen": wl.gen,
 		"cpu_req_m": (64000 if wl.behaviour == "unschedulable" else 100 * wl.containers.size()), "mem_req": 128 * 1024 * 1024 * wl.containers.size(),
 		"message": ("0/%d nodes are available: %d Insufficient cpu, 1 node(s) had untolerated taint(s)." % [nodes.size(), nodes.size() - 1]) if wl.behaviour == "unschedulable" else "",
 	}
@@ -391,10 +418,7 @@ func action(req: Dictionary) -> Dictionary:
 			var wl = workloads.get(wkey)
 			if wl == null:
 				return {"ok": false, "error": "not found"}
-			wl.gen += 1
-			for p in pods.values():
-				if p._wl == wkey:
-					_kill(p)
+			_roll(wkey, wl)
 			return {"ok": true, "message": "%s %s rollout restarted" % [kind, n]}
 		"pause", "resume":
 			var wl = workloads.get(ns + "/" + kind + "/" + n)
@@ -420,10 +444,7 @@ func action(req: Dictionary) -> Dictionary:
 			wl.undos = int(wl.get("undos", 0)) + 1
 			if wl.has("good"):
 				wl.behaviour = "ok" if idx + 1 <= int(wl.good) else "crash"
-			wl.gen += 1
-			for p in pods.values():
-				if p._wl == wkey:
-					_kill(p)
+			_roll(wkey, wl)
 			_ev(ns, "Deployment", n, "DeploymentRollback", "Rolled back to revision %d (%s)" % [idx + 1, wl.image], "Normal")
 			_dirty = true
 			return {"ok": true, "message": "deployment %s rolled back to revision %d" % [n, idx + 1]}
@@ -588,7 +609,7 @@ func _emit() -> void:
 		var ready := mine.filter(func(p): return p.status == "Running" and p.ready == p.total).size()
 		var desired: int = nodes.size() if wl.kind == "DaemonSet" else wl.desired
 		var wo := {"kind": wl.kind, "ns": wl.ns, "name": wl.name, "desired": desired,
-			"ready": ready, "updated": mine.size(), "available": ready, "image": wl.image}
+			"ready": ready, "updated": mine.filter(func(p): return int(p.get("_gen", 0)) == int(wl.gen)).size(), "available": ready, "image": wl.image}
 		for k in ["gitops", "hpa", "pdb"]:
 			if wl.has(k):
 				wo[k] = wl[k]
@@ -923,10 +944,7 @@ func apply_manifest(kind: String, ns: String, n: String, yaml: String, dry: bool
 				wl.behaviour = "ok"
 				changed = true
 			if changed:
-				wl.gen += 1
-				for p in pods.values():
-					if p._wl == wkey:
-						_kill(p)
+				_roll(wkey, wl)
 			_ev(ns, kind, n, "Replaced", "%s replaced from the in-game editor" % label, "Normal")
 			_dirty = true
 			return {"ok": true, "message": label + " replaced"}
