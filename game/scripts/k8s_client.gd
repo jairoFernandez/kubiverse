@@ -362,6 +362,8 @@ static func item_key(coll: String, it: Dictionary) -> String:
 			return "%s/%s/%s" % [it.ns, it.kind, it.name]
 		"alerts":
 			return str(it.id)
+		"chart_repos":
+			return "%s/%s" % [it.ns, it.service]   # a ChartRepo has no name
 	return "%s/%s" % [it.ns, it.name]
 
 
