@@ -31,8 +31,15 @@ jobs:
           curl -fsSL -o godot.zip "$base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
           echo "$GODOT_SHA512  godot.zip" | sha512sum -c -
           unzip -q godot.zip && sudo mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 /usr/local/bin/godot
+      # gofmt, go vet (also the e2e build tag)
+      - run: make lint-go
+      # Bridge tests with the race detector; prints the total coverage.
+      - run: make test-race
       - run: make game-import
-      - run: make test
+      # Headless game tests, each under a timeout (a hang fails the job).
+      - run: make test-game
+      # Benchmarks as a smoke test (~1 s each): must finish without script errors.
+      - run: make bench
       - run: helm lint deploy/helm/kubiverse
 
   # A real bridge against a real cluster: kind with two nodes, the e2e test
