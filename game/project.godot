@@ -21,6 +21,7 @@ Settings="*res://scripts/settings.gd"
 I18n="*res://scripts/i18n.gd"
 Sfx="*res://scripts/sfx.gd"
 K8s="*res://scripts/k8s_client.gd"
+Radio="*res://scripts/radio.gd"
 
 [display]
 

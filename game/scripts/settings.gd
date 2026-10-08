@@ -42,6 +42,13 @@ var music_volume := 0.5
 var sfx_volume := 0.8
 var master_volume := 1.0
 var muted := false
+var radio_station := "kubi"  # Radio station id (built-in id, or "custom:<url>")
+var radio_custom: Array = []  # stations the player added: [{name, url}]
+var radio_video := true       # YouTube stations open the mini video player
+var radio_favorites: Array = []  # station ids marked with *
+var radio_playlist: Array = []   # MY LIST: station ids, in play order
+var radio_quality := "medium"    # YouTube video: low | medium | high
+var radio_layout := {}           # floating radio windows: "panel" / "tv" -> [x, y, w, h]
 var click_to_move := true
 var touch := "auto"
 var intro := true           # opening fly-through when a cluster connects
@@ -119,6 +126,13 @@ func load_file() -> void:
 		sfx_volume = cf.get_value("audio", "sfx", sfx_volume)
 		master_volume = cf.get_value("audio", "master", master_volume)
 		muted = cf.get_value("audio", "muted", muted)
+		radio_station = str(cf.get_value("radio", "station", radio_station))
+		radio_custom = cf.get_value("radio", "custom", radio_custom)
+		radio_video = cf.get_value("radio", "video", radio_video)
+		radio_favorites = cf.get_value("radio", "favorites", radio_favorites)
+		radio_playlist = cf.get_value("radio", "playlist", radio_playlist)
+		radio_quality = str(cf.get_value("radio", "quality", radio_quality))
+		radio_layout = cf.get_value("radio", "layout", radio_layout)
 		click_to_move = cf.get_value("controls", "click_to_move", click_to_move)
 		touch = cf.get_value("controls", "touch", touch)
 		show_finished = cf.get_value("ui", "show_finished", show_finished)
@@ -183,6 +197,13 @@ func save() -> void:
 	cf.set_value("audio", "sfx", sfx_volume)
 	cf.set_value("audio", "master", master_volume)
 	cf.set_value("audio", "muted", muted)
+	cf.set_value("radio", "station", radio_station)
+	cf.set_value("radio", "custom", radio_custom)
+	cf.set_value("radio", "video", radio_video)
+	cf.set_value("radio", "favorites", radio_favorites)
+	cf.set_value("radio", "playlist", radio_playlist)
+	cf.set_value("radio", "quality", radio_quality)
+	cf.set_value("radio", "layout", radio_layout)
 	cf.set_value("controls", "click_to_move", click_to_move)
 	cf.set_value("controls", "touch", touch)
 	cf.set_value("ui", "show_finished", show_finished)

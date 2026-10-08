@@ -368,6 +368,18 @@ func _screenshot_and_quit(path: String) -> void:
 			I18n.set_lang(arg.substr(7))
 		if arg == "--view":  # the VIEW menu open
 			hud.toggle_view()
+		if arg == "--sound":  # the radio window open
+			hud.toggle_radio()
+		if arg.begins_with("--radio="):  # tuned to station N (an online one gets time to play)
+			if LocalBridge.supported() and K8s.local.ready_url() == "":
+				K8s.start_local_bridge()  # the probe at launch can time out while the world loads
+				await get_tree().create_timer(2.0).timeout
+			if "--tv" in OS.get_cmdline_user_args():
+				Settings.radio_video = true  # with the TV, for YouTube
+			Radio.tune(int(arg.substr(8)))
+			if Radio.is_online():
+				await get_tree().create_timer(14.0).timeout
+				print("RADIO %s '%s' %s video=%s bridge=%s %s err=%s" % [Radio.state, Radio.title, Radio.stats, Radio.video != null, K8s.local.status, K8s.local.url, Radio.error])
 		if arg.begins_with("--level="):
 			_go_level(arg.substr(8))
 			await get_tree().create_timer(2.5).timeout
@@ -1994,6 +2006,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				if e is PodBot:
 					hud.open_logs(e.data)
 			KEY_F: _blast()
+			KEY_U: hud.toggle_radio()
+			KEY_BRACKETLEFT: hud.radio_step(-1)
+			KEY_BRACKETRIGHT: hud.radio_step(1)
 			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6:
 				_select_weapon(event.physical_keycode - KEY_1)
 

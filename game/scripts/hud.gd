@@ -91,6 +91,27 @@ var _view_intro: CheckBox
 var _view_touch: Button
 var _vol_panel: PanelContainer
 var _vol_mute: CheckBox
+var _radio_lcd: Label      # the radio's display: frequency + station
+var _radio_now: Label      # what's on (scrolls when long)
+var _radio_full := ""
+var _radio_scroll := 0.0
+var _radio_hint: Label
+var _radio_video: CheckBox
+var _radio_pause: Button
+var _radio_del: Button
+var _radio_link: LineEdit
+var _radio_fav: Button
+var _radio_quality: Button
+var _radio_tab := "all"         # station list: all | fav | list
+var _radio_tabs: Array[Button] = []
+var _radio_rows: VBoxContainer
+var _radio_rows_sig := ""       # what the list shows now (rebuilt only when it changes)
+var _radio_list_btn: Button
+var _radio_panel: PanelContainer  # the radio: its own window, dragged by its title
+var _radio_drag: DragResize
+var _radio_tv: RetroTV            # native YouTube: the 80s TV in a corner
+var _tv_drag: DragResize
+var _radio_saved_t := 0.0         # when the windows' places were last checked for saving
 var _connect_mute: CheckBox
 var _vol_btn: Button
 var map_mini: MapView
@@ -1105,6 +1126,8 @@ func _build_game_ui() -> void:
 		Settings.save()
 		_sync_view())
 	volv.add_child(_vol_mute)
+	volv.add_child(_button("RADIO  [U]", toggle_radio))
+	_build_radio()
 
 	# ---- View menu (drops down under the bar): sections, and a scroll
 	# when it's taller than the screen (_layout sizes it).
@@ -2445,7 +2468,7 @@ func _build_menu() -> void:
 		["KUBI", toggle_kubi], ["WATCH", toggle_watch], ["MAP", toggle_map], ["MISSIONS", toggle_missions],
 		["ALARMS", toggle_alarms], ["BUILD", open_build], ["CHAOS", toggle_chaos], ["TERMINAL", toggle_terminal],
 		["LEGEND", toggle_legend], ["STATS", toggle_stats], ["FIRST PERSON", func(): fpv_requested.emit()],
-		["JETPACK", func(): jetpack_requested.emit()], ["SOUND", toggle_volume], ["VIEW", toggle_view],
+		["JETPACK", func(): jetpack_requested.emit()], ["SOUND", toggle_volume], ["RADIO", toggle_radio], ["VIEW", toggle_view],
 		["EXIT", func(): disconnect_requested.emit()]]
 	for it in items:
 		var cb: Callable = it[1]
@@ -2649,6 +2672,336 @@ func toggle_volume() -> void:
 	_vol_panel.visible = not _vol_panel.visible
 	_view_panel.visible = false
 	_sync_view()
+
+
+## The retro radio, in the SOUND menu: a green display, the dial, a box to
+## add any stream / YouTube link or playlist, and the station list with
+## favorites and MY LIST (see Radio).
+func _build_radio() -> void:
+	_radio_panel = PanelContainer.new()
+	_radio_panel.anchor_left = 1.0
+	_radio_panel.anchor_right = 1.0
+	_radio_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_radio_panel.offset_right = -10
+	_radio_panel.offset_top = TOP
+	_radio_panel.visible = false
+	_radio_panel.custom_minimum_size = Vector2(470, 0)
+	_game_root.add_child(_radio_panel)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 8)
+	_radio_panel.add_child(v)
+	var bar := HBoxContainer.new()
+	var title := _label("RADIO   [ and ] change station", 22, Vox.LAVENDER)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar.add_child(title)
+	bar.add_child(_button("X", toggle_radio))
+	v.add_child(bar)
+	_radio_drag = DragResize.new().attach(_radio_panel, title)
+	_radio_drag.min_size = Vector2(440, 360)
+	var lcd := PanelContainer.new()
+	lcd.add_theme_stylebox_override("panel", _flat(Color("0b2410"), Color("2f6b3a"), 3, 8))
+	var lv := VBoxContainer.new()
+	lv.add_theme_constant_override("separation", 0)
+	lcd.add_child(lv)
+	_radio_lcd = _label("", 30, Color("7dff8a"))
+	_radio_lcd.clip_text = true
+	_radio_now = _label("", 22, Color("4fc75c"))
+	_radio_now.clip_text = true
+	for l in [_radio_lcd, _radio_now]:
+		l.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		lv.add_child(l)
+	v.add_child(lcd)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.add_child(_button("<", func(): radio_step(-1)))
+	_radio_pause = _button("PAUSE", func(): Radio.toggle_pause())
+	row.add_child(_radio_pause)
+	row.add_child(_button(">", func(): radio_step(1)))
+	_radio_fav = _button("*", func(): Radio.toggle_favorite(Settings.radio_station))
+	_radio_fav.tooltip_text = tr("Favorite")
+	row.add_child(_radio_fav)
+	_radio_video = _check("Video", func(): Radio.set_video(_radio_video.button_pressed))
+	row.add_child(_radio_video)
+	_radio_quality = _button("", func():
+		Radio.set_quality(Radio.QUALITIES[(Radio.QUALITIES.find(Settings.radio_quality) + 1) % Radio.QUALITIES.size()]))
+	row.add_child(_radio_quality)
+	v.add_child(row)
+	var add := HBoxContainer.new()
+	add.add_theme_constant_override("separation", 8)
+	_radio_link = LineEdit.new()
+	_radio_link.placeholder_text = tr("Paste a radio, YouTube link or playlist")
+	_radio_link.add_theme_font_size_override("font_size", 20)
+	_radio_link.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_radio_link.text_submitted.connect(func(_t): _radio_add())
+	add.add_child(_radio_link)
+	add.add_child(_button("ADD", _radio_add, "GoButton"))
+	_radio_del = _button("REMOVE", func(): Radio.remove_current(), "DangerButton")
+	add.add_child(_radio_del)
+	v.add_child(add)
+	# The station list: every station, the favorites, or MY LIST.
+	var tabs := HBoxContainer.new()
+	tabs.add_theme_constant_override("separation", 6)
+	for t in [["all", "ALL"], ["fav", "FAVORITES"], ["list", "MY LIST"]]:
+		var b := _button(t[1], func():
+			_radio_tab = t[0]
+			_radio_rows_sig = ""
+			_sync_radio())
+		b.toggle_mode = true
+		b.set_meta("tab", t[0])
+		_radio_tabs.append(b)
+		tabs.add_child(b)
+	var gap := Control.new()
+	gap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tabs.add_child(gap)
+	var copy := _button("COPY LINKS", func():
+		DisplayServer.clipboard_set(Radio.export_links())
+		toast(tr("%d links copied: paste them in the box to bring them back") % Settings.radio_custom.size(), true))
+	copy.tooltip_text = tr("Your links, to keep somewhere safe (they are also saved in radio-stations.json)")
+	tabs.add_child(copy)
+	v.add_child(tabs)
+	var sc := ScrollContainer.new()
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	sc.custom_minimum_size = Vector2(0, 180)
+	sc.size_flags_vertical = Control.SIZE_EXPAND_FILL  # a taller window shows more stations
+	_radio_rows = VBoxContainer.new()
+	_radio_rows.add_theme_constant_override("separation", 2)
+	_radio_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sc.add_child(_radio_rows)
+	v.add_child(sc)
+	_radio_list_btn = _button("", func():
+		if Radio.list_mode:
+			Radio.stop_playlist()
+		else:
+			Radio.play_playlist(maxi(0, Radio.list_pos())), "GoButton")
+	v.add_child(_radio_list_btn)
+	_radio_hint = _label("", 20, Vox.SILVER)
+	_radio_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_radio_hint.custom_minimum_size = Vector2(420, 0)
+	v.add_child(_radio_hint)
+	Radio.changed.connect(_sync_radio)
+	I18n.lang_changed.connect(func():
+		_radio_rows_sig = ""
+		_sync_radio())
+	_radio_panel.visibility_changed.connect(_sync_radio)
+	_build_radio_tv()
+	_restore_radio_layout()
+	_sync_radio()
+
+
+func toggle_radio() -> void:
+	_radio_panel.visible = not _radio_panel.visible
+	if _radio_panel.visible:
+		_radio_panel.move_to_front()
+
+
+## Where the player left the radio and the TV (floating), from the settings.
+func _restore_radio_layout() -> void:
+	for k in [["panel", _radio_drag], ["tv", _tv_drag]]:
+		var r = Settings.radio_layout.get(k[0])
+		if r is Array and r.size() == 4:
+			k[1].float_at(Rect2(r[0], r[1], r[2], r[3]))
+
+
+## Saves the windows' places once they stop moving (checked every second).
+func _save_radio_layout(delta: float) -> void:
+	_radio_saved_t += delta
+	if _radio_saved_t < 1.0 or Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		return
+	_radio_saved_t = 0.0
+	var now := {}
+	for k in [["panel", _radio_drag], ["tv", _tv_drag]]:
+		var d: DragResize = k[1]
+		if d.is_floating():
+			now[k[0]] = [d.rect.position.x, d.rect.position.y, d.rect.size.x, d.rect.size.y]
+	if now != Settings.radio_layout:
+		Settings.radio_layout = now
+		Settings.save()
+
+
+## The station list, rebuilt only when what it shows changed (not on every
+## "now playing" update) and only while the SOUND menu is open.
+func _sync_radio_rows() -> void:
+	var all := Radio.stations()
+	var shown: Array = []
+	match _radio_tab:
+		"fav":
+			for st in all:
+				if Radio.is_favorite(st.id):
+					shown.append(st)
+		"list":
+			shown = Radio.playlist()
+		_:
+			shown = all
+	var sig := "%s|%s|%s|%s|%s|%s" % [_radio_tab, Settings.radio_station, Radio.list_mode, Settings.radio_favorites, Settings.radio_playlist, shown.map(func(st): return st.id + st.name)]
+	if sig == _radio_rows_sig:
+		return
+	_radio_rows_sig = sig
+	for c in _radio_rows.get_children():
+		c.queue_free()
+	if shown.is_empty():
+		var empty := _label(tr("No favorites yet: press * on a station.") if _radio_tab == "fav" else tr("MY LIST is empty: press + on a station, or paste a YouTube playlist."), 20, Vox.SILVER)
+		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_radio_rows.add_child(empty)
+		return
+	for n in shown.size():
+		var st: Dictionary = shown[n]
+		var id: String = st.id
+		var h := HBoxContainer.new()
+		h.add_theme_constant_override("separation", 4)
+		var on := id == Settings.radio_station
+		var name_btn := _button("%s %s %s" % [">" if on else " ", Radio.frequency(Radio.find(id)), st.name], func():
+			if _radio_tab == "list":
+				Radio.play_playlist(n)
+			else:
+				Radio.list_mode = false
+				Radio.tune(Radio.find(id)))
+		name_btn.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		name_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		name_btn.clip_text = true
+		name_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name_btn.add_theme_font_size_override("font_size", 19)
+		if on:
+			name_btn.add_theme_color_override("font_color", Vox.GREEN)
+		name_btn.tooltip_text = str(st.get("url", tr(st.about)))
+		h.add_child(name_btn)
+		var fav := _button("*", func(): Radio.toggle_favorite(id))
+		fav.tooltip_text = tr("Favorite")
+		fav.add_theme_color_override("font_color", Vox.YELLOW if Radio.is_favorite(id) else Vox.SLATE)
+		h.add_child(fav)
+		if _radio_tab == "list":
+			h.add_child(_button("^", func(): Radio.playlist_move(id, -1)))
+			h.add_child(_button("v", func(): Radio.playlist_move(id, 1)))
+			h.add_child(_button("-", func(): Radio.playlist_remove(id)))
+		else:
+			var inl := Radio.in_playlist(id)
+			var pl := _button("-" if inl else "+", func():
+				if Radio.in_playlist(id):
+					Radio.playlist_remove(id)
+				else:
+					Radio.playlist_add(id))
+			pl.tooltip_text = tr("Take off MY LIST") if inl else tr("Add to MY LIST")
+			h.add_child(pl)
+		_radio_rows.add_child(h)
+
+
+## The 80s TV for YouTube, bottom-right until dragged: the frames come from
+## the bridge (Radio.video), drawn in the game's own window (see RetroTV).
+const RADIO_TV_SIZE := Vector2(420, 300)
+
+
+func _build_radio_tv() -> void:
+	_radio_tv = RetroTV.new()
+	_radio_tv.anchor_left = 1.0
+	_radio_tv.anchor_right = 1.0
+	_radio_tv.anchor_top = 1.0
+	_radio_tv.anchor_bottom = 1.0
+	_radio_tv.visible = false
+	_game_root.add_child(_radio_tv)
+	_radio_tv.prev.connect(func(): _tv_channel(-1))
+	_radio_tv.next.connect(func(): _tv_channel(1))
+	_radio_tv.closed.connect(func(): Radio.set_video(false))
+	_tv_drag = DragResize.new().attach(_radio_tv, _radio_tv.handle)
+	_tv_drag.min_size = Vector2(300, 210)
+	Radio.frame.connect(_sync_radio_tv)
+
+
+func _tv_channel(dir: int) -> void:
+	if not Radio.step_video(dir):
+		toast(tr("No other YouTube channel: add more links (or a playlist) in the radio"), false)
+		return
+	_radio_tv.show_channel("CH %s" % Radio.frequency(Radio.index()))
+
+
+## Shown for YouTube with video: snow while it tunes in, then the picture.
+func _sync_radio_tv() -> void:
+	var st := Radio.current()
+	var on: bool = st.kind == "youtube" and Settings.radio_video and not OS.has_feature("web") \
+		and Radio.state in ["tuning", "playing"]
+	if on and not _radio_tv.visible:
+		_radio_tv.show_channel("CH %s" % Radio.frequency(Radio.index()))
+	_radio_tv.visible = on
+	_radio_tv.set_frame(Radio.video)
+	_radio_tv.set_snow(0.0 if Radio.has_video() else 1.0)
+
+
+func radio_step(dir: int) -> void:
+	Radio.step(dir)
+	var st := Radio.current()
+	var where := ""
+	if Radio.list_mode and Radio.list_pos() >= 0:
+		where = "  [%d/%d]" % [Radio.list_pos() + 1, Radio.playlist().size()]
+	toast(tr("RADIO %s: %s") % [Radio.frequency(Radio.index()), st.name] + where, true)
+
+
+func _radio_add() -> void:
+	var text := _radio_link.text
+	var links := Radio.links_in(text)
+	if links.size() == 1 and Radio.is_playlist_link(links[0]):
+		toast(tr("Opening the playlist..."), true)
+	Radio.add(text, func(err: String):
+		if err != "":
+			toast(err, false)
+			return
+		_radio_link.text = ""
+		_radio_link.release_focus())
+
+
+func _sync_radio() -> void:
+	if _radio_lcd == null:
+		return
+	var st := Radio.current()
+	var where := ""
+	if Radio.list_mode and Radio.list_pos() >= 0:
+		where = "  %s %d/%d" % [tr("LIST"), Radio.list_pos() + 1, Radio.playlist().size()]
+	_radio_lcd.text = "%s FM  %s%s" % [Radio.frequency(Radio.index()), st.name, where]
+	var line := ""
+	match Radio.state:
+		"tuning": line = tr("Tuning in...")
+		"paused": line = tr("Paused")
+		"error": line = Radio.error
+		_: line = Radio.title if Radio.title != "" else tr(st.about)
+	_radio_full = line
+	_radio_scroll = 0.0
+	_radio_now.text = line
+	_radio_now.add_theme_color_override("font_color", Color("ff8a7a") if Radio.state == "error" else Color("4fc75c"))
+	_radio_pause.visible = Radio.is_online() and Radio.state in ["playing", "paused"]
+	_radio_pause.text = tr("PLAY") if Radio.state == "paused" else tr("PAUSE")
+	_radio_fav.add_theme_color_override("font_color", Vox.YELLOW if Radio.is_favorite(st.id) else Vox.WHITE)
+	var yt_video: bool = st.kind == "youtube" and not OS.has_feature("web")
+	_radio_video.visible = yt_video
+	_radio_video.set_pressed_no_signal(Settings.radio_video)
+	_radio_quality.visible = yt_video and Settings.radio_video
+	_radio_quality.text = tr("QUALITY: %s") % tr(Settings.radio_quality.to_upper())
+	_radio_del.visible = st.get("custom", false)
+	for b in _radio_tabs:
+		b.set_pressed_no_signal(b.get_meta("tab") == _radio_tab)
+	_radio_list_btn.visible = _radio_tab == "list" and not Radio.playlist().is_empty()
+	_radio_list_btn.text = tr("STOP MY LIST") if Radio.list_mode else tr("PLAY MY LIST")
+	_radio_hint.text = _radio_hint_text(st)
+	_radio_hint.visible = _radio_hint.text != ""
+	if _radio_panel.visible:
+		_sync_radio_rows()
+	_sync_radio_tv()
+
+
+## What the player needs to know about this station (or to install).
+func _radio_hint_text(st: Dictionary) -> String:
+	if st.kind == "synth":
+		return ""
+	if OS.has_feature("web"):
+		return tr("The video plays in a corner of the page.") if st.kind == "youtube" else ""
+	if not Radio.bridge_ok:
+		return tr("Online stations play through the game's bridge: start it (or update it) in the connect screen.")
+	var install := "brew install ffmpeg yt-dlp"
+	if OS.has_feature("windows"):
+		install = "scoop install ffmpeg yt-dlp"
+	elif OS.has_feature("linux"):
+		install = "sudo apt install ffmpeg yt-dlp"
+	if not Radio.has_ffmpeg:
+		return tr("Online stations are decoded by ffmpeg (free). Install it: %s") % install
+	if st.kind == "youtube" and not Radio.has_ytdl:
+		return tr("YouTube needs yt-dlp too. Install it: %s") % install
+	return ""
 
 
 func toggle_view() -> void:
@@ -4946,6 +5299,14 @@ func _layout() -> void:
 				lowest = maxf(lowest, p.get_global_rect().end.y)
 		_close_fab.position = Vector2(sz.x - fs.x - 8.0, clampf(lowest + 8.0, top, sz.y * 0.62))
 	var bottom := (_help_bar.size.y + 6.0) if _help_bar.visible else 6.0
+	if _radio_tv and not _tv_drag.place(sz):
+		# Docked: on the help bar, bottom-right.
+		_radio_tv.offset_right = -10
+		_radio_tv.offset_bottom = -bottom
+		_radio_tv.offset_left = -10 - RADIO_TV_SIZE.x
+		_radio_tv.offset_top = -bottom - RADIO_TV_SIZE.y
+	if _radio_panel:
+		_radio_drag.place(sz)
 	# Terminal and feed sit above the help bar.
 	if engine and engine.drag:
 		engine.drag.place(sz)   # the engine room panel, when dragged out
@@ -5048,6 +5409,15 @@ func _layout() -> void:
 
 func _process(delta: float) -> void:
 	StatsPanel.probe(delta)
+	# Radio display: a long "now playing" scrolls like an old car stereo.
+	if _radio_panel:
+		_save_radio_layout(delta)
+	if _radio_now and _radio_panel.visible and _radio_full.length() > 34:
+		_radio_scroll += delta
+		if _radio_scroll > 0.3:
+			_radio_scroll = 0.0
+			var t := _radio_now.text
+			_radio_now.text = t.substr(1) + t.left(1) if t.length() > _radio_full.length() else _radio_full + "   *   "
 	if _banner_t > 0.0:
 		_banner_t -= delta
 		_banner.modulate.a = clampf(_banner_t, 0.0, 1.0)

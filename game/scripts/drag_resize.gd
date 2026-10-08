@@ -43,6 +43,12 @@ func dock() -> void:
 	panel.offset_bottom = _anchors[8]
 
 
+## Floats the panel at r right away (a position saved last time).
+func float_at(r: Rect2) -> void:
+	_start()
+	rect = r
+
+
 func _start() -> void:
 	panel.move_to_front()  # a floating panel goes over the others
 	if rect.size == Vector2.ZERO:

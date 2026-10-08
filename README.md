@@ -301,6 +301,18 @@ make serve-lan      # = kubiverse-bridge --lan --web build/web
 
 The **VOL** button in the top bar opens master volume, music and effects, plus **Mute everything**. It's saved in the settings.
 
+### Retro radio
+
+**U** (or **RADIO** in the VOL panel or the MENU) opens the radio, a window of its own: drag it by its title, resize it from any edge, double-click the title to dock it back. `<` `>` (or `[` `]` anywhere in the game) turn the dial.
+
+- **Built-in stations** (KUBI FM, CHIP LOFI, TURBO 8-BIT) are synthesized by the game: no network, and only the song playing is kept in memory.
+- **Online stations** (a few SomaFM channels, Lofi Girl's YouTube live) and any **stream, YouTube link or YouTube playlist** you paste in the box (a playlist brings up to 200 videos into MY LIST).
+- **FAVORITES** (`*`) and **MY LIST** (`+`, reorder with `^` `v`): PLAY MY LIST plays it in order, `<` `>` move along it and the next one starts when a video ends.
+- Your links are saved in the settings and in a backup, `radio-stations.json` next to them (restored if the settings lose them). **COPY LINKS** puts them on the clipboard; pasting that text in the box brings them back, names included.
+- Natively the bridge on your computer decodes stations with a headless [ffmpeg](https://ffmpeg.org) ([yt-dlp](https://github.com/yt-dlp/yt-dlp) finds YouTube's streams): `brew install ffmpeg yt-dlp`, `sudo apt install ffmpeg yt-dlp` or `scoop install ffmpeg yt-dlp`. The game gets raw sound and JPEG frames over a WebSocket, mixes the sound itself (volume and mute apply) and shows YouTube on an 80s wood-cabinet TV (curved screen, scanlines, snow while it tunes in, channel knobs) that you can drag and resize too. **QUALITY** picks low (240p 15 fps), medium (360p 24 fps) or high (480p 30 fps); the picture keeps time with the sound. On the web build the browser plays them, YouTube in a small embed.
+- Light on the machine: a radio costs ~7 MB and under 1% CPU, YouTube ~55 / 80 / 110 MB and 2 / 5 / 10% by quality (a separate player window would cost ~300 MB of graphics memory on macOS). The built-in music stops while a station plays, and the bridge stops ffmpeg when the game quits or stops listening (20 s). The radio only takes orders from this computer (`/api/radio` refuses LAN and team-mode requests).
+- The game always starts on the built-in music: nothing goes online until you turn the dial.
+
 ## Matrix-style manifest editor
 
 **EDIT YAML** in the inspector (pods, workloads, services, nodes), `kubectl edit <kind>/<name> -n <ns>` in the terminal, or **Fix in the YAML** from Kubi open a retro editor: green code rain, the manifest "decrypts" line by line and appears highlighted. The **DECODER** column explains each line (what `replicas`, `requests.cpu`, `tolerations`... do) and warns about dangerous values: `latest` image, 1 replica, `privileged` container, very low memory limit, plaintext secrets. `~` marks changed lines.

@@ -28,7 +28,158 @@ func _init() -> void:
 	_local_bridge_pick()
 	_kubi_terminal_commands()
 	await _trend_draw()
+	await _radio_links()
+	await _radio_dial()
 	finish("logic tests")
+
+
+## The radio tells streams from YouTube and refuses anything that isn't web.
+func _radio_links() -> void:
+	await process_frame  # radio.gd uses autoloads: load it once they exist
+	var R: GDScript = load("res://scripts/radio.gd")
+	check(R.kind_of("https://ice2.somafm.com/defcon-128-mp3") == "stream", "an Icecast URL is a stream")
+	check(R.kind_of(" http://radio.example:8000/live ") == "stream", "http with a port, spaces trimmed")
+	for u in ["https://www.youtube.com/watch?v=jfKfPfyJRdk", "https://youtu.be/jfKfPfyJRdk", "https://m.youtube.com/live/jfKfPfyJRdk", "https://music.youtube.com/watch?v=jfKfPfyJRdk&list=x"]:
+		check(R.kind_of(u) == "youtube", "YouTube: " + u)
+		check(R.youtube_id(u) == "jfKfPfyJRdk", "video id of " + u)
+	check(R.youtube_id("https://www.youtube.com/shorts/abcdefghijk") == "abcdefghijk", "shorts id")
+	check(R.youtube_id("https://www.youtube.com/") == "", "no id on the home page")
+	for bad in ["", "file:///etc/passwd", "ftp://x/y", "javascript:alert(1)", "https://", "https://a b/c", "youtube.com/watch?v=jfKfPfyJRdk"]:
+		check(R.kind_of(bad) == "", "not a station: '%s'" % bad)
+	check(R.kind_of("https://notyoutube.com/x") == "stream", "a lookalike host is not YouTube")
+	check(R.name_for("https://www.radio.example:8000/live") == "RADIO.EXAMPLE:8000", "a custom stream is named after its host")
+	check(R.name_for("https://youtu.be/jfKfPfyJRdk") == "YOUTUBE jfKfPfyJRdk", "a YouTube link is named after its video")
+	check(R.frequency(0) == "88.1" and R.frequency(5) == "94.1", "FM dial frequencies")
+	check(R.stream_volume(0.5, 1.0) == 35, "half music volume")
+	check(R.stream_volume(1.0, 0.0) == 0, "muted means silent")
+	check(R.stream_volume(5.0, 1.0) == 100, "never above 100")
+	check(R.embed_src("abcdefghijk") == "https://www.youtube-nocookie.com/embed/abcdefghijk?autoplay=1&playsinline=1", "web embed of a video")
+	check(R.embed_src("live_stream?channel=UC1") == "https://www.youtube-nocookie.com/embed/live_stream?channel=UC1&autoplay=1&playsinline=1", "web embed of a channel's live stream")
+	check(R.is_playlist_link("https://www.youtube.com/playlist?list=PL123") and R.is_playlist_link("https://www.youtube.com/watch?v=abcdefghijk&list=PL1"), "YouTube playlist links")
+	check(not R.is_playlist_link("https://youtu.be/abcdefghijk") and not R.is_playlist_link("https://radio.example/?list=1"), "not playlists")
+	var fr: PackedVector2Array = R.to_frames(PackedFloat32Array([0.5, -0.5, 0.25, 1.0, 0.75]))
+	check(fr.size() == 2 and fr[0] == Vector2(0.5, -0.5) and fr[1] == Vector2(0.25, 1.0), "PCM from the bridge: interleaved L R pairs (a stray sample dropped)")
+	var lofi := {}
+	for st in R.STATIONS:
+		if st.id == "lofigirl":
+			lofi = st
+	check(R.kind_of(lofi.url) == "youtube" and str(lofi.get("embed", "")).begins_with("live_stream?channel="), "Lofi Girl follows the channel's live stream (native and web)")
+	var ids := {}
+	for st in R.STATIONS:
+		check(not ids.has(st.id), "unique station id " + st.id)
+		ids[st.id] = true
+		if st.kind == "synth":
+			check(st.song == "kubi" or root.get_node("Sfx").SONGS.has(st.song), "a built-in station has a song: " + st.id)
+		else:
+			check(R.kind_of(st.url) == st.kind, "station %s is a %s" % [st.id, st.kind])
+
+
+## Turning the dial: built-in songs swap in Sfx, links can be added and
+## removed, and an online station with no bridge falls back to the music.
+func _radio_dial() -> void:
+	await process_frame  # the autoloads are in the tree from here on
+	var settings: Node = root.get_node("Settings")
+	var sfx: Node = root.get_node("Sfx")
+	var radio: Node = root.get_node("Radio")
+	var saved_station: String = settings.radio_station
+	var saved_custom: Array = settings.radio_custom.duplicate(true)
+	settings.radio_custom = []
+	radio.tune(1)
+	check(radio.current().id == "lofi" and sfx.song() == "lofi", "the dial plays CHIP LOFI")
+	radio.step(-1)
+	check(radio.current().id == "kubi" and sfx.song() == "kubi", "back to KUBI FM")
+	radio.step(-1)
+	check(radio.index() == radio.stations().size() - 1, "the dial wraps around")
+	radio.tune(0)
+	var err := [""]
+	var got := func(e: String): err[0] = e
+	radio.add("not a link", got)
+	check(err[0] != "", "a non-link is refused")
+	var n: int = radio.stations().size()
+	radio.add("https://radio.example/live", got)
+	check(err[0] == "", "a stream link is added")
+	check(radio.stations().size() == n + 1 and radio.current().get("custom", false), "and tuned in")
+	radio.add("https://radio.example/live", got)
+	check(radio.stations().size() == n + 1, "no duplicates")
+	# Headless there is no bridge: the station says so and the music stays.
+	check(radio.state == "error" and radio.error != "", "no bridge: an error the player can read")
+	check(sfx.song() == "kubi", "the built-in music plays instead")
+	radio.remove_current()
+	check(radio.stations().size() == n and radio.current().id == "kubi", "removed, back to KUBI FM")
+	radio.add("https://youtu.be/jfKfPfyJRdk", got)
+	check(err[0] == "" and radio.current().kind == "youtube", "a YouTube link is added, as a YouTube station")
+	radio.remove_current()
+	await _radio_lists(settings, radio)
+	settings.radio_custom = saved_custom
+	settings.radio_station = saved_station
+	settings.save()
+
+
+## Favorites, MY LIST, the backup of the player's links and COPY LINKS.
+func _radio_lists(settings: Node, radio: Node) -> void:
+	var saved := [settings.radio_favorites.duplicate(), settings.radio_playlist.duplicate(), radio.backup_path]
+	settings.radio_favorites = []
+	settings.radio_playlist = []
+	radio.backup_path = OS.get_temp_dir().path_join("kubiverse-test-radio-%d.json" % OS.get_process_id())
+	radio.toggle_favorite("defcon")
+	check(radio.is_favorite("defcon"), "a favorite")
+	radio.toggle_favorite("defcon")
+	check(not radio.is_favorite("defcon"), "and not anymore")
+	# Several links at once, as COPY LINKS writes them: names are kept.
+	radio.add("My stream | https://a.example/live\nhttps://b.example/live\n  junk  ", func(_e): pass)
+	check(settings.radio_custom.size() == 2 and settings.radio_custom[0].name == "My stream", "pasted links keep their names: %s" % [settings.radio_custom])
+	check(radio.current().url == "https://a.example/live", "the first one is tuned in")
+	var exported: String = radio.export_links()
+	check(exported == "My stream | https://a.example/live\nA.EXAMPLE | https://b.example/live".replace("A.EXAMPLE", "B.EXAMPLE"), "COPY LINKS: " + exported)
+	check(Array(radio.links_in(exported)) == ["https://a.example/live", "https://b.example/live"], "the copied text pastes back")
+	# MY LIST: order, moves, stepping along it.
+	for id in ["kubi", "custom:https://a.example/live", "lofi"]:
+		radio.playlist_add(id)
+	radio.playlist_add("kubi")
+	check(settings.radio_playlist == ["kubi", "custom:https://a.example/live", "lofi"], "MY LIST, no duplicates")
+	radio.playlist_move("lofi", -1)
+	check(settings.radio_playlist == ["kubi", "lofi", "custom:https://a.example/live"], "moved up")
+	radio.playlist_move("kubi", -1)
+	check(settings.radio_playlist[0] == "kubi", "the first can't go higher")
+	radio.play_playlist(1)
+	check(radio.list_mode and radio.current().id == "lofi", "MY LIST plays from entry 2")
+	radio.step(-1)
+	check(radio.current().id == "kubi" and radio.list_mode, "< goes back along MY LIST, not the dial")
+	radio.step(-1)
+	check(radio.current().id == "custom:https://a.example/live", "and wraps to its end")
+	# That one can't play at all (no bridge headless): MY LIST stops there
+	# instead of spinning through every entry.
+	check(radio.state == "error" and not radio.list_mode, "no bridge: MY LIST stops at the online entry")
+	radio.stop_playlist()
+	# The TV's knobs only go to YouTube channels.
+	radio.tune(radio.find("lofigirl"))
+	check(not radio.step_video(1), "one YouTube channel: the knob has nowhere to go")
+	radio.add("https://youtu.be/abcdefghijk", func(_e): pass)
+	radio.tune(radio.find("lofigirl"))
+	check(radio.step_video(1) and radio.current().id == "custom:https://youtu.be/abcdefghijk", "CH+ skips every radio to the next video")
+	check(radio.step_video(1) and radio.current().id == "lofigirl", "and wraps among videos only")
+	radio.remove("custom:https://youtu.be/abcdefghijk")
+	radio.tune(0)
+	# Removing a station takes it off the lists too.
+	radio.toggle_favorite("custom:https://b.example/live")
+	radio.playlist_add("custom:https://b.example/live")
+	radio.remove("custom:https://b.example/live")
+	check(not radio.is_favorite("custom:https://b.example/live") and not radio.in_playlist("custom:https://b.example/live"), "removed everywhere")
+	check(radio.playlist().size() == 3, "the rest of MY LIST stays")
+	# The backup brings the links back if settings.cfg loses them.
+	check(FileAccess.file_exists(radio.backup_path), "a backup next to the settings")
+	var custom: Array = settings.radio_custom.duplicate(true)
+	settings.radio_custom = []
+	settings.radio_playlist = []
+	check(radio.restore_backup(), "restored from the backup")
+	check(settings.radio_custom == custom and settings.radio_playlist.size() == 3, "same links and MY LIST: %s" % [settings.radio_custom])
+	check(not radio.restore_backup(), "never over links the settings still have")
+	DirAccess.remove_absolute(radio.backup_path)
+	for c in custom:
+		radio.remove("custom:" + c.url)
+	settings.radio_favorites = saved[0]
+	settings.radio_playlist = saved[1]
+	radio.backup_path = saved[2]
 
 
 ## Kubi's suggestions get RUN only if the game terminal can run them.

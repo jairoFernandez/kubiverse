@@ -16,6 +16,12 @@ var _last_play := {}       # name -> msec, to avoid machine-gun repeats
 var _music_task := -1
 var _jet: AudioStreamPlayer  # jetpack engine loop
 var _jet_level := 0.0
+## Radio (see Radio): which built-in song plays, and whether an online station
+## has taken over (then the synth players stop: nothing is mixed for nothing).
+var _song_id := "kubi"
+var _built_id := ""          # song whose streams are loaded now
+var _pending_id := ""        # song to synthesize once the worker is free
+var _external := false
 
 
 func _exit_tree() -> void:
@@ -42,6 +48,7 @@ func _ready() -> void:
 		m.volume_db = -80.0
 		add_child(m)
 	# Music takes a moment to synthesize: do it off the main thread.
+	_song_id = "kubi"
 	_music_task = WorkerThreadPool.add_task(_build_music)
 
 
@@ -201,7 +208,76 @@ func set_listener(pos: Vector3) -> void:
 
 const NOTES := {"A2": 110.0, "C3": 130.81, "D3": 146.83, "E3": 164.81, "F3": 174.61, "G3": 196.0,
 	"A3": 220.0, "C4": 261.63, "D4": 293.66, "E4": 329.63, "F4": 349.23, "G4": 392.0, "A4": 440.0,
-	"B3": 246.94, "B4": 493.88, "C5": 523.25, "E5": 659.25, "G5": 783.99}
+	"B3": 246.94, "B4": 493.88, "C5": 523.25, "E5": 659.25, "G5": 783.99, "F#4": 369.99}
+
+## The radio's built-in stations: [bpm, chords, busy]. "kubi" is the
+## day/night pair below; these play as one loop.
+const SONGS := {
+	# Slow jazzy loop: Dm7 G7 Cmaj7 Am7.
+	"lofi": [76.0, [["D3", "F4", "A4", "C5"], ["G3", "B3", "D4", "F4"], ["C3", "E4", "G4", "B4"], ["A2", "C4", "E4", "G4"]], false],
+	# Fast arcade loop: Em C G D.
+	"turbo": [160.0, [["E3", "E4", "G4", "B4"], ["C3", "C4", "E4", "G4"], ["G3", "B3", "D4", "G4"], ["D3", "D4", "F#4", "A4"]], true],
+}
+
+
+## Built-in song to play ("kubi" or a SONGS key). Only the playing song is
+## kept in memory: switching frees the previous one and synthesizes the new
+## one on a worker thread.
+func set_song(id: String) -> void:
+	if id != "kubi" and not SONGS.has(id):
+		id = "kubi"
+	if id == _song_id:
+		return
+	_song_id = id
+	if id == _built_id:
+		_pending_id = ""  # still loaded: back to it without rebuilding
+		return
+	_queue_build(id)
+
+
+func song() -> String:
+	return _song_id
+
+
+## An online station plays (true) or the built-in music is back (false).
+func set_external(on: bool) -> void:
+	if on == _external:
+		return
+	_external = on
+	for m in [_music_day, _music_night]:
+		if on:
+			m.stop()
+		elif m.stream:
+			m.play()
+
+
+func _queue_build(id: String) -> void:
+	if _music_task >= 0 and not WorkerThreadPool.is_task_completed(_music_task):
+		_pending_id = id  # _process starts it when the worker is done
+		return
+	if _music_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(_music_task)
+	_pending_id = ""
+	if id == "kubi":
+		_music_task = WorkerThreadPool.add_task(_build_music)
+	else:
+		_music_task = WorkerThreadPool.add_task(_build_song.bind(id))
+
+
+func _build_song(id: String) -> void:
+	var def: Array = SONGS[id]
+	call_deferred("_start_song", id, to_wav(normalize(_song(def[0], def[1], def[2]), 0.7, true), true))
+
+
+func _start_song(id: String, wav: AudioStreamWAV) -> void:
+	if id != _song_id:
+		return  # the player already turned the dial again
+	_built_id = id
+	_music_night.stop()
+	_music_night.stream = null
+	_music_day.stream = wav
+	if not _external:
+		_music_day.play()
 
 
 ## Two loops in the same key: an upbeat "day" factory theme and a calm
@@ -257,10 +333,14 @@ func _start_music(day: AudioStreamWAV, night: AudioStreamWAV) -> void:
 			day.save_to_wav(dir + "/music_day.wav")
 			night.save_to_wav(dir + "/music_night.wav")
 			print("AUDIO dumped after %d ms" % Time.get_ticks_msec())
+	if _song_id != "kubi":
+		return  # the radio moved on while it was being built
+	_built_id = "kubi"
 	_music_day.stream = day
 	_music_night.stream = night
-	_music_day.play()
-	_music_night.play()
+	if not _external:
+		_music_day.play()
+		_music_night.play()
 
 
 ## 0 = full day theme, 1 = full night theme (crossfaded).
@@ -269,6 +349,9 @@ func set_night(amount: float) -> void:
 
 
 func _process(_delta: float) -> void:
+	if _pending_id != "" and WorkerThreadPool.is_task_completed(_music_task):
+		_queue_build(_pending_id)
 	var mv: float = Settings.music_volume * 0.6 * Settings.master_gain()
-	_music_day.volume_db = linear_to_db(maxf(0.0001, mv * (1.0 - _night)))
-	_music_night.volume_db = linear_to_db(maxf(0.0001, mv * _night))
+	var night := _night if _built_id == "kubi" else 0.0
+	_music_day.volume_db = linear_to_db(maxf(0.0001, mv * (1.0 - night)))
+	_music_night.volume_db = linear_to_db(maxf(0.0001, mv * night))

@@ -203,6 +203,8 @@ func main() {
 	mux.HandleFunc("POST /api/assistant/config", hub.auth(hub.handleAIConfig))
 	mux.HandleFunc("POST /api/assistant/download", hub.auth(hub.handleAIDownload))
 	mux.HandleFunc("DELETE /api/assistant/model", hub.auth(hub.handleAIDeleteModel))
+	mux.HandleFunc("/api/radio", hub.auth(hub.handleRadio))
+	mux.HandleFunc("GET /api/radio/ws", hub.auth(hub.handleRadioWS))
 	// Always revalidated (a rebuilt game never runs from a stale cache), gzipped.
 	// --web wins over the build bundled into the binary.
 	if *webDir != "" {
@@ -216,6 +218,7 @@ func main() {
 	srv := &http.Server{Addr: *addr, Handler: guard(mux, *origins)}
 	go func() {
 		<-ctx.Done()
+		music.stop() // never leave the radio playing after the bridge is gone
 		shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		srv.Shutdown(shutdown)
