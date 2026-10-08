@@ -212,7 +212,13 @@ func _process(delta: float) -> void:
 	if pid > 0 and not OS.is_process_running(pid):
 		_probe_left = 0
 		pid = -1
-		_set_status("failed", tr("The bridge stopped right away: is port %s taken? Try another port.") % url.get_slice(":", 2))
+		# Port taken: often by a bridge the first probe missed (it can time
+		# out while the game is still loading). If it answers, use that one.
+		_probe(url, func(ok: bool):
+			if ok:
+				_set_status("running", url)
+			else:
+				_set_status("failed", tr("The bridge stopped right away: is port %s taken? Try another port.") % url.get_slice(":", 2)))
 		return
 	_probe(url, func(ok: bool):
 		_probe_left -= 1
