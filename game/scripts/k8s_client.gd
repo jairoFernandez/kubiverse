@@ -74,6 +74,8 @@ func _ready() -> void:
 	local.status_changed.connect(func(st: String, u: String):
 		if st == "started":
 			_rehome_saved(u)
+		if st in ["started", "running"] and moved_from.is_empty():
+			moved_from = LocalBridge.stale_default(u, LocalBridge.port_busy(LocalBridge.DEFAULT_PORT))
 		if st in ["started", "running"] and not moved_from.is_empty():
 			_follow_port(u))
 	start_local_bridge()

@@ -265,6 +265,12 @@ func _local_bridge() -> void:
 	var mv := LocalBridge.rehome_servers(at_game, "http://127.0.0.1:28089", LocalBridge.local_urls(28088))
 	check(mv[1] and mv[0][0].url == "http://127.0.0.1:28089", "a cluster on the old game port moves to the new one")
 	check(mv[0][1].url == "http://127.0.0.1:8088", "only the old port moves, not every local bridge")
+	# Stuck from before: clusters on the default port, nothing there, the
+	# game's bridge on another one. They move when the game opens.
+	check(Array(LocalBridge.stale_default("http://127.0.0.1:28089", false)) == Array(LocalBridge.local_urls(28088)), "the default port is empty, the bridge is elsewhere: move from it")
+	check(LocalBridge.stale_default("http://127.0.0.1:28089", true).is_empty(), "something answers on the default port (another bridge): leave it")
+	check(LocalBridge.stale_default("http://127.0.0.1:28088", false).is_empty(), "the bridge is on the default port: nothing to move")
+	check(LocalBridge.stale_default("", false).is_empty(), "no bridge: nothing to move")
 	var mk := LocalBridge.rehome_keys({"http://127.0.0.1:28088|mgmt": "prod"}, "http://127.0.0.1:28089", LocalBridge.local_urls(28088))
 	check(mk == {"http://127.0.0.1:28089|mgmt": "prod"}, "and its per-cluster settings: %s" % [mk])
 	check(not LocalBridge.rehome_servers([servers[2]], to)[1], "nothing to move: reported as such")

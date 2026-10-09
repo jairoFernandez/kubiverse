@@ -845,6 +845,8 @@ func _on_local_bridge(st: String, detail: String) -> void:
 	# Follow the bridge while the player hasn't typed another URL (or the
 	# URL is the game's bridge on the port it just moved from).
 	var u := K8s.default_bridge_url()
+	if st in ["running", "started"] and _moved_urls.is_empty():
+		_moved_urls = LocalBridge.stale_default(detail, LocalBridge.port_busy(LocalBridge.DEFAULT_PORT))
 	var moved := st in ["running", "started"] and _url_edit != null and _url_edit.text.strip_edges().trim_suffix("/") in _moved_urls
 	if moved:
 		_moved_urls = PackedStringArray()

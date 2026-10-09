@@ -229,6 +229,16 @@ func _checked(port: int, retries_left: int, gen: int, ok: bool) -> void:
 				_spawn(port))
 
 
+## Saved clusters on the default port with nothing there, while the game's
+## bridge answers on another port (the player moved it, maybe with an older
+## version that didn't take them along): the URLs to move from, or none.
+static func stale_default(ready: String, default_busy: bool) -> PackedStringArray:
+	var def := local_urls(DEFAULT_PORT)
+	if ready == "" or ready.trim_suffix("/") in def or default_busy:
+		return PackedStringArray()
+	return def
+
+
 ## True if something already listens on 127.0.0.1:port: we try to listen
 ## there ourselves (a TCP connect can't tell: Godot reports a refused
 ## loopback connection as connected for a moment).
