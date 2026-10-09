@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -585,5 +586,60 @@ func TestRadioExpand(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &out)
 	if w.Code != 200 || !out.OK || len(out.Items) != 2 || out.Items[0].Title != "First song" {
 		t.Errorf("POST expand: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleRadioStream(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/live":
+			if !strings.HasPrefix(r.UserAgent(), "kubiverse-bridge/") {
+				w.WriteHeader(http.StatusForbidden) // like SomaFM to a browser on another site
+				return
+			}
+			w.Header().Set("Content-Type", "audio/mpeg")
+			w.Write([]byte("ID3 mp3 bytes"))
+		case "/page":
+			w.Header().Set("Content-Type", "text/html")
+			w.Write([]byte("<html>"))
+		default:
+			w.WriteHeader(http.StatusForbidden)
+		}
+	}))
+	defer up.Close()
+	h := &Hub{}
+	get := func(target, remote string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "/api/radio/stream?url="+url.QueryEscape(target), nil)
+		req.RemoteAddr = remote
+		w := httptest.NewRecorder()
+		h.handleRadioStream(w, req)
+		return w
+	}
+	local := "127.0.0.1:9"
+	if w := get(up.URL+"/live", local); w.Code != 200 || w.Body.String() != "ID3 mp3 bytes" || w.Header().Get("Content-Type") != "audio/mpeg" {
+		t.Fatalf("the station through the bridge: %d %q %q", w.Code, w.Header().Get("Content-Type"), w.Body.String())
+	}
+	if w := get(up.URL+"/page", local); w.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("never a proxy for web pages: %d", w.Code)
+	}
+	if w := get(up.URL+"/gone", local); w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "403") {
+		t.Errorf("the station's refusal is passed on: %d %s", w.Code, w.Body.String())
+	}
+	if w := get("file:///etc/passwd", local); w.Code != http.StatusBadRequest {
+		t.Errorf("a file: %d", w.Code)
+	}
+	if w := get("https://youtu.be/abcdefghijk", local); w.Code != http.StatusBadRequest {
+		t.Errorf("YouTube has its own player: %d", w.Code)
+	}
+	if w := get(up.URL+"/live", "192.168.1.30:9"); w.Code != http.StatusForbidden {
+		t.Errorf("only for this computer: %d", w.Code)
+	}
+	if w := get("http://127.0.0.1:1/live", local); w.Code != http.StatusBadGateway {
+		t.Errorf("a station that doesn't answer: %d", w.Code)
+	}
+	for ct, ok := range map[string]bool{"audio/mpeg": true, "audio/aacp; charset=x": true, "application/ogg": true, "text/html": false, "": false, "video/mp4": false} {
+		if radioAudio(ct) != ok {
+			t.Errorf("radioAudio(%q) != %v", ct, ok)
+		}
 	}
 }

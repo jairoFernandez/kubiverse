@@ -9,6 +9,8 @@ signal lang_changed
 const LANGS := {"en": "English", "es": "Español"}
 
 const ES := {
+	"Port %d is used by another program: try another port.": "El puerto %d lo usa otro programa: prueba otro puerto.",
+	"The station refused to play here (%s)": "La emisora no quiso sonar aquí (%s)",
 	"No other YouTube channel: add more links (or a playlist) in the radio": "No hay otro canal de YouTube: añade más enlaces (o una playlist) en la radio",
 	"Next YouTube channel": "Siguiente canal de YouTube",
 	"Previous YouTube channel": "Canal de YouTube anterior",

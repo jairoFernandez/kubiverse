@@ -371,9 +371,6 @@ func _screenshot_and_quit(path: String) -> void:
 		if arg == "--sound":  # the radio window open
 			hud.toggle_radio()
 		if arg.begins_with("--radio="):  # tuned to station N (an online one gets time to play)
-			if LocalBridge.supported() and K8s.local.ready_url() == "":
-				K8s.start_local_bridge()  # the probe at launch can time out while the world loads
-				await get_tree().create_timer(2.0).timeout
 			if "--tv" in OS.get_cmdline_user_args():
 				Settings.radio_video = true  # with the TV, for YouTube
 			Radio.tune(int(arg.substr(8)))

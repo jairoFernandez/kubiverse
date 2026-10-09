@@ -14,6 +14,11 @@ signal status_changed(status: String, detail: String)
 const DEFAULT_PORT := 28088
 const CLASSIC_PORT := 8088
 const BIN := "kubiverse-bridge"
+## At launch the game is busy loading the world, so a health check can time
+## out although a bridge answers: it gets a long timeout, and a port that is
+## taken is asked again a few times before giving up (never started twice).
+const PROBE_TIMEOUT := 4.0
+const BUSY_RETRIES := 5
 
 ## idle | probing | running (found one) | started (ours) | missing | failed
 var status := "idle"
@@ -22,6 +27,7 @@ var url := ""
 var pid := -1
 var _wait := 0.0
 var _probe_left := 0
+var _gen := 0           # bumped by start()/stop(): late answers of an older search are ignored
 
 
 static func valid_port(p: int) -> bool:
@@ -160,6 +166,18 @@ func ready_url() -> String:
 	return url if status in ["running", "started"] else ""
 
 
+## What to do after a health check of our port: "use" the bridge there,
+## "retry" (something listens: likely a bridge still busy, or the check timed
+## out while the game loads), "fail" (the port stays taken by something else)
+## or "spawn" ours (nothing listens).
+static func after_probe(healthy: bool, port_busy: bool, retries_left: int) -> String:
+	if healthy:
+		return "use"
+	if port_busy:
+		return "retry" if retries_left > 0 else "fail"
+	return "spawn"
+
+
 ## Finds or starts the bridge on `port`. Safe to call again (port changed).
 func start(port: int) -> void:
 	if not supported():
@@ -169,17 +187,59 @@ func start(port: int) -> void:
 		_set_status("failed", tr("Port %d is not valid (1024-65535).") % port)
 		return
 	_set_status("probing", url_for(port))
-	_probe(url_for(port), func(ok: bool):
-		if ok:
-			url = url_for(port)
-			_set_status("running", url)
-			return
+	_find(port, BUSY_RETRIES)
+
+
+func _find(port: int, retries_left: int) -> void:
+	var gen := _gen
+	_probe(url_for(port), func(ok: bool): _checked(port, retries_left, gen, ok))
+
+
+func _checked(port: int, retries_left: int, gen: int, ok: bool) -> void:
+	if gen != _gen:
+		return  # started again meanwhile (port changed)
+	var busy := false
+	if not ok:
+		busy = await _port_busy(port)
+	if gen != _gen:
+		return
+	var next := after_probe(ok, busy, retries_left)
+	if next == "use":
+		url = url_for(port)
+		_set_status("running", url)
+	elif next == "retry":
+		await get_tree().create_timer(1.0).timeout
+		if gen == _gen:
+			_find(port, retries_left - 1)
+	elif next == "fail":
+		_set_status("failed", tr("Port %d is used by another program: try another port.") % port)
+	else:
 		_probe(url_for(CLASSIC_PORT), func(ok2: bool):
+			if gen != _gen:
+				return
 			if ok2:
 				url = url_for(CLASSIC_PORT)
 				_set_status("running", url)
 			else:
-				_spawn(port)))
+				_spawn(port))
+
+
+## True if something accepts connections on 127.0.0.1:port.
+func _port_busy(port: int) -> bool:
+	var t := StreamPeerTCP.new()
+	if t.connect_to_host("127.0.0.1", port) != OK:
+		return false
+	var until := Time.get_ticks_msec() + 1500
+	while Time.get_ticks_msec() < until:
+		t.poll()
+		var st := t.get_status()
+		if st == StreamPeerTCP.STATUS_CONNECTED:
+			t.disconnect_from_host()
+			return true
+		if st == StreamPeerTCP.STATUS_ERROR or st == StreamPeerTCP.STATUS_NONE:
+			return false
+		await get_tree().process_frame
+	return false
 
 
 func _spawn(port: int) -> void:
@@ -233,7 +293,7 @@ func _process(delta: float) -> void:
 
 func _probe(u: String, cb: Callable) -> void:
 	var req := HTTPRequest.new()
-	req.timeout = 1.5
+	req.timeout = PROBE_TIMEOUT
 	add_child(req)
 	req.request_completed.connect(func(result: int, code: int, _h, body: PackedByteArray):
 		req.queue_free()
@@ -245,6 +305,7 @@ func _probe(u: String, cb: Callable) -> void:
 
 ## Stops the bridge only if we started it.
 func stop() -> void:
+	_gen += 1
 	_probe_left = 0
 	if pid > 0 and OS.is_process_running(pid):
 		# SIGTERM lets it close its port-forwards and llama-server first

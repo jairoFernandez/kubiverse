@@ -678,6 +678,77 @@ func (h *Hub) handleRadio(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// radioClient fetches streams for the web build (no overall timeout: a
+// station plays for hours).
+var radioClient = &http.Client{Transport: &http.Transport{
+	Proxy:                 http.ProxyFromEnvironment,
+	ResponseHeaderTimeout: 15 * time.Second,
+}}
+
+// radioAudio: what the stream proxy passes on (audio only: never a
+// general-purpose proxy to web pages).
+func radioAudio(contentType string) bool {
+	ct := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	return strings.HasPrefix(ct, "audio/") || ct == "application/ogg"
+}
+
+// GET /api/radio/stream?url=: the web build's <audio> plays a station
+// through the bridge. Stations refuse browsers on other sites (SomaFM
+// answers 403 to a page on 127.0.0.1), and an https page couldn't play an
+// http stream anyway; the bridge fetches it like the native radio does.
+func (h *Hub) handleRadioStream(w http.ResponseWriter, r *http.Request) {
+	if !h.radioAllowed(w, r) {
+		return
+	}
+	u, err := radioURL(r.URL.Query().Get("url"))
+	if err == nil && isYouTube(u) {
+		err = errors.New("YouTube plays in its own player")
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, u, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.Header.Set("User-Agent", "kubiverse-bridge/"+version+" (radio)")
+	resp, err := radioClient.Do(req)
+	if err != nil {
+		http.Error(w, "the station doesn't answer: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, "the station answered "+resp.Status, http.StatusBadGateway)
+		return
+	}
+	if !radioAudio(resp.Header.Get("Content-Type")) {
+		http.Error(w, "not an audio stream ("+resp.Header.Get("Content-Type")+")", http.StatusUnsupportedMediaType)
+		return
+	}
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	fl, _ := w.(http.Flusher)
+	buf := make([]byte, 16<<10)
+	for {
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return // the page stopped listening
+			}
+			if fl != nil {
+				fl.Flush()
+			}
+		}
+		if rerr != nil {
+			return
+		}
+	}
+}
+
 // GET /api/radio/ws: the sound and the frames (see radioRate).
 func (h *Hub) handleRadioWS(w http.ResponseWriter, r *http.Request) {
 	if !h.radioAllowed(w, r) {

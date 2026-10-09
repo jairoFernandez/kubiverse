@@ -53,6 +53,11 @@ func _radio_links() -> void:
 	check(R.stream_volume(0.5, 1.0) == 35, "half music volume")
 	check(R.stream_volume(1.0, 0.0) == 0, "muted means silent")
 	check(R.stream_volume(5.0, 1.0) == 100, "never above 100")
+	var soma := "https://ice2.somafm.com/groovesalad-128-mp3"
+	check(R.stream_src(soma, ["http://127.0.0.1:28088/", ""]) == "http://127.0.0.1:28088/api/radio/stream?url=https%3A%2F%2Fice2.somafm.com%2Fgroovesalad-128-mp3", "the web plays stations through the local bridge")
+	check(R.stream_src(soma, ["http://localhost:8088", "a b"]).ends_with("&token=a%20b"), "with its token")
+	check(R.stream_src(soma, ["", ""]) == soma, "no bridge: straight from the station")
+	check(R.stream_src(soma, ["https://kubiverse.example.com", "t"]) == soma, "a remote bridge has no speakers here: straight from the station")
 	check(R.embed_src("abcdefghijk") == "https://www.youtube-nocookie.com/embed/abcdefghijk?autoplay=1&playsinline=1", "web embed of a video")
 	check(R.embed_src("live_stream?channel=UC1") == "https://www.youtube-nocookie.com/embed/live_stream?channel=UC1&autoplay=1&playsinline=1", "web embed of a channel's live stream")
 	check(R.is_playlist_link("https://www.youtube.com/playlist?list=PL123") and R.is_playlist_link("https://www.youtube.com/watch?v=abcdefghijk&list=PL1"), "YouTube playlist links")
@@ -229,6 +234,11 @@ func _local_bridge() -> void:
 	check(p.begins_with("/usr/local/bin:/usr/bin:"), "widen_path keeps the PATH first: %s" % p)
 	check(p.count("/usr/local/bin") == 1 and "/opt/homebrew/bin" in p, "widen_path adds Homebrew once: %s" % p)
 	check(not LocalBridge.supported(), "headless runs never start a bridge")
+	check(LocalBridge.after_probe(true, false, 0) == "use", "a healthy bridge is used")
+	check(LocalBridge.after_probe(false, true, 3) == "retry", "port taken, check failed (busy loading): ask again, don't start a second bridge")
+	check(LocalBridge.after_probe(false, true, 0) == "fail", "still taken after the retries: something else owns the port")
+	check(LocalBridge.after_probe(false, false, 3) == "spawn", "nothing listens: start ours")
+	check(LocalBridge.PROBE_TIMEOUT >= 3.0, "the launch check waits out a loading game")
 	var to := "http://127.0.0.1:28088"
 	var servers := [
 		{"name": "a", "url": "http://127.0.0.1:8088", "token": "", "context": "x"},

@@ -574,6 +574,14 @@ func _process(delta: float) -> void:
 		return
 	_since_tune += delta
 	if OS.has_feature("web"):
+		_poll_t -= delta
+		if _poll_t <= 0.0 and current().kind == "stream":
+			_poll_t = 1.0
+			var err = _js("window.kubiRadioErr||''")
+			if err is String and err != "":
+				_js("window.kubiRadioErr=''")
+				_fallback(tr("The station refused to play here (%s)") % err)
+				return
 		# The volume sliders drive the browser's player (a short wait while dragging).
 		var v := stream_volume(Settings.music_volume, Settings.master_gain())
 		if v != _sent_vol:
@@ -805,9 +813,38 @@ d.appendChild(f);document.body.appendChild(d);})()""" % JSON.stringify(embed_src
 		_set_state("playing")
 		return
 	_js("""(function(){var a=window.kubiRadio||(window.kubiRadio=new Audio());a.preload='none';
+a.onerror=function(){window.kubiRadioErr='code '+(a.error?a.error.code:'?')};
 a.src=%s;a.volume=%.2f;window.kubiRadioErr='';
-a.play().catch(function(e){window.kubiRadioErr=String(e)});})()""" % [JSON.stringify(st.url), _sent_vol / 100.0])
+a.play().catch(function(e){if(!window.kubiRadioErr){window.kubiRadioErr=String(e)}});})()""" % [JSON.stringify(stream_src(st.url, _web_bridge())), _sent_vol / 100.0])
 	_set_state("playing")
+
+
+## The bridge a web page can play stations through: the one serving it or
+## the one it is connected to, if it runs on this computer ([url, token]).
+func _web_bridge() -> Array:
+	var url := ""
+	var tok := ""
+	if K8s.mode == K8s.Mode.BRIDGE:
+		url = K8s.base_url
+		tok = K8s.token
+	elif K8s.served_by_bridge():
+		url = K8s.normalize_url(K8s.default_bridge_url())
+		tok = K8s.web_query_param("token")
+	return [url, tok]
+
+
+## What the web build's <audio> plays: the station through a bridge on this
+## computer (stations refuse browsers on other sites: SomaFM answers 403),
+## or straight from the station when there is no such bridge.
+static func stream_src(url: String, bridge: Array) -> String:
+	var b := str(bridge[0]).trim_suffix("/")
+	var host := b.get_slice("://", 1).get_slice("/", 0).get_slice(":", 0)
+	if b == "" or not host in ["127.0.0.1", "localhost", "[::1]"]:
+		return url
+	var src := b + "/api/radio/stream?url=" + url.uri_encode()
+	if str(bridge[1]) != "":
+		src += "&token=" + str(bridge[1]).uri_encode()
+	return src
 
 
 func _web_stop() -> void:

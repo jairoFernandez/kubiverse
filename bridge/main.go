@@ -205,6 +205,7 @@ func main() {
 	mux.HandleFunc("DELETE /api/assistant/model", hub.auth(hub.handleAIDeleteModel))
 	mux.HandleFunc("/api/radio", hub.auth(hub.handleRadio))
 	mux.HandleFunc("GET /api/radio/ws", hub.auth(hub.handleRadioWS))
+	mux.HandleFunc("GET /api/radio/stream", hub.auth(hub.handleRadioStream))
 	// Always revalidated (a rebuilt game never runs from a stale cache), gzipped.
 	// --web wins over the build bundled into the binary.
 	if *webDir != "" {
