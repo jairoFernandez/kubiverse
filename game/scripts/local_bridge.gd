@@ -170,10 +170,10 @@ func ready_url() -> String:
 ## "retry" (something listens: likely a bridge still busy, or the check timed
 ## out while the game loads), "fail" (the port stays taken by something else)
 ## or "spawn" ours (nothing listens).
-static func after_probe(healthy: bool, port_busy: bool, retries_left: int) -> String:
+static func after_probe(healthy: bool, busy: bool, retries_left: int) -> String:
 	if healthy:
 		return "use"
-	if port_busy:
+	if busy:
 		return "retry" if retries_left > 0 else "fail"
 	return "spawn"
 
@@ -198,11 +198,7 @@ func _find(port: int, retries_left: int) -> void:
 func _checked(port: int, retries_left: int, gen: int, ok: bool) -> void:
 	if gen != _gen:
 		return  # started again meanwhile (port changed)
-	var busy := false
-	if not ok:
-		busy = await _port_busy(port)
-	if gen != _gen:
-		return
+	var busy := not ok and port_busy(port)
 	var next := after_probe(ok, busy, retries_left)
 	if next == "use":
 		url = url_for(port)
@@ -224,22 +220,14 @@ func _checked(port: int, retries_left: int, gen: int, ok: bool) -> void:
 				_spawn(port))
 
 
-## True if something accepts connections on 127.0.0.1:port.
-func _port_busy(port: int) -> bool:
-	var t := StreamPeerTCP.new()
-	if t.connect_to_host("127.0.0.1", port) != OK:
-		return false
-	var until := Time.get_ticks_msec() + 1500
-	while Time.get_ticks_msec() < until:
-		t.poll()
-		var st := t.get_status()
-		if st == StreamPeerTCP.STATUS_CONNECTED:
-			t.disconnect_from_host()
-			return true
-		if st == StreamPeerTCP.STATUS_ERROR or st == StreamPeerTCP.STATUS_NONE:
-			return false
-		await get_tree().process_frame
-	return false
+## True if something already listens on 127.0.0.1:port: we try to listen
+## there ourselves (a TCP connect can't tell: Godot reports a refused
+## loopback connection as connected for a moment).
+static func port_busy(port: int) -> bool:
+	var s := TCPServer.new()
+	var err := s.listen(port, "127.0.0.1")
+	s.stop()
+	return err != OK
 
 
 func _spawn(port: int) -> void:

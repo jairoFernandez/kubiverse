@@ -239,6 +239,15 @@ func _local_bridge() -> void:
 	check(LocalBridge.after_probe(false, true, 0) == "fail", "still taken after the retries: something else owns the port")
 	check(LocalBridge.after_probe(false, false, 3) == "spawn", "nothing listens: start ours")
 	check(LocalBridge.PROBE_TIMEOUT >= 3.0, "the launch check waits out a loading game")
+	var held := TCPServer.new()
+	var held_port := 0
+	for hp in range(29500, 29600):
+		if held.listen(hp, "127.0.0.1") == OK:
+			held_port = hp
+			break
+	check(held_port > 0 and LocalBridge.port_busy(held_port), "a port something listens on is busy")
+	held.stop()
+	check(held_port > 0 and not LocalBridge.port_busy(held_port), "a free port is free (a refused connection must not count as busy)")
 	var to := "http://127.0.0.1:28088"
 	var servers := [
 		{"name": "a", "url": "http://127.0.0.1:8088", "token": "", "context": "x"},
