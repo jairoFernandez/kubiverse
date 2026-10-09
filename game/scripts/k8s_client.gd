@@ -73,21 +73,43 @@ func _ready() -> void:
 	add_child(local)
 	local.status_changed.connect(func(st: String, u: String):
 		if st == "started":
-			_rehome_saved(u))
+			_rehome_saved(u)
+		if st in ["started", "running"] and not moved_from.is_empty():
+			_follow_port(u))
 	start_local_bridge()
+
+
+## Native: the player moved the game's bridge to another port (RESTART
+## BRIDGE): what pointed at it on the old port follows it once it answers.
+var moved_from := PackedStringArray()
+
+
+func move_local_bridge(old_port: int) -> void:
+	moved_from = LocalBridge.local_urls(old_port)
+
+
+func _follow_port(to: String) -> void:
+	var from := moved_from
+	moved_from = PackedStringArray()
+	if to.trim_suffix("/") in from:
+		return
+	_rehome_saved(to, from)
+	if mode == Mode.BRIDGE and base_url.trim_suffix("/") in from:
+		base_url = to  # the connection retries there
+		_reconnect_in = 0.0
 
 
 ## The game started its own bridge: clusters saved against a hand-started one
 ## on 127.0.0.1:8088 move to it (same machine, same kubeconfigs), with their
 ## production/sandbox mark, look and namespace filter.
-func _rehome_saved(to: String) -> void:
-	var r := LocalBridge.rehome_servers(Settings.servers, to)
+func _rehome_saved(to: String, from := PackedStringArray()) -> void:
+	var r := LocalBridge.rehome_servers(Settings.servers, to, from)
 	if not r[1]:
 		return
 	Settings.servers = r[0]
-	Settings.cluster_kinds = LocalBridge.rehome_keys(Settings.cluster_kinds, to)
-	Settings.cluster_looks = LocalBridge.rehome_keys(Settings.cluster_looks, to)
-	Settings.ns_filters = LocalBridge.rehome_keys(Settings.ns_filters, to)
+	Settings.cluster_kinds = LocalBridge.rehome_keys(Settings.cluster_kinds, to, from)
+	Settings.cluster_looks = LocalBridge.rehome_keys(Settings.cluster_looks, to, from)
+	Settings.ns_filters = LocalBridge.rehome_keys(Settings.ns_filters, to, from)
 	Settings.save()
 
 

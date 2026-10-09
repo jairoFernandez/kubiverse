@@ -85,17 +85,24 @@ static func widen_path(path_env: String, home: String) -> String:
 ## URLs of a hand-started bridge on this machine (what saved clusters used
 ## before the game ran its own).
 static func classic_urls() -> PackedStringArray:
-	return PackedStringArray(["http://127.0.0.1:%d" % CLASSIC_PORT, "http://localhost:%d" % CLASSIC_PORT])
+	return local_urls(CLASSIC_PORT)
+
+
+## The two ways a saved cluster may name a bridge on this machine's port.
+static func local_urls(port: int) -> PackedStringArray:
+	return PackedStringArray(["http://127.0.0.1:%d" % port, "http://localhost:%d" % port])
 
 
 ## Saved clusters [{name, url, token, context}] that pointed at the classic
 ## local bridge now point at `to`. Returns a new array; true in [1] if any moved.
-static func rehome_servers(servers: Array, to: String) -> Array:
+static func rehome_servers(servers: Array, to: String, from := PackedStringArray()) -> Array:
+	if from.is_empty():
+		from = classic_urls()
 	var out := []
 	var moved := false
 	for sv in servers:
 		var c: Dictionary = sv.duplicate()
-		if str(c.get("url", "")).trim_suffix("/") in classic_urls():
+		if str(c.get("url", "")).trim_suffix("/") in from:
 			c.url = to
 			moved = true
 		out.append(c)
@@ -104,14 +111,16 @@ static func rehome_servers(servers: Array, to: String) -> Array:
 
 ## Per-cluster settings keyed "bridge url|context": keys of the classic local
 ## bridge move to `to` (an entry already under the new key wins).
-static func rehome_keys(d: Dictionary, to: String) -> Dictionary:
+static func rehome_keys(d: Dictionary, to: String, from := PackedStringArray()) -> Dictionary:
+	if from.is_empty():
+		from = classic_urls()
 	var out := {}
 	for k in d:
 		if not out.has(k):
 			out[k] = d[k]
 	for k in d:
 		var key := str(k)
-		for old in classic_urls():
+		for old in from:
 			if key.begins_with(old + "|"):
 				var nk := to + key.substr(old.length())
 				if not d.has(nk):

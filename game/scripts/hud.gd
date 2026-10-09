@@ -107,6 +107,7 @@ var _radio_tabs: Array[Button] = []
 var _radio_rows: VBoxContainer
 var _radio_rows_sig := ""       # what the list shows now (rebuilt only when it changes)
 var _radio_list_btn: Button
+var _moved_urls := PackedStringArray()  # the game's bridge URLs before RESTART BRIDGE moved its port
 var _radio_panel: PanelContainer  # the radio: its own window, dragged by its title
 var _radio_drag: DragResize
 var _radio_tv: RetroTV            # native YouTube: the 80s TV in a corner
@@ -841,9 +842,13 @@ func _on_local_bridge(st: String, detail: String) -> void:
 	if st in ["running", "started"]:
 		_status(tr("Bridge ready: pick a cluster or LOAD CONTEXTS."), Vox.GREEN)
 		_refresh_saved.call_deferred()  # saved clusters may have moved to it
-	# Follow the bridge while the player hasn't typed another URL.
+	# Follow the bridge while the player hasn't typed another URL (or the
+	# URL is the game's bridge on the port it just moved from).
 	var u := K8s.default_bridge_url()
-	if _url_edit != null and (_url_edit.text == _auto_url or _url_edit.text == "") and u != _url_edit.text:
+	var moved := st in ["running", "started"] and _url_edit != null and _url_edit.text.strip_edges().trim_suffix("/") in _moved_urls
+	if moved:
+		_moved_urls = PackedStringArray()
+	if _url_edit != null and (_url_edit.text == _auto_url or _url_edit.text == "" or moved) and u != _url_edit.text:
 		_url_edit.text = u
 	_auto_url = u
 
@@ -861,6 +866,8 @@ func _restart_local_bridge() -> void:
 		_status(tr("Port %s is not valid (1024-65535).") % _port_edit.text, Vox.RED)
 		return
 	if p != Settings.bridge_port:
+		K8s.move_local_bridge(Settings.bridge_port)  # saved clusters follow it
+		_moved_urls = LocalBridge.local_urls(Settings.bridge_port)
 		Settings.bridge_port = p
 		Settings.save()
 	K8s.start_local_bridge()

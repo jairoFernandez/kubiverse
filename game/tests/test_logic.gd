@@ -258,6 +258,15 @@ func _local_bridge() -> void:
 	check(r[1] and r[0][0].url == to and r[0][1].url == to, "saved local clusters move to the game's bridge: %s" % [r[0]])
 	check(r[0][2].url == "https://team.example" and r[0][1].token == "t", "remote ones and tokens untouched")
 	check(servers[0].url == "http://127.0.0.1:8088", "rehome_servers doesn't change its input")
+	# RESTART BRIDGE on another port: what pointed at the old one follows.
+	check(Array(LocalBridge.local_urls(28088)) == ["http://127.0.0.1:28088", "http://localhost:28088"], "local_urls")
+	var at_game := [{"name": "ideas", "url": "http://127.0.0.1:28088", "token": "", "context": "mgmt"},
+		{"name": "hand", "url": "http://127.0.0.1:8088", "token": "", "context": ""}]
+	var mv := LocalBridge.rehome_servers(at_game, "http://127.0.0.1:28089", LocalBridge.local_urls(28088))
+	check(mv[1] and mv[0][0].url == "http://127.0.0.1:28089", "a cluster on the old game port moves to the new one")
+	check(mv[0][1].url == "http://127.0.0.1:8088", "only the old port moves, not every local bridge")
+	var mk := LocalBridge.rehome_keys({"http://127.0.0.1:28088|mgmt": "prod"}, "http://127.0.0.1:28089", LocalBridge.local_urls(28088))
+	check(mk == {"http://127.0.0.1:28089|mgmt": "prod"}, "and its per-cluster settings: %s" % [mk])
 	check(not LocalBridge.rehome_servers([servers[2]], to)[1], "nothing to move: reported as such")
 	var kinds := {"http://127.0.0.1:8088|x": "prod", "http://localhost:8088|": "sandbox", "https://team.example|y": "prod", "demo": "sandbox"}
 	var k2 := LocalBridge.rehome_keys(kinds, to)
