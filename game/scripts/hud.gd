@@ -43,6 +43,10 @@ var _search_rows: Array = []       # ClusterSearch.index of the state (rebuilt w
 var _search_stale := true
 var _search_timer: Timer           # waits for a pause in the typing
 var _alarm_panel: PanelContainer
+var control_room: ControlRoom   # watches every saved cluster for the CONTROL ROOM
+var _tv_wall: TVWall            # the wall of TVs, one per saved cluster
+var _cr_badge: Button           # blinks "ALARM in ..." while a cluster rings
+var _cr_blink := 0.0
 var _alarm_list: VBoxContainer
 var _alarms: Array = []
 var _mission_panel: PanelContainer
@@ -926,7 +930,9 @@ func _refresh_saved() -> void:
 		row.add_child(_button("X", func():
 			Settings.servers.remove_at(i)
 			Settings.save()
-			_refresh_saved(), "DangerButton"))
+			_refresh_saved()
+			if control_room:
+				control_room.sync_feeds(), "DangerButton"))
 		_saved_list.add_child(row)
 
 
@@ -940,6 +946,8 @@ func _do_connect(save: bool) -> void:
 		Settings.servers.append({"name": name, "url": K8s.normalize_url(_url_edit.text), "token": _token_edit.text, "context": ctx})
 		Settings.save()
 		_refresh_saved()
+		if control_room:
+			control_room.sync_feeds()
 	K8s.connect_bridge(_url_edit.text, _token_edit.text, ctx)
 	_status(tr("Connecting to %s ...") % K8s.base_url, Vox.YELLOW)
 
@@ -1522,6 +1530,7 @@ func _build_level_strip() -> void:
 	_alarm_btn = _button("ALARMS 0", toggle_alarms)
 	h.add_child(_alarm_btn)
 	_build_search()
+	_build_control_room()
 	# Alarm dropdown
 	_alarm_panel = PanelContainer.new()
 	_alarm_panel.anchor_left = 1.0
@@ -1538,6 +1547,74 @@ func _build_level_strip() -> void:
 	_alarm_list = VBoxContainer.new()
 	_alarm_list.add_theme_constant_override("separation", 4)
 	av.add_child(_alarm_list)
+
+
+## CONTROL ROOM: the wall of TVs (one per saved cluster) and the badge that
+## blinks over the game while one of them is in alarm.
+func _build_control_room() -> void:
+	control_room = ControlRoom.new()
+	add_child(control_room)
+	_tv_wall = TVWall.new()
+	_tv_wall.anchor_left = 0.5
+	_tv_wall.anchor_right = 0.5
+	_tv_wall.offset_left = -490
+	_tv_wall.offset_right = 490
+	_tv_wall.offset_top = TOP + 10
+	_tv_wall.add_theme_stylebox_override("panel", _flat(Color(0.05, 0.05, 0.09, 0.97), Vox.LAVENDER.darkened(0.3), 3, 14))
+	_game_root.add_child(_tv_wall)
+	_tv_wall.setup(control_room)
+	_tv_wall.closed.connect(toggle_control_room)
+	_tv_wall.picked.connect(_on_feed_picked)
+	_tv_wall.watch_changed.connect(_sync_watching)
+	control_room.alarm.connect(func(f: Dictionary):
+		var why: String = tr("no answer") if f.level == "off" else ", ".join(f.sum.get("worst", []).slice(0, 2))
+		toast(tr("ALARM in %s: %s") % [f.name, why], false))
+	control_room.changed.connect(_sync_badge)
+	_cr_badge = _button("", toggle_control_room, "DangerButton")
+	_cr_badge.anchor_left = 1.0
+	_cr_badge.anchor_right = 1.0
+	_cr_badge.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_cr_badge.offset_right = -10
+	_cr_badge.offset_top = TOP + 6
+	_cr_badge.visible = false
+	_cr_badge.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	_game_root.add_child(_cr_badge)
+	K8s.connection_changed.connect(func(_st, _d): control_room.sync_feeds())
+	control_room.sync_feeds()
+	_sync_watching()
+
+
+func toggle_control_room() -> void:
+	_tv_wall.visible = not _tv_wall.visible
+	if _tv_wall.visible:
+		_tv_wall.move_to_front()
+		control_room.sync_feeds()
+	_sync_watching()
+
+
+func _sync_watching() -> void:
+	control_room.set_watching(_tv_wall.visible or Settings.watch_clusters)
+
+
+func _sync_badge() -> void:
+	var r := control_room.ringing()
+	_cr_badge.visible = not r.is_empty() and not _tv_wall.visible
+	if not r.is_empty():
+		var names := ", ".join(r.map(func(f): return f.name))
+		_cr_badge.text = (tr("ALARM: %s  [I]") % names) if r.size() == 1 else (tr("%d CLUSTERS IN ALARM  [I]") % r.size())
+		_cr_badge.tooltip_text = names
+
+
+## A TV clicked: go to that cluster (the one on screen just closes the room).
+func _on_feed_picked(f: Dictionary) -> void:
+	toggle_control_room()
+	if control_room.is_live(f):
+		return
+	if f.get("demo", "") != "":
+		K8s.start_demo(f.demo)
+	else:
+		K8s.connect_bridge(f.url, f.token, f.context)
+	toast(tr("Connecting to %s ...") % f.name)
 
 
 func set_level_title(t: String) -> void:
@@ -2475,7 +2552,7 @@ func _build_menu() -> void:
 		["ENGINE ROOM", func(): level_requested.emit("engine")], ["LIBRARY", func(): level_requested.emit("library")],
 		["BANK", func(): level_requested.emit("bank")], ["SEARCH", toggle_search],
 		["KUBI", toggle_kubi], ["WATCH", toggle_watch], ["MAP", toggle_map], ["MISSIONS", toggle_missions],
-		["ALARMS", toggle_alarms], ["BUILD", open_build], ["CHAOS", toggle_chaos], ["TERMINAL", toggle_terminal],
+		["ALARMS", toggle_alarms], ["CONTROL ROOM", toggle_control_room], ["BUILD", open_build], ["CHAOS", toggle_chaos], ["TERMINAL", toggle_terminal],
 		["LEGEND", toggle_legend], ["STATS", toggle_stats], ["FIRST PERSON", func(): fpv_requested.emit()],
 		["JETPACK", func(): jetpack_requested.emit()], ["SOUND", toggle_volume], ["RADIO", toggle_radio], ["VIEW", toggle_view],
 		["EXIT", func(): disconnect_requested.emit()]]
@@ -4828,7 +4905,7 @@ func close_modals() -> bool:
 	if editor.visible:
 		editor.request_close()
 		return true
-	for p in [_confirm_panel, _build_panel, _gh_panel, _upd_panel, _guide_panel, _map_panel, _logs_panel, _view_panel, _vol_panel, _alarm_panel, _search_panel, _legend, kubi, watch]:
+	for p in [_confirm_panel, _build_panel, _gh_panel, _upd_panel, _guide_panel, _map_panel, _logs_panel, _view_panel, _vol_panel, _alarm_panel, _tv_wall, _search_panel, _legend, kubi, watch]:
 		if p.visible:
 			p.visible = false
 			_sync_view()
@@ -5432,6 +5509,9 @@ func _process(delta: float) -> void:
 		_banner.modulate.a = clampf(_banner_t, 0.0, 1.0)
 		if _banner_t <= 0.0:
 			_banner.visible = false
+	if _cr_badge and _cr_badge.visible:
+		_cr_blink += delta
+		_cr_badge.modulate.a = 1.0 if fmod(_cr_blink, 1.0) < 0.6 else 0.45
 	_perf_t += delta
 	if _perf_t > 0.5 and _perf_label:
 		_perf_t = 0.0

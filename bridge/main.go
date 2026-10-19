@@ -176,6 +176,7 @@ func main() {
 	mux.HandleFunc("POST /api/kubeconfig", hub.auth(hub.handleAddKubeconfig))
 	mux.HandleFunc("DELETE /api/kubeconfig", hub.auth(hub.handleDeleteKubeconfig))
 	mux.HandleFunc("GET /api/state", hub.cluster((*Bridge).handleState))
+	mux.HandleFunc("GET /api/summary", hub.cluster((*Bridge).handleSummary))
 	mux.HandleFunc("GET /api/ws", hub.cluster((*Bridge).handleWS))
 	mux.HandleFunc("GET /api/logs", hub.cluster((*Bridge).handleLogs))
 	mux.HandleFunc("POST /api/action", hub.cluster((*Bridge).handleAction))

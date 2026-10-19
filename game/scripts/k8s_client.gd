@@ -235,6 +235,37 @@ func check_context(url: String, tok: String, ctx: String, cb: Callable) -> void:
 			cb.call(true, ""), 40.0)
 
 
+## A cluster's health in a few numbers, for the CONTROL ROOM. Bridges older
+## than /api/summary send the whole state, summed up here.
+## cb(ok, summary or error; "loading..." while the bridge still lists it)
+func fetch_summary(url: String, tok: String, ctx: String, cb: Callable) -> void:
+	var q := "?context=%s" % ctx.uri_encode() if ctx != "" else ""
+	var u := normalize_url(url)
+	var got := func(ok: bool, data, whole: bool) -> bool:
+		if not ok:
+			return false
+		if data.get("loading", false):
+			cb.call(false, "loading: " + str(data.get("error", "")))
+		elif data.has("error") or not data.has("nodes"):
+			cb.call(false, str(data.get("error", "no answer")))
+		else:
+			cb.call(true, ControlRoom.summarize_state(data) if whole else data)
+		return true
+	_http_to(u, tok, HTTPClient.METHOD_GET, "/api/summary" + q, "", func(ok: bool, data):
+		if got.call(ok, data, false):
+			return
+		if not str(data).begins_with("HTTP 404"):
+			cb.call(false, str(data))
+			return
+		_http_to(u, tok, HTTPClient.METHOD_GET, "/api/state" + q, "", func(ok2: bool, data2):
+			if not got.call(ok2, data2, true):
+				cb.call(false, str(data2)), 40.0), 15.0)
+
+
+func demo_scenario() -> String:
+	return _mock.scenario if _mock else ""
+
+
 func start_demo(scenario := "shop") -> void:
 	disconnect_all()
 	mode = Mode.DEMO

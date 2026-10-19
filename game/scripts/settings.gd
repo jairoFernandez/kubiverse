@@ -37,6 +37,7 @@ var fast_day := false
 var weather := "cluster"      # cluster (health) | real (a city, Open-Meteo) | off
 var weather_city := ""
 var servers: Array = []   # [{name, url, token, context}]
+var watch_clusters := false  # CONTROL ROOM: keep checking every saved cluster with the wall closed
 var bridge_port := 28088  # native: port of the bridge the game starts (LocalBridge.DEFAULT_PORT)
 var music_volume := 0.5
 var sfx_volume := 0.8
@@ -121,6 +122,7 @@ func load_file() -> void:
 		weather = cf.get_value("ui", "weather", weather)
 		weather_city = cf.get_value("ui", "weather_city", weather_city)
 		servers = cf.get_value("servers", "list", servers)
+		watch_clusters = cf.get_value("servers", "watch", watch_clusters)
 		bridge_port = int(cf.get_value("servers", "bridge_port", bridge_port))
 		music_volume = cf.get_value("audio", "music", music_volume)
 		sfx_volume = cf.get_value("audio", "sfx", sfx_volume)
@@ -192,6 +194,7 @@ func save() -> void:
 	cf.set_value("ui", "weather", weather)
 	cf.set_value("ui", "weather_city", weather_city)
 	cf.set_value("servers", "list", servers)
+	cf.set_value("servers", "watch", watch_clusters)
 	cf.set_value("servers", "bridge_port", bridge_port)
 	cf.set_value("audio", "music", music_volume)
 	cf.set_value("audio", "sfx", sfx_volume)

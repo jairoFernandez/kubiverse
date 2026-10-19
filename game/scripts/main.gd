@@ -370,6 +370,9 @@ func _screenshot_and_quit(path: String) -> void:
 			hud.toggle_view()
 		if arg == "--sound":  # the radio window open
 			hud.toggle_radio()
+		if arg == "--control-room":  # the wall of TVs open
+			hud.toggle_control_room()
+			await get_tree().create_timer(1.5).timeout  # every TV tuned in
 		if arg.begins_with("--radio="):  # tuned to station N (an online one gets time to play)
 			if "--tv" in OS.get_cmdline_user_args():
 				Settings.radio_video = true  # with the TV, for YouTube
@@ -2004,6 +2007,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					hud.open_logs(e.data)
 			KEY_F: _blast()
 			KEY_U: hud.toggle_radio()
+			KEY_I: hud.toggle_control_room()
 			KEY_BRACKETLEFT: hud.radio_step(-1)
 			KEY_BRACKETRIGHT: hud.radio_step(1)
 			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6:

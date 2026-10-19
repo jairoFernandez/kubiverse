@@ -9,6 +9,21 @@ signal lang_changed
 const LANGS := {"en": "English", "es": "Español"}
 
 const ES := {
+	"Acknowledge the alarms: no siren until a cluster goes bad again": "Reconocer las alarmas: sin sirena hasta que un cluster vuelva a fallar",
+	"Keep watching when closed": "Seguir vigilando con la sala cerrada",
+	"Check every saved cluster in the background and sound the alarm": "Revisa cada cluster guardado en segundo plano y hace sonar la alarma",
+	"No saved clusters yet. Save them in the connect screen (CONNECT + SAVE) and they show up here, one TV each.": "Aún no hay clusters guardados. Guárdalos en la pantalla de conexión (CONECTAR + GUARDAR) y aparecen aquí, una TV cada uno.",
+	"Click a screen to go to that cluster. [I] opens and closes this room.": "Haz clic en una pantalla para ir a ese cluster. [I] abre y cierra esta sala.",
+	"NO SIGNAL": "SIN SEÑAL",
+	"TUNING...": "SINTONIZANDO...",
+	"nodes %d/%d   pods %d": "nodos %d/%d   pods %d",
+	"bad %d   waiting %d   alerts %d": "mal %d   esperando %d   alertas %d",
+	"no answer": "no responde",
+	"ALARM in %s: %s": "ALARMA en %s: %s",
+	"ALARM: %s  [I]": "ALARMA: %s  [I]",
+	"%d CLUSTERS IN ALARM  [I]": "%d CLUSTERS EN ALARMA  [I]",
+	"CONTROL ROOM": "SALA DE CONTROL",
+	"SILENCE": "SILENCIAR",
 	"Port %d is used by another program: try another port.": "El puerto %d lo usa otro programa: prueba otro puerto.",
 	"The station refused to play here (%s)": "La emisora no quiso sonar aquí (%s)",
 	"No other YouTube channel: add more links (or a playlist) in the radio": "No hay otro canal de YouTube: añade más enlaces (o una playlist) en la radio",
