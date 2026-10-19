@@ -38,6 +38,21 @@ var kind_locked := false
 var team_user := ""
 ## Party guest (invitation code): read-only, changes go to the host.
 var guest := false
+## Routes a party guest may call, only with GET (guestRoutes in
+## bridge/party.go): the bridge refuses the rest, so a guest doesn't ask.
+const GUEST_ROUTES := ["/api/version", "/api/whoami", "/api/state", "/api/summary",
+	"/api/ws", "/api/play", "/api/pod", "/api/logs", "/api/obs", "/api/series", "/api/rollout", "/api/cani"]
+## The bridge said who we are (/api/whoami): the start-up requests and the
+## cluster kind wait for it, so a guest never asks for the host's routes.
+var _whoami_done := false
+## The bridge took our token as an invitation code (stays so when the party
+## is left: the connection is still a guest's).
+var _invited := false
+
+
+## Whether this connection is a party guest's (the relay or the bridge said so).
+func is_guest_conn() -> bool:
+	return guest or _invited
 
 ## Port-forwards: [{id, kind, ns, name, port, pod, target, local, url,
 ## bytes_in, bytes_out, conns, total, status, error}]
@@ -194,6 +209,7 @@ func connect_bridge(url: String, tok: String, ctx := "") -> void:
 	base_url = normalize_url(url)
 	token = tok.strip_edges()
 	context = ctx.strip_edges()
+	_invited = false  # /api/whoami says it again on connecting
 	_open_ws()
 
 
@@ -292,6 +308,7 @@ func disconnect_all() -> void:
 		_mock.queue_free()
 		_mock = null
 	_ws_last_state = -1
+	_whoami_done = false
 	mode = Mode.OFFLINE
 	state = {}
 	_kind_key = ""
@@ -339,8 +356,7 @@ func _process(delta: float) -> void:
 		match st:
 			WebSocketPeer.STATE_OPEN:
 				connection_changed.emit("online", base_url)
-				refresh_obs()
-				github_status()
+				_who_am_i()
 			WebSocketPeer.STATE_CLOSED:
 				var reason := _ws.get_close_reason()
 				if was == WebSocketPeer.STATE_OPEN:
@@ -493,7 +509,32 @@ func kind_key() -> String:
 	return "%s|%s" % [base_url, state.get("context", context)]
 
 
+## On connecting: who the bridge says we are (team user, party guest), then
+## what a start asks for. A guest only gets the read-only routes.
+func _who_am_i() -> void:
+	_whoami_done = false
+	_http(HTTPClient.METHOD_GET, "/api/whoami", "", func(ok: bool, data):
+		if mode != Mode.BRIDGE:
+			return
+		var me: Dictionary = data if ok and typeof(data) == TYPE_DICTIONARY else {}
+		_invited = bool(me.get("guest", false))
+		if _invited:
+			guest = true
+		var was := team_user
+		team_user = str(me.get("user", "")) if bool(me.get("team", false)) else ""
+		if team_user != was:
+			team_user_changed.emit(team_user)
+		_whoami_done = true
+		refresh_obs()
+		if not is_guest_conn():
+			github_status()
+		if not state.is_empty():
+			_resolve_kind())
+
+
 func _resolve_kind() -> void:
+	if mode == Mode.BRIDGE and not _whoami_done:
+		return  # _who_am_i() comes back here
 	var key := kind_key()
 	if key == _kind_key:
 		return
@@ -508,11 +549,8 @@ func _resolve_kind() -> void:
 	cluster_kind = str(Settings.cluster_kinds.get(key, ""))
 	if cluster_kind != "":
 		cluster_kind_changed.emit(cluster_kind)
-	_http(HTTPClient.METHOD_GET, "/api/whoami", "", func(ok: bool, data):
-		var was := team_user
-		team_user = str(data.get("user", "")) if ok and typeof(data) == TYPE_DICTIONARY and bool(data.get("team", false)) else ""
-		if team_user != was:
-			team_user_changed.emit(team_user))
+	if is_guest_conn():
+		return  # the host decides the kind; a guest's changes go to the host anyway
 	var ctx := str(state.get("context", context))
 	_http(HTTPClient.METHOD_GET, "/api/kind?context=" + ctx.uri_encode() + _q(false), "", func(ok: bool, data):
 		if kind_key() != key:
@@ -1037,7 +1075,20 @@ func _http(method: int, path: String, body: String, cb: Callable) -> void:
 	_http_to(base_url, token, method, path, body, cb)
 
 
+## Whether a party guest may send this request (the bridge refuses the rest).
+static func guest_may(method: int, path: String) -> bool:
+	return method == HTTPClient.METHOD_GET and path.get_slice("?", 0) in GUEST_ROUTES
+
+
 func _http_to(url: String, tok: String, method: int, path: String, body: String, cb: Callable, timeout := 20.0) -> void:
+	if is_guest_conn() and url == base_url and not guest_may(method, path):
+		cb.call_deferred(false, "guests can only watch and play: changes are made by the host")
+		return
+	_send(url, tok, method, path, body, cb, timeout)
+
+
+## Sends one request (tests/test_guest_client.gd replaces it to see what goes out).
+func _send(url: String, tok: String, method: int, path: String, body: String, cb: Callable, timeout: float) -> void:
 	var req := HTTPRequest.new()
 	req.timeout = timeout
 	add_child(req)

@@ -155,7 +155,11 @@ func guestFrom(ctx context.Context) (invite, bool) {
 // overwritten). It writes the refusal itself and returns nil then.
 func asGuest(w http.ResponseWriter, r *http.Request, in invite) *http.Request {
 	if r.Method != http.MethodGet || !guestRoutes[r.URL.Path] {
-		http.Error(w, "guests can only watch and play: changes are made by the host", http.StatusForbidden)
+		// JSON like every other refusal, so the game parses it instead of
+		// choking on plain text.
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"ok": false, "guest": true, "error": "guests can only watch and play: changes are made by the host",
+		})
 		return nil
 	}
 	r = r.Clone(context.WithValue(r.Context(), guestKey{}, in))
