@@ -97,6 +97,8 @@ var machines := {}                        # engine level: component key -> Engin
 var _tokens: Array = []                   # engine level: work orders travelling between machines
 var _in_flight := 0
 var districts: Array = []                 # plant: [{district, rect, title, sub, color, ground}]
+var cabinets := {}                        # arcade level: game id -> ArcadeCabinet
+var arcade_exit := "plant"                # arcade level: where its elevator goes back up to
 var gate: IngressGate                     # hall: row of pods without a line {pos, count, done, owners}
 
 var _static: Node3D
@@ -201,6 +203,8 @@ func level_title() -> String:
 		return tr("LIBRARY (storage)")
 	if level == "bank":
 		return tr("BANK (secrets)")
+	if level == "arcade":
+		return "KUBIVERSE: " + tr("UNDERGROUND")
 	if level.begins_with("pod:"):
 		return tr(Look.v("hall")) % current_ns() + "  >  " + tr("POD %s") % pod_key().get_slice("/", 1)
 	if level.begins_with("helm:"):
@@ -230,6 +234,7 @@ func all_entities() -> Array:
 	out.append_array(tunnels.values())
 	out.append_array(capsules.values())
 	out.append_array(machines.values())
+	out.append_array(cabinets.values())
 	if engine_hall and is_instance_valid(engine_hall):
 		out.append(engine_hall)
 	for p in pods.values():
@@ -245,6 +250,7 @@ func find_entity(kind: String, key: String) -> Entity:
 		"forward": return tunnels.get(key)
 		"container": return capsules.get(key.get_slice("/", 2))
 		"engine": return machines.get(key)
+		"cabinet": return cabinets.get(key)
 		"engine_hall": return engine_hall if engine_hall and is_instance_valid(engine_hall) else null
 		"namespace": return buildings.get(key)
 		"node": return islands.get(key)
@@ -284,6 +290,7 @@ func set_level(l: String) -> void:
 	home = null
 	engine_hall = null
 	machines.clear()
+	cabinets.clear()
 	for t in _tokens:
 		t.node.queue_free()
 	_tokens.clear()
@@ -314,6 +321,8 @@ func set_level(l: String) -> void:
 	_layout_sig = ""
 	if not state.is_empty():
 		apply_state(state)
+	elif l == "arcade":
+		_apply_arcade()   # needs no cluster: it is under it
 	level_changed.emit(level)
 
 
@@ -339,6 +348,8 @@ func apply_state(s: Dictionary) -> void:
 		_apply_library(s)
 	elif level == "bank":
 		_apply_bank(s)
+	elif level == "arcade":
+		_apply_arcade()
 	elif level.begins_with("helm:"):
 		_apply_helm(s, current_ns())
 	else:
@@ -381,12 +392,16 @@ func _door_text(d: Dictionary) -> String:
 	return tr(parts[0]) % parts[1] if parts.size() > 1 else tr(parts[0])
 
 
-## Door within reach of p, or {}.
+## The closest door within reach of p, or {}.
 func door_near(p: Vector3, reach := 1.8) -> Dictionary:
+	var best := {}
+	var best_d := reach
 	for d in doors:
-		if Vector2(d.pos.x - p.x, d.pos.z - p.z).length() < reach:
-			return d
-	return {}
+		var dist := Vector2(d.pos.x - p.x, d.pos.z - p.z).length()
+		if dist < best_d:
+			best_d = dist
+			best = d
+	return best
 
 
 # ---------------------------------------------------------------- physics
@@ -919,6 +934,128 @@ func _apply_bank(s: Dictionary) -> void:
 	for k in configs.keys():
 		if not cseen.has(k):
 			_drop(configs, k, "configs")
+
+
+# ---------------------------------------------------------------- arcade
+
+## KUBIVERSE: UNDERGROUND: a cave under the cluster with a cabinet per
+## minigame along the back wall (ArcadeHall), glowing mushrooms and the
+## elevator back up. In front of each cabinet a door "arcade:<id>": E there
+## (or a click on the cabinet) brings its screen to the front (main).
+func _apply_arcade() -> void:
+	var fl := ArcadeHall.ROOM
+	if not _begin_static("arcade"):
+		return
+	_add_walk(fl)
+	block_h = ArcadeHall.CAB_HEIGHT
+	var c := fl.get_center()
+	var rock := Color("2a2238")
+	var rock_hi := Color("3a3050")
+	Vox.box(_static, Vector3(fl.size.x, 0.4, fl.size.y), Vector3(c.x, -0.2, c.y), Color("15101e"))
+	# Arcade carpet: dark checks with neon specks.
+	var rng := Vox.rng_for("underground")
+	for zi in int(fl.size.y / 2.0):
+		for xi in int(fl.size.x / 2.0):
+			if (xi + zi) % 2 == 0:
+				Vox.box(_static, Vector3(2.0, 0.02, 2.0), Vector3(fl.position.x + 1.0 + xi * 2.0, 0.01, fl.position.y + 1.0 + zi * 2.0), Color("231a35"), 0.0, false)
+	var neon := [Vox.PINK, Vox.BLUE, Vox.YELLOW, Vox.GREEN, Color("c98bff")]
+	for i in 40:
+		var p := Vector3(rng.randf_range(fl.position.x + 0.5, fl.end.x - 0.5), 0.03, rng.randf_range(fl.position.y + 2.5, fl.end.y - 0.5))
+		Vox.box(_static, Vector3(0.16, 0.02, 0.16), p, neon[i % neon.size()], 1.5, false)
+	# Rock walls: tall at the back and on the left (the camera looks from
+	# the front right), a low ledge on the other sides.
+	Vox.box(_static, Vector3(fl.size.x + 1.2, 4.4, 0.8), Vector3(c.x, 2.2, fl.position.y - 0.4), rock)
+	Vox.box(_static, Vector3(0.8, 4.4, fl.size.y), Vector3(fl.position.x - 0.4, 2.2, c.y), rock)
+	Vox.box(_static, Vector3(0.6, 0.5, fl.size.y), Vector3(fl.end.x + 0.3, 0.25, c.y), rock)
+	Vox.box(_static, Vector3(fl.size.x + 1.2, 0.5, 0.6), Vector3(c.x, 0.25, fl.end.y + 0.3), rock)
+	for i in 16:   # bumps on the walls
+		var w := rng.randf_range(0.6, 1.6)
+		Vox.box(_static, Vector3(w, rng.randf_range(0.5, 1.4), 0.4), Vector3(rng.randf_range(fl.position.x, fl.end.x), rng.randf_range(0.6, 4.0), fl.position.y + 0.1), rock_hi)
+		Vox.box(_static, Vector3(0.4, rng.randf_range(0.5, 1.4), w), Vector3(fl.position.x + 0.1, rng.randf_range(0.6, 4.0), rng.randf_range(fl.position.y, fl.end.y)), rock_hi)
+	# Stalactites hanging over the top of the walls.
+	for i in 12:
+		var x := fl.position.x + 0.6 + i * (fl.size.x - 1.2) / 11.0
+		for j in 3:
+			Vox.box(_static, Vector3(0.5 - j * 0.14, 0.3, 0.5 - j * 0.14), Vector3(x, 4.25 - j * 0.3 - (i % 3) * 0.2, fl.position.y + 0.2), rock_hi)
+	# Stalagmites in the corners.
+	for corner in [Vector2(fl.position.x + 0.8, fl.position.y + 0.8), Vector2(fl.end.x - 0.8, fl.position.y + 0.8), Vector2(fl.position.x + 0.8, fl.end.y - 0.8)]:
+		for j in 4:
+			Vox.box(_static, Vector3(0.9 - j * 0.2, 0.45, 0.9 - j * 0.2), Vector3(corner.x, 0.22 + j * 0.45, corner.y), rock_hi)
+		blockers.append(Rect2(corner.x - 0.45, corner.y - 0.45, 0.9, 0.9))
+	# Glowing mushrooms along the walls.
+	for i in 14:
+		var along := rng.randf()
+		var p: Vector3
+		if i % 2 == 0:
+			p = Vector3(fl.position.x + 0.5, 0, lerpf(fl.position.y + 1.5, fl.end.y - 1.0, along))
+		else:
+			p = Vector3(lerpf(fl.position.x + 1.5, fl.end.x - 1.0, along), 0, fl.end.y - 0.4)
+		var hue := Color.from_hsv(0.5 + rng.randf() * 0.35, 0.7, 1.0)
+		var h := rng.randf_range(0.25, 0.6)
+		Vox.box(_static, Vector3(0.1, h, 0.1), p + Vector3(0, h * 0.5, 0), Color("d8d0c0"), 0.0, false)
+		Vox.box(_static, Vector3(0.4, 0.14, 0.4), p + Vector3(0, h + 0.07, 0), hue, 2.0, false)
+	# The neon sign standing on top of the back wall.
+	var sign_z := fl.position.y - 0.2
+	Vox.box(_static, Vector3(15.0, 3.2, 0.2), Vector3(0, 6.0, sign_z - 0.15), Color("120c1a"))
+	Vox.box(_static, Vector3(15.0, 0.12, 0.12), Vector3(0, 7.6, sign_z), Vox.PINK, 2.5, false)
+	Vox.box(_static, Vector3(15.0, 0.12, 0.12), Vector3(0, 4.4, sign_z), Vox.PINK, 2.5, false)
+	for t in [["KUBIVERSE:", 7.0, 40, Vox.BLUE], ["UNDERGROUND", 5.6, 96, Vox.PINK]]:
+		var lb := Label3D.new()
+		lb.text = t[0]
+		lb.font_size = t[2]
+		lb.pixel_size = 0.02
+		lb.modulate = t[3]
+		lb.outline_size = 12
+		lb.outline_modulate = Color("1a0a20")
+		lb.position = Vector3(0, t[1], sign_z + 0.1)
+		_static.add_child(lb)
+	var sign_light := OmniLight3D.new()
+	sign_light.light_color = Vox.PINK
+	sign_light.light_energy = 1.2
+	sign_light.omni_range = 7.0
+	sign_light.position = Vector3(0, 4.6, sign_z + 2.0)
+	_static.add_child(sign_light)
+	# In the middle: a lit ring on the carpet and two benches to watch from.
+	for i in 16:
+		var a := i * TAU / 16.0
+		Vox.box(_static, Vector3(0.5, 0.03, 0.5), Vector3(cos(a) * 2.6, 0.03, 0.4 + sin(a) * 1.8), Vox.BLUE if i % 2 == 0 else Vox.PINK, 1.2, false)
+	for x in [-6.5, 6.5]:
+		Vox.box(_static, Vector3(2.4, 0.18, 0.7), Vector3(x, 0.5, 1.6), Color("5a3a6a"))
+		for lx in [-1.0, 1.0]:
+			Vox.box(_static, Vector3(0.16, 0.42, 0.5), Vector3(x + lx, 0.21, 1.6), Color("2a2238"))
+		blockers.append(Rect2(x - 1.2, 1.25, 2.4, 0.7))
+		blocker_heights[blockers[-1]] = 0.6
+	# A change machine by the left wall: coins for the cabinets.
+	Vox.box(_static, Vector3(0.9, 2.0, 1.2), Vector3(fl.position.x + 0.6, 1.0, -1.0), Color("3a4a6a"))
+	Vox.box(_static, Vector3(0.06, 0.5, 0.7), Vector3(fl.position.x + 1.07, 1.4, -1.0), Vox.YELLOW, 1.5, false)
+	Vox.box(_static, Vector3(0.06, 0.2, 0.3), Vector3(fl.position.x + 1.07, 0.7, -1.0), Vox.ORANGE, 2.0, false)
+	blockers.append(Rect2(fl.position.x + 0.15, -1.6, 0.9, 1.2))
+	# The cabinets, a lit rug in front of each.
+	var spots := ArcadeHall.layout(ArcadeHall.GAMES.size())
+	ArcadeHall.load_best()
+	for i in spots.size():
+		var g: Dictionary = ArcadeHall.GAMES[i]
+		var pos: Vector3 = spots[i]
+		var cab := ArcadeCabinet.new()
+		cab.world = self
+		cab.position = pos
+		cab.target = pos
+		_entities.add_child(cab)
+		cab.setup(g, int(ArcadeHall.best.get(g.id, 0)))
+		cabinets[g.id] = cab
+		var foot := ArcadeHall.footprint(pos)
+		blockers.append(foot)
+		var front := ArcadeHall.front_of(pos)
+		Vox.box(_static, Vector3(1.3, 0.04, 0.9), front + Vector3(0, 0.02, -0.1), Color(g.color).darkened(0.5), 0.4, false)
+		doors.append({"pos": front, "to": "arcade:" + g.id, "text": "PLAY [E]" if ArcadeHall.playable(g.id) else "OUT OF ORDER"})
+	# The elevator back up.
+	var ex := ArcadeHall.EXIT
+	for x in [-1.2, 1.2]:
+		Vox.box(_static, Vector3(0.2, 2.6, 0.2), ex + Vector3(x, 1.3, 0.6), Color("6c7280"))
+	Vox.box(_static, Vector3(2.6, 0.24, 0.24), ex + Vector3(0, 2.7, 0.6), Color("6c7280"))
+	Vox.box(_static, Vector3(0.5, 0.16, 0.1), ex + Vector3(0, 2.7, 0.75), Vox.GREEN, 2.0, false)
+	_add_door(ex, arcade_exit, "back to the surface", Vox.YELLOW)
+	spawn = ArcadeHall.SPAWN
 
 
 ## Where the i-th of n trays sits: rows of up to four, centered in the vault
@@ -3033,8 +3170,14 @@ func labels(player_pos: Vector3) -> Array:
 		if workshop.get("archived", 0) > 0:
 			out.append({"pos": workshop.archive_pos, "text": tr("ARCHIVE: %d finished pods") % workshop.archived,
 				"sub": tr("not drawn (VIEW > show finished pods). Ask Kubi how to clean them"), "color": Vox.SILVER, "big": false})
+	for cb in cabinets.values():
+		out.append({"pos": cb.anchor(), "text": cb.label_text(), "sub": _hint(cb, cb.label_sub()), "color": cb.label_color(), "big": true, "entity": cb})
 	var dn := door_near(player_pos, 3.0)
-	if not dn.is_empty():
+	if not dn.is_empty() and str(dn.to).begins_with("arcade:"):
+		var cab: ArcadeCabinet = cabinets.get(str(dn.to).substr(7))
+		var blurb := tr(str(ArcadeHall.game(str(dn.to).substr(7)).get("blurb", ""))).replace("\n", " ")
+		out.append({"pos": dn.pos + Vector3(0, 1.6, 0), "text": _door_text(dn), "sub": blurb, "color": cab.color if cab else Vox.YELLOW, "big": true})
+	elif not dn.is_empty():
 		out.append({"pos": dn.pos + Vector3(0, 1.2, 0), "text": "E: " + _door_text(dn), "sub": "", "color": Vox.YELLOW, "big": false})
 	if level == "power" and etcd_members.size() > 1:
 		var n := etcd_members.size()

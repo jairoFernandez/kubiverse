@@ -98,6 +98,7 @@ test-game:
 	$(call godot_test,120,res://tests/test_control_room.gd,ok)
 	$(call godot_test,120,res://tests/test_startup_bar.gd,ok)
 	$(call godot_test,120,res://tests/test_kubeconfig_input.gd,ok)
+	$(call godot_test,120,res://tests/test_arcade.gd,ok)
 
 ## Existing tests and baselines only get stronger (see CONTRIBUTING.md):
 ## what this branch changes since main; CI checks the pushed / PR range.
@@ -209,4 +210,4 @@ readme-shots: game-import
 	$(SHOT) --shot=$(CURDIR)/docs/pod.png --enter-pod=shop --inspect-container
 	$(SHOT) --shot=$(CURDIR)/docs/library.png --level=library --zoom=40
 	$(SHOT) --shot=$(CURDIR)/docs/bank.png --level=bank --zoom=34
-	$(SHOT) --shot=$(CURDIR)/docs/underground.png --underground
+	$(SHOT) --shot=$(CURDIR)/docs/underground.png --underground=near

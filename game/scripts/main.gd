@@ -11,12 +11,16 @@ const DRAG_THRESHOLD := 6.0  # px before a click becomes a drag
 const ZOOM_MIN := 10.0
 const ZOOM_MAX := 70.0         # desktop; touch screens can zoom out twice as far
 
-const LEVEL_ZOOM := {"plant": 34.0, "power": 38.0, "engine": 40.0, "library": 26.0, "bank": 26.0}
+const LEVEL_ZOOM := {"plant": 34.0, "power": 38.0, "engine": 40.0, "library": 26.0, "bank": 26.0, "arcade": 22.0}
+const ARCADE_LEAN_ZOOM := 7.0   # the camera leans into a cabinet before its screen comes to the front
 
 var world: World
 var player: Player
 var hud: Hud
 var underground: Underground   # the hidden arcade (↑ ↑ ↓ ↓ ← →, then START)
+var _arcade_back := Vector3.INF   # where the player typed the code: the elevator brings them back there
+var _arcade_zoom := 22.0          # the room's zoom while a cabinet's screen is in front
+var _arcade_walk := ""            # clicked cabinet: play it once the walk there ends
 var missions: Missions
 
 var _vpc: SubViewportContainer
@@ -211,6 +215,8 @@ func _ready() -> void:
 	underground.alarm_clicked.connect(func(a: Dictionary):
 		if str(a.get("kind", "")) != "":
 			hud.goto_requested.emit(a.kind, a.key, a.ns))
+	underground.entered.connect(_enter_arcade)
+	underground.left_machine.connect(_left_cabinet)
 	add_child(underground)
 	hud.disconnect_requested.connect(func():
 		_need_spawn = true
@@ -411,14 +417,19 @@ func _screenshot_and_quit(path: String) -> void:
 					await get_tree().process_frame
 				print("PROMPT armed=", underground.code.armed(), " visible=", underground._prompt.visible, " text=", underground._prompt.text, " rect=", underground._prompt.get_global_rect())
 				continue
-			underground.open(what != "descend")
-			var ids := ["whack", "snake", "rally", "laser"]
-			if what in ids:
-				underground._sel = ids.find(what)
-				underground.start_game(what)
+			# The room (or the ride down to it), or a cabinet's screen in front.
+			underground.go_down(what == "descend")
+			hud._terminal.visible = false
+			hud._mission_panel.visible = false
+			await get_tree().create_timer(2.6 if what == "descend" else 0.6).timeout
+			var game := "whack" if what in ["over", "near"] else what
+			if world.cabinets.has(game):
+				player.teleport(ArcadeHall.front_of(world.cabinets[game].position) + Vector3(0, 0, 0.3))
+				await get_tree().create_timer(0.6).timeout
+			if game in ArcadeHall.PLAYABLE and what != "near":
+				_play_cabinet(game)
 				await get_tree().create_timer(3.0).timeout
-			elif what == "over":
-				underground.start_game("whack")
+			if what == "over":
 				underground._game.score = 180
 				underground.game_over("TIME'S UP", "demo")
 			await get_tree().create_timer(1.0).timeout
@@ -1287,8 +1298,14 @@ func _on_level_changed(l: String) -> void:
 		g.queue_free()
 	_ghosts.clear()
 	player.teleport(world.spawn)
+	underground.in_room = l == "arcade"
+	if l == "arcade":
+		hud.banner("KUBIVERSE: " + tr("UNDERGROUND"), tr("A cabinet per game. Walk up to one and press E (or click it) to play; ESC brings you back to the room. The elevator goes back up."))
 	# Coming back to the plant: stand in front of the door you came out of.
-	if l == "plant" and _prev_level == "engine" and world.engine_hall:
+	if _prev_level == "arcade" and _arcade_back != Vector3.INF and l == world.arcade_exit:
+		player.teleport(_arcade_back)
+		_arcade_back = Vector3.INF
+	elif l == "plant" and _prev_level == "engine" and world.engine_hall:
 		player.teleport(_standable_near(world.engine_hall.door_position() + Vector3(0, 0, 1.8)))
 	elif l == "plant" and _prev_level in ["library", "bank"]:
 		var lm: Landmark = world.library_bld if _prev_level == "library" else world.bank_bld
@@ -1529,6 +1546,11 @@ func _process(delta: float) -> void:
 	_update_zone()
 	_kubi_tick(delta)
 	_follow_path(delta)
+	if _arcade_walk != "" and _path.is_empty():
+		var cab: ArcadeCabinet = world.cabinets.get(_arcade_walk)
+		_arcade_walk = ""
+		if cab and world.door_near(player.global_position, ArcadeHall.REACH).get("to", "") == "arcade:" + cab.key:
+			_play_cabinet(cab.key)
 	# Zoomed out, the pixel-art gets finer so things stay readable.
 	var want_px := _pixel_scale()
 	if want_px != _px:
@@ -1772,6 +1794,16 @@ func _update_daylight(delta: float) -> void:
 		hud.clock_text += "  " + tr(weather.kind.to_upper())
 	Sfx.set_night(1.0 - day)
 	_stars.visible = day < 0.35
+	if world.level == "arcade":
+		# Under the cluster: no sky, the neon does the lighting.
+		_sun.visible = false
+		_moon.light_energy = 0.45
+		_env.background_color = Color("07050c")
+		_env.fog_light_color = _env.background_color
+		_env.fog_density = 0.0
+		_env.ambient_light_color = Color("9a86d0")
+		_env.ambient_light_energy = 1.1
+		_stars.visible = false
 
 
 func _mouse_px() -> Vector2:
@@ -1931,7 +1963,9 @@ func _unhandled_input(event: InputEvent) -> void:
 						_dragging = false
 						_press_button = 0
 						return
-					if not _dragging and _press_button == MOUSE_BUTTON_LEFT and not hud.is_modal_open():
+					if not _dragging and _press_button == MOUSE_BUTTON_LEFT and not hud.is_modal_open() and _hovered is ArcadeCabinet:
+						_click_cabinet(_hovered)
+					elif not _dragging and _press_button == MOUSE_BUTTON_LEFT and not hud.is_modal_open():
 						hud.inspect(_hovered)
 						if Settings.click_to_move and not _fpv:
 							_click_move(event.position * _ui, _hovered)
@@ -2043,6 +2077,8 @@ func _fpv_input(event: InputEvent) -> bool:
 			return true
 		if event.double_click and _hovered is FactoryBuilding:
 			_go_level("power" if _hovered.is_power else "ns:" + _hovered.key)
+		elif _hovered is ArcadeCabinet:
+			_click_cabinet(_hovered)
 		else:
 			hud.inspect(_hovered)
 		return true
@@ -2192,7 +2228,7 @@ func _auto_doors() -> void:
 		var goal: Vector3 = _path[-1]
 		if Vector2(goal.x - near.pos.x, goal.z - near.pos.z).length() > 1.5:
 			return
-	if _door_armed and not to.begins_with("warp:") and not to.begins_with("term:") and player.on_ground():
+	if _door_armed and not to.begins_with("warp:") and not to.begins_with("term:") and not to.begins_with("arcade:") and player.on_ground():
 		_door_armed = false
 		Sfx.play("door")
 		_go_level(to)
@@ -2219,6 +2255,9 @@ func _interact() -> void:
 		if str(d.to).begins_with("warp:"):
 			_warp(d.pos - Vector3(0, 0, 0.9), str(d.to).substr(5))
 			return
+		if str(d.to).begins_with("arcade:"):
+			_play_cabinet(str(d.to).substr(7))
+			return
 		if str(d.to).begins_with("term:"):
 			var nn := str(d.to).substr(5)
 			var isl: NodeIsland = world.islands.get(nn)
@@ -2239,6 +2278,62 @@ func _interact() -> void:
 		_go_level("pod:" + e.key)
 		return
 	hud.inspect(_nearest(3.5, ""))
+
+
+## The code was typed on the surface: down to the arcade room (the elevator
+## brings you back to where you stood).
+func _enter_arcade() -> void:
+	if world.level == "arcade":
+		return
+	_arcade_back = player.global_position
+	world.arcade_exit = world.level if not world.level.begins_with("pod:") else "plant"
+	_go_level("arcade")
+
+
+## E in front of a cabinet: the camera leans in and its screen comes to the
+## front. The one that is out of order says so.
+func _play_cabinet(id: String) -> void:
+	var cab: ArcadeCabinet = world.cabinets.get(id)
+	var from := Rect2()
+	if cab:
+		var cam := _active_cam()
+		var c := cam.unproject_position(cab.screen_pos()) * _px / _ui
+		var edge := cam.unproject_position(cab.screen_pos() + Vector3(0.9, 0, 0)) * _px / _ui
+		var w := maxf(8.0, absf(edge.x - c.x) * 2.0)
+		from = Rect2(c - Vector2(w, w * 1.2) * 0.5, Vector2(w, w * 1.2))
+	_cancel_path()
+	if not underground.play(id, from):
+		hud.toast(tr("OUT OF ORDER") + ": " + tr("more games are coming"), false)
+		return
+	_arcade_zoom = _zoom_target
+	_zoom_target = ARCADE_LEAN_ZOOM
+	if cab:
+		_pan = cab.screen_pos() - player.global_position - Vector3(0, 0.8, 0)
+
+
+## Back from a cabinet's screen to the room: the camera steps back and the
+## cabinet shows the new high score.
+func _left_cabinet() -> void:
+	_zoom_target = _arcade_zoom
+	_pan = Vector3.ZERO
+	for cab in world.cabinets.values():
+		cab.data["best"] = int(ArcadeHall.best.get(cab.key, 0))
+
+
+## A click on a cabinet: play it if you are in front of it, otherwise walk
+## there first.
+func _click_cabinet(cab: ArcadeCabinet) -> void:
+	var front := ArcadeHall.front_of(cab.position)
+	if world.door_near(player.global_position, ArcadeHall.REACH).get("to", "") == "arcade:" + cab.key:
+		_play_cabinet(cab.key)
+		return
+	var path := _find_path(player.global_position, front)
+	if path.is_empty():
+		return
+	_path = path
+	_path_stuck = 0.0
+	_show_click_marker(path[-1])
+	_arcade_walk = cab.key
 
 
 var _weapon := 0

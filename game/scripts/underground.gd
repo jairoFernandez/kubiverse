@@ -1,34 +1,28 @@
 class_name Underground
 extends CanvasLayer
 ## KUBIVERSE: UNDERGROUND, the hidden arcade under the cluster (↑ ↑ ↓ ↓ ← →
-## and type START). A pixel screen of 320×180 scaled to the window, with a
-## cabinet per minigame (scripts/arcade). Nothing here touches the cluster,
-## but the cluster's alarms stay in sight on the bar at the top, next to the
-## way back up.
+## and type START). The way down is a short elevator ride drawn here; down
+## there is a 3D room (the World level "arcade", see ArcadeHall) with a
+## cabinet per minigame (scripts/arcade). Walking up to one and pressing E
+## brings its screen to the front: a pixel screen of 320×180 in the
+## cabinet's frame, scaled to the window; ESC goes back to the room. Nothing
+## here touches the cluster, but its alarms stay in sight on the bar at the
+## top.
 
-signal closed
+signal entered             # the ride down started: build the room under it
+signal left_machine        # back from a cabinet's screen to the room
 signal alarm_clicked(alarm: Dictionary)   # go up and look at it
 
 const W := 320
 const H := 180
-const BAR := 12            # the system bar above the screen (virtual px)
-const SAVE := "user://underground.cfg"
-const GAMES := [
-	{"id": "whack", "title": "WHACK-A-POD", "color": Color(0.95, 0.32, 0.3),
-		"blurb": "Restart the crashing pods.\nDon't hit the healthy ones."},
-	{"id": "snake", "title": "OOM SNAKE", "color": Color(0.6, 0.42, 1.0),
-		"blurb": "Eat requests, grow your memory.\nDon't bite yourself."},
-	{"id": "rally", "title": "KUBE RALLY", "color": Color(0.3, 0.8, 1.0),
-		"blurb": "Race down the service mesh.\nDodge the traffic, grab the coins."},
-	{"id": "laser", "title": "LASER TAG", "color": Color(0.35, 0.9, 0.45),
-		"blurb": "Tag the rogue pods in the server room.\nHide behind the racks."},
-	{"id": "soon", "title": "???", "color": Color(0.38, 0.38, 0.44),
-		"blurb": "Out of order.\nMore games are coming."},
-]
-const CAB_W := 52.0
-const CAB_STEP := 62.0
-const CAB_X0 := 10.0
-const CAB_Y := 54.0
+const BAR := 12            # the system bar above the cabinet (virtual px)
+const SIDE := 10           # the cabinet's sides around the screen
+const MARQUEE := 18        # its lit title above the screen
+const PANEL := 16          # its control panel below
+const ZOOM_T := 0.35       # seconds the screen takes to come to the front
+const DESCEND_T := 2.2
+const GAMES := ArcadeHall.GAMES
+const PLAYABLE := ArcadeHall.PLAYABLE
 const BG := Color(0.04, 0.035, 0.07)
 const ROCK := Color(0.12, 0.1, 0.16)
 const ROCK_HI := Color(0.2, 0.16, 0.26)
@@ -39,16 +33,17 @@ const GREEN := Color(0.35, 0.9, 0.45)
 const RED := Color(1.0, 0.3, 0.3)
 
 var font: Font
-var player: Node          # frozen while we are down here
+var player: Node          # frozen while a screen is in front
 var alarms: Callable      # () -> Array of {sev, text, kind, key, ns}: the HUD's alarms
+var in_room := false      # set by main: down here the code does nothing
 var code := SecretCode.new()
 
 var _view: Control
 var _prompt: Label        # on the surface: "> STA_" while START is typed
-var _state := ""          # descend, hub, play, over
+var _state := ""          # "", descend, zoom, play, over
 var _t := 0.0
-var _sel := 0
-var _best := {}
+var _id := ""             # the cabinet being played
+var _from := Rect2()      # its screen on the window, where the zoom starts
 var _game: ArcadeGame
 var _new_best := false
 var _over_title := ""
@@ -91,37 +86,73 @@ func _ready() -> void:
 		_rocks.append([_rng.randf_range(0, W), _rng.randf_range(6, 16), _rng.randf_range(8, 26), top])
 	for i in 9:
 		_shrooms.append([_rng.randf_range(8, W - 8), _rng.randf_range(160, 172), _rng.randf()])
-	var cfg := ConfigFile.new()
-	if cfg.load(SAVE) == OK:
-		for g in GAMES:
-			_best[g.id] = int(cfg.get_value("best", g.id, 0))
+	ArcadeHall.load_best()
 
 
+## A screen is in front (or the ride down is playing): it takes the input.
 func is_open() -> bool:
 	return _view.visible
 
 
-func open(skip_descent := false) -> void:
+func state() -> String:
+	return _state
+
+
+func playing_id() -> String:
+	return _id
+
+
+## The code was typed: the ride down (or straight to the room). `entered`
+## tells main to build the room under it.
+func go_down(animate := true) -> void:
 	if font:
 		_prompt.add_theme_font_override("font", font)
 	_prompt.visible = false
-	_view.visible = true
-	_state = "hub" if skip_descent else "descend"
-	_t = 0.0
 	_pops.clear()
+	if animate:
+		_view.visible = true
+		_state = "descend"
+		_t = 0.0
+		if player:
+			player.set("frozen", true)
+		Sfx.play("fall")
+	elif player:
+		player.set("frozen", false)
+	entered.emit()
+
+
+## Walked up to cabinet `id` and pressed E: its screen comes to the front,
+## growing from `from` (where it is on the window; empty: no zoom). False if
+## that cabinet can't be played.
+func play(id: String, from := Rect2()) -> bool:
+	if not id in PLAYABLE:
+		Sfx.play("error")
+		return false
+	if font:
+		_prompt.add_theme_font_override("font", font)
+	_id = id
+	_from = from
+	_view.visible = true
 	if player:
 		player.set("frozen", true)
-	Sfx.play("jingle" if skip_descent else "fall")
+	start_game(id)
+	if from.has_area():
+		_state = "zoom"
+	return true
 
 
-func close() -> void:
+## Back from the screen to the room.
+func leave() -> void:
+	if not _view.visible:
+		return
 	_view.visible = false
 	_state = ""
 	_game = null
+	_id = ""
 	if player:
 		player.set("frozen", false)
 	Sfx.play("door")
-	closed.emit()
+	left_machine.emit()
 
 
 func start_game(id: String) -> void:
@@ -133,8 +164,8 @@ func start_game(id: String) -> void:
 		"laser": g = ArcadeLaser.new()
 		_:
 			Sfx.play("error")
-			pop(tr("OUT OF ORDER"), Vector2(CAB_X0 + _sel * CAB_STEP + CAB_W / 2, 50), DIM)
 			return
+	_id = id
 	g.ug = self
 	g.start()
 	_game = g
@@ -151,15 +182,8 @@ func game_over(title: String, why: String) -> void:
 	_t = 0.0
 	_over_title = title
 	_over_why = why
-	var id: String = GAMES[_sel].id
-	var score := _game.score
-	if score > int(_best.get(id, 0)):
-		_best[id] = score
+	if ArcadeHall.record(_id, _game.score):
 		_new_best = true
-		var cfg := ConfigFile.new()
-		cfg.load(SAVE)
-		cfg.set_value("best", id, score)
-		cfg.save(SAVE)
 		Sfx.play("jingle")
 	else:
 		Sfx.play("pod_death")
@@ -179,13 +203,25 @@ func _process(delta: float) -> void:
 		elif _prompt.visible:
 			_prompt.text = "> " + code.typed() + ("_" if fmod(Time.get_ticks_msec() / 1000.0, 0.8) < 0.5 else " ")
 		return
+	tick(delta)
+	_view.queue_redraw()
+
+
+## One step of time (the tests call it without a window).
+func tick(delta: float) -> void:
 	_t += delta
 	match _state:
 		"descend":
-			if _t > 2.2:
-				_state = "hub"
-				_t = 0.0
+			if _t > DESCEND_T:
+				_view.visible = false
+				_state = ""
+				if player:
+					player.set("frozen", false)
 				Sfx.play("jingle")
+		"zoom":
+			if _t > ZOOM_T:
+				_state = "play"
+				_t = 0.0
 		"play":
 			_game.t += delta
 			_game.tick(delta)
@@ -193,7 +229,6 @@ func _process(delta: float) -> void:
 		p.t += delta
 		p.pos.y -= delta * 18.0
 	_pops = _pops.filter(func(p): return p.t < 1.0)
-	_view.queue_redraw()
 
 
 # --- input -------------------------------------------------------------------
@@ -206,40 +241,35 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		_click(_to_virtual(_view.get_local_mouse_position()))
 		return
-	if not (event is InputEventKey and event.pressed and not event.echo):
-		return
-	var k: int = event.keycode
+	if event is InputEventKey and event.pressed and not event.echo:
+		key(event.keycode)
+
+
+## A key while a screen is in front.
+func key(k: int) -> void:
 	match _state:
 		"descend":
 			if k in [KEY_ENTER, KEY_SPACE, KEY_ESCAPE]:
 				_t = 99.0
-		"hub":
-			if k in [KEY_LEFT, KEY_A]:
-				_sel = (_sel + GAMES.size() - 1) % GAMES.size()
-				Sfx.play("click")
-			elif k in [KEY_RIGHT, KEY_D]:
-				_sel = (_sel + 1) % GAMES.size()
-				Sfx.play("click")
-			elif k in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]:
-				start_game(GAMES[_sel].id)
-			elif k == KEY_ESCAPE:
-				close()
+		"zoom":
+			if k == KEY_ESCAPE:
+				leave()
 		"play":
 			if k == KEY_ESCAPE:
-				_state = "hub"
-				_game = null
+				leave()
 			else:
 				_game.key(k)
 		"over":
 			if k in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE] and _t > 0.5:
-				start_game(GAMES[_sel].id)
+				start_game(_id)
 			elif k == KEY_ESCAPE:
-				_state = "hub"
+				leave()
 
 
-## On the surface: watch for the code (not while typing in a text field).
+## On the surface: watch for the code (not while typing in a text field,
+## and not down in the room).
 func _listen(event: InputEvent) -> void:
-	if not (event is InputEventKey and event.pressed and not event.echo):
+	if in_room or not (event is InputEventKey and event.pressed and not event.echo):
 		return
 	var focus := get_viewport().gui_get_focus_owner()
 	if focus is LineEdit or focus is TextEdit:
@@ -256,7 +286,7 @@ func _listen(event: InputEvent) -> void:
 	_prompt.visible = code.armed()
 	_prompt.text = "> " + code.typed() + "_"
 	if done:
-		open()
+		go_down()
 	elif was_armed and not code.armed():
 		Sfx.play("miss")
 	elif code.armed():
@@ -264,31 +294,26 @@ func _listen(event: InputEvent) -> void:
 
 
 func _click(p: Vector2) -> void:
-	# The system bar: the way up, and the alarm on show.
-	if p.y < 0:
-		if _surface_rect().has_point(p):
-			close()
+	if _state == "descend":
+		_t = 99.0
+		return
+	# The system bar: the way back to the room, and the alarm on show.
+	if p.y < -MARQUEE:
+		if _back_rect().has_point(p):
+			leave()
 		elif _alarm_rect().has_point(p):
 			var list := _alarms()
 			if not list.is_empty():
 				var a: Dictionary = list[_alarm_i % list.size()]
-				close()
+				leave()
 				alarm_clicked.emit(a)
 		return
 	match _state:
-		"hub":
-			for i in GAMES.size():
-				if Rect2(CAB_X0 + i * CAB_STEP, CAB_Y, CAB_W, 92).has_point(p):
-					if i == _sel:
-						start_game(GAMES[i].id)
-					else:
-						_sel = i
-						Sfx.play("click")
 		"play":
 			_game.click(p)
 		"over":
 			if _t > 0.5:
-				start_game(GAMES[_sel].id)
+				start_game(_id)
 
 
 func _alarms() -> Array:
@@ -298,83 +323,161 @@ func _alarms() -> Array:
 
 # --- drawing -----------------------------------------------------------------
 
-## Pixels per virtual pixel: the screen plus the bar fit the window.
+## Virtual size of what is drawn: the bare screen while going down, the
+## cabinet (and the bar above it) when playing.
+func _extent() -> Vector2:
+	if _state == "descend":
+		return Vector2(W, H)
+	return Vector2(W + SIDE * 2, BAR + MARQUEE + H + PANEL)
+
+
+## Pixels per virtual pixel: everything fits the window.
 func _scale() -> float:
 	var s := _view.size
-	return maxf(1.0, floorf(minf(s.x / W, s.y / (H + BAR)) * 2.0) / 2.0)
+	var e := _extent()
+	return maxf(1.0, floorf(minf(s.x / e.x, s.y / e.y) * 2.0) / 2.0)
 
 
 ## Screen position of the virtual (0, 0): the top-left of the game screen.
 func _origin() -> Vector2:
 	var k := _scale()
-	return ((_view.size - Vector2(W, H + BAR) * k) / 2.0 + Vector2(0, BAR * k)).floor()
+	var off := Vector2.ZERO if _state == "descend" else Vector2(SIDE, BAR + MARQUEE)
+	return ((_view.size - _extent() * k) / 2.0 + off * k).floor()
 
 
 func _to_virtual(p: Vector2) -> Vector2:
 	return (p - _origin()) / _scale()
 
 
-func _surface_rect() -> Rect2:
-	return Rect2(0, -BAR, 74, BAR)
+## The whole cabinet, in virtual pixels.
+func _cabinet_rect() -> Rect2:
+	return Rect2(-SIDE, -MARQUEE, W + SIDE * 2, MARQUEE + H + PANEL)
+
+
+func _back_rect() -> Rect2:
+	return Rect2(0, -MARQUEE - BAR, 74, BAR)
 
 
 func _alarm_rect() -> Rect2:
-	return Rect2(78, -BAR, W - 78, BAR)
+	return Rect2(78, -MARQUEE - BAR, W - 78, BAR)
+
+
+func _color() -> Color:
+	var g := ArcadeHall.game(_id)
+	return g.color if not g.is_empty() else DIM
 
 
 func _paint() -> void:
 	var v := _view
+	if _state == "zoom":
+		_paint_zoom()
+		return
 	v.draw_rect(Rect2(Vector2.ZERO, v.size), Color.BLACK)
 	v.draw_set_transform(_origin(), 0.0, Vector2.ONE * _scale())
 	v.draw_rect(Rect2(0, 0, W, H), BG)
 	match _state:
 		"descend": _paint_descend()
-		"hub": _paint_hub()
 		"play": _game.paint(v)
 		"over":
 			_game.paint(v)
 			_paint_over()
-	if _state == "play" and _game.help() != "":
-		text(_game.help(), Vector2(160, 177), 6, DIM, true)
 	for p in _pops:
 		text(p.text, p.pos, 8, Color(p.color, 1.0 - p.t), true)
 	# CRT scanlines
 	for y in range(0, H, 2):
 		v.draw_rect(Rect2(0, y, W, 1), Color(0, 0, 0, 0.18))
-	# Whatever a game drew off the screen goes under the black.
-	v.draw_rect(Rect2(-W, -H, W * 3, H - BAR), Color.BLACK)
-	v.draw_rect(Rect2(-W, H, W * 3, H), Color.BLACK)
-	v.draw_rect(Rect2(-W, -BAR, W, H + BAR), Color.BLACK)
-	v.draw_rect(Rect2(W, -BAR, W, H + BAR), Color.BLACK)
-	_paint_system_bar()
+	if _state == "descend":
+		_mask(Rect2(0, 0, W, H))
+	else:
+		_paint_cabinet()
+		_paint_system_bar()
 	v.draw_set_transform(Vector2.ZERO)
 
 
-## Always on top: the way back up and the cluster's alarms.
+## Whatever a game drew outside `keep` goes under the black.
+func _mask(keep: Rect2) -> void:
+	var v := _view
+	var big := 2000.0
+	v.draw_rect(Rect2(keep.position.x - big, keep.position.y - big, big * 2 + keep.size.x, big), Color.BLACK)
+	v.draw_rect(Rect2(keep.position.x - big, keep.end.y, big * 2 + keep.size.x, big), Color.BLACK)
+	v.draw_rect(Rect2(keep.position.x - big, keep.position.y, big, keep.size.y), Color.BLACK)
+	v.draw_rect(Rect2(keep.end.x, keep.position.y, big, keep.size.y), Color.BLACK)
+
+
+## The frame around the screen: the cabinet you walked up to.
+func _paint_cabinet() -> void:
+	var v := _view
+	var c := _color()
+	var cab := _cabinet_rect()
+	_mask(cab)
+	var body := Color("221a30")
+	var side := c.darkened(0.45)
+	v.draw_rect(Rect2(cab.position, Vector2(SIDE, cab.size.y)), side)
+	v.draw_rect(Rect2(W, cab.position.y, SIDE, cab.size.y), side)
+	for x in [-SIDE + 3, W + SIDE - 4]:
+		v.draw_rect(Rect2(x, cab.position.y + 4, 1, cab.size.y - 8), Color(c.lightened(0.3), 0.8))
+	# Marquee: the game's name, lit.
+	var glow := 0.85 + 0.15 * sin(Time.get_ticks_msec() / 300.0)
+	v.draw_rect(Rect2(0, -MARQUEE, W, MARQUEE), c.darkened(0.15) * glow)
+	v.draw_rect(Rect2(0, -MARQUEE, W, 1), c.lightened(0.4))
+	var g := ArcadeHall.game(_id)
+	text(str(g.get("title", "")), Vector2(W / 2.0, -5), 12, TEXT, true)
+	# Bezel and control panel.
+	v.draw_rect(Rect2(-1, -1, W + 2, 1), body)
+	v.draw_rect(Rect2(-1, H, W + 2, 1), body)
+	v.draw_rect(Rect2(0, H, W, PANEL), Color("2e2840"))
+	v.draw_rect(Rect2(0, H, W, 1), Color("3d3555"))
+	v.draw_circle(Vector2(14, H + 8), 4, Color(0.9, 0.2, 0.2))
+	v.draw_circle(Vector2(W - 34, H + 8), 3, GOLD)
+	v.draw_circle(Vector2(W - 24, H + 8), 3, Color(0.3, 0.6, 1.0))
+	v.draw_circle(Vector2(W - 14, H + 8), 3, GREEN)
+	var help := _game.help() if _game and _state == "play" else ""
+	if help != "":
+		text(help, Vector2(W / 2.0, H + 11), 6, DIM, true)
+
+
+## The screen comes to the front: from where it stood in the room to the
+## middle of the window.
+func _paint_zoom() -> void:
+	var v := _view
+	var k := ease(clampf(_t / ZOOM_T, 0.0, 1.0), 0.4)
+	var s := _scale()
+	var to := Rect2(_origin() + _cabinet_rect().position * s, _cabinet_rect().size * s)
+	var r := Rect2(_from.position.lerp(to.position, k), _from.size.lerp(to.size, k))
+	v.draw_rect(Rect2(Vector2.ZERO, v.size), Color(0, 0, 0, k))
+	var c := _color()
+	v.draw_rect(r, c.darkened(0.45))
+	var inner := Rect2(r.position + Vector2(SIDE, MARQUEE) / _cabinet_rect().size * r.size, Vector2(W, H) / _cabinet_rect().size * r.size)
+	v.draw_rect(inner, BG.lerp(c, 0.25 * (1.0 - k)))
+	v.draw_rect(Rect2(r.position, Vector2(r.size.x, inner.position.y - r.position.y)), c.darkened(0.15))
+
+
+## Always on top: the way back to the room and the cluster's alarms.
 func _paint_system_bar() -> void:
 	var v := _view
-	v.draw_rect(Rect2(0, -BAR, W, BAR), Color(0.02, 0.02, 0.04))
-	var sr := _surface_rect()
-	var hover := sr.has_point(_to_virtual(v.get_local_mouse_position()))
-	v.draw_rect(sr.grow(-1), Color(0.3, 0.28, 0.42) if hover else Color(0.18, 0.16, 0.26))
-	text("^ " + tr("SURFACE") + " (ESC)", Vector2(sr.get_center().x, -3), 6, TEXT, true)
+	var y := -MARQUEE - 3
+	v.draw_rect(Rect2(0, -MARQUEE - BAR, W, BAR), Color(0.02, 0.02, 0.04))
+	var br := _back_rect()
+	var hover := br.has_point(_to_virtual(v.get_local_mouse_position()))
+	v.draw_rect(br.grow(-1), Color(0.3, 0.28, 0.42) if hover else Color(0.18, 0.16, 0.26))
+	text("< " + tr("ARCADE") + " (ESC)", Vector2(br.get_center().x, y), 6, TEXT, true)
 	var list := _alarms()
 	var ar := _alarm_rect()
 	if list.is_empty():
-		v.draw_rect(Rect2(ar.position.x + 2, -8, 4, 4), GREEN)
-		text(tr("cluster OK: no alarms"), Vector2(ar.position.x + 10, -3), 6, GREEN)
+		v.draw_rect(Rect2(ar.position.x + 2, y - 5, 4, 4), GREEN)
+		text(tr("cluster OK: no alarms"), Vector2(ar.position.x + 10, y), 6, GREEN)
 		return
 	var bad := int(list[0].sev) >= 3
 	_alarm_i = int(Time.get_ticks_msec() / 3000.0)
 	var a: Dictionary = list[_alarm_i % list.size()]
 	var c := RED if int(a.sev) >= 3 else GOLD
 	var blink := bad and fmod(Time.get_ticks_msec() / 1000.0, 1.0) < 0.5
-	v.draw_rect(Rect2(ar.position.x + 1, -BAR + 1, 50, BAR - 2), Color(c, 0.35 if blink else 0.2))
-	text(tr("ALARMS %d") % (alarms.call() as Array).size(), Vector2(ar.position.x + 26, -3), 6, c, true)
+	v.draw_rect(Rect2(ar.position.x + 1, ar.position.y + 1, 50, BAR - 2), Color(c, 0.35 if blink else 0.2))
+	text(tr("ALARMS %d") % (alarms.call() as Array).size(), Vector2(ar.position.x + 26, y), 6, c, true)
 	var msg := str(a.text)
 	if msg.length() > 46:
 		msg = msg.substr(0, 43) + "..."
-	text(msg, Vector2(ar.position.x + 56, -3), 6, TEXT)
+	text(msg, Vector2(ar.position.x + 56, y), 6, TEXT)
 
 
 ## Text at the screen's resolution (a pixel font scaled below its size turns
@@ -410,7 +513,7 @@ func paint_bar(title: String, right: String) -> void:
 
 func _paint_descend() -> void:
 	var v := _view
-	var k := minf(_t / 2.2, 1.0)
+	var k := minf(_t / DESCEND_T, 1.0)
 	# Elevator shaft walls rushing up.
 	for i in 14:
 		var y := fmod(i * 16.0 - _t * 260.0, H + 16.0)
@@ -448,83 +551,6 @@ func paint_cave() -> void:
 		v.draw_rect(Rect2(m[0] - 2.5, m[1] - 5, 5, 2), c)
 
 
-func _paint_hub() -> void:
-	var v := _view
-	paint_cave()
-	# Title with a colour-cycling shadow.
-	text("KUBIVERSE:", Vector2(160, 16), 8, DIM, true)
-	var hue := fmod(_t * 0.15, 1.0)
-	text("UNDERGROUND", Vector2(161, 35), 16, Color.from_hsv(hue, 0.8, 0.9), true)
-	text("UNDERGROUND", Vector2(160, 34), 16, TEXT, true)
-	for i in GAMES.size():
-		var g: Dictionary = GAMES[i]
-		var sel := i == _sel
-		var x := CAB_X0 + i * CAB_STEP
-		var y := CAB_Y - (2.0 + sin(_t * 6.0) * 1.5 if sel else 0.0)
-		var gc: Color = g.color
-		if sel:
-			v.draw_rect(Rect2(x - 3, y - 3, CAB_W + 6, 98), Color(gc, 0.25 + 0.15 * sin(_t * 5.0)))
-		# Cabinet: marquee, screen, panel, base.
-		v.draw_rect(Rect2(x, y, CAB_W, 92), Color(0.16, 0.14, 0.22))
-		v.draw_rect(Rect2(x + 2, y + 2, CAB_W - 4, 12), gc.darkened(0.2))
-		var title: String = g.title
-		text(title, Vector2(x + CAB_W / 2, y + 11), 6 if title.length() > 4 else 8, TEXT, true)
-		v.draw_rect(Rect2(x + 4, y + 18, CAB_W - 8, 34), Color(0.02, 0.02, 0.04))
-		_paint_attract(g.id, Rect2(x + 5, y + 19, CAB_W - 10, 32))
-		v.draw_rect(Rect2(x + 3, y + 56, CAB_W - 6, 12), Color(0.24, 0.22, 0.3))
-		v.draw_circle(Vector2(x + 12, y + 62), 3, Color(0.9, 0.2, 0.2))
-		v.draw_circle(Vector2(x + 28, y + 62), 2.5, GOLD)
-		v.draw_circle(Vector2(x + 38, y + 62), 2.5, Color(0.3, 0.6, 1.0))
-		v.draw_rect(Rect2(x + 6, y + 70, CAB_W - 12, 22), Color(0.12, 0.1, 0.17))
-		var best := int(_best.get(g.id, 0))
-		if g.id != "soon":
-			text("HI %d" % best, Vector2(x + CAB_W / 2, y + 84), 6, GOLD if best > 0 else DIM, true)
-	var g2: Dictionary = GAMES[_sel]
-	var lines: PackedStringArray = tr(g2.blurb).split("\n")
-	for j in lines.size():
-		text(lines[j], Vector2(160, 162 + j * 8), 6, TEXT, true)
-	text("< >  ENTER", Vector2(W - 6 - 40, 176), 6, DIM)
-
-
-## What each cabinet's screen shows while nobody plays it.
-func _paint_attract(id: String, r: Rect2) -> void:
-	var v := _view
-	match id:
-		"whack":
-			for i in 3:
-				var up := sin(_t * 3.0 + i * 2.1) > 0.3
-				var c := Vector2(r.position.x + 7 + i * 14, r.position.y + 24)
-				v.draw_rect(Rect2(c.x - 5, c.y, 10, 3), Color(0.1, 0.08, 0.1))
-				if up:
-					v.draw_rect(Rect2(c.x - 4, c.y - 8, 8, 8), RED if i != 1 else GREEN)
-		"snake":
-			for i in 8:
-				var a := _t * 2.0 - i * 0.35
-				var p := r.get_center() + Vector2(cos(a) * 13, sin(a * 2.0) * 8)
-				v.draw_rect(Rect2(p.floor(), Vector2(3, 3)), Color(0.6, 0.42, 1.0).lightened(0.3 if i == 0 else 0.0))
-		"rally":
-			v.draw_rect(Rect2(r.position.x + 10, r.position.y, r.size.x - 20, r.size.y), Color(0.13, 0.12, 0.16))
-			for i in 4:
-				var y := r.position.y + fmod(i * 10.0 + _t * 40.0, r.size.y)
-				v.draw_rect(Rect2(r.get_center().x, y, 1, 5), Color(1, 1, 1, 0.3))
-			var cx := r.get_center().x + sin(_t * 2.0) * 7.0
-			v.draw_rect(Rect2(cx - 3, r.end.y - 11, 6, 9), Color(0.3, 0.95, 1.0))
-			var oy := r.position.y + fmod(_t * 25.0, r.size.y)
-			v.draw_rect(Rect2(r.get_center().x + 5, oy, 6, 9), RED)
-		"laser":
-			var a := r.position + Vector2(6, r.size.y / 2)
-			var b := r.end - Vector2(8, r.size.y / 2 + sin(_t * 3.0) * 8.0)
-			v.draw_rect(Rect2(a - Vector2(2, 2), Vector2(4, 4)), Color(0.3, 0.95, 1.0))
-			v.draw_rect(Rect2(b - Vector2(2, 2), Vector2(4, 4)), RED)
-			if fmod(_t, 1.0) < 0.15:
-				v.draw_line(a, b, Color(0.3, 0.95, 1.0), 1.0)
-		_:
-			if fmod(_t, 1.2) < 0.9:
-				text("???", r.get_center() + Vector2(0, 3), 8, DIM, true)
-			for i in 10:
-				v.draw_rect(Rect2(r.position.x + _rng.randf() * r.size.x, r.position.y + _rng.randf() * r.size.y, 1, 1), Color(1, 1, 1, 0.3))
-
-
 func _paint_over() -> void:
 	var v := _view
 	v.draw_rect(Rect2(0, 0, W, H), Color(0, 0, 0, 0.6))
@@ -536,5 +562,5 @@ func _paint_over() -> void:
 	if _new_best and fmod(_t, 0.5) < 0.35:
 		text(tr("NEW HIGH SCORE!"), Vector2(160, 112), 8, GOLD, true)
 	elif not _new_best:
-		text("HI %d" % int(_best.get(GAMES[_sel].id, 0)), Vector2(160, 112), 8, GOLD, true)
+		text("HI %d" % int(ArcadeHall.best.get(_id, 0)), Vector2(160, 112), 8, GOLD, true)
 	text(tr("ENTER: again   ESC: arcade"), Vector2(160, 125), 6, DIM, true)
