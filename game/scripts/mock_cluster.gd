@@ -571,7 +571,33 @@ func pod_detail(ns: String, pod: String) -> Dictionary:
 	return {"ns": ns, "name": pod, "node": p.node, "ip": p.ip, "phase": p.phase, "qos": "Burstable", "service_account": "default",
 		"age": int(p.age), "conditions": [{"type": "Ready", "status": int(p.ready) >= int(p.total)}], "init": init, "containers": ctrs,
 		"volumes": [{"name": "config", "type": "configMap", "source": "%s-config" % wl.get("name", pod)}, {"name": "cache", "type": "emptyDir", "source": ""}],
-		"events": evs, "metrics": true}
+		"events": evs, "metrics": true, "startup": _startup(p, wl, not init.is_empty())}
+
+
+## A believable start-up timeline for the pod (see bridge/startup.go): the
+## same pod always tells the same story, and some workloads are slow on
+## purpose so the tips have something to say.
+func _startup(p: Dictionary, wl: Dictionary, has_init: bool) -> Dictionary:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(str(p.name))
+	var running: bool = p.status == "Running"
+	var sched := rng.randf_range(0.1, 0.8)
+	if wl.get("behaviour", "") == "unschedulable":
+		return {"scheduled": -1, "initialized": -1, "started": -1, "ready": -1, "pull": -1, "pull_bytes": 0, "pulled": 0,
+			"cached": 0, "restarted": false, "ready_delay": 5, "ready_period": 10, "startup_probe": false, "cpu_limit_m": 500}
+	var init := sched + (rng.randf_range(1.5, 4.0) if has_init else 0.0)
+	# One pod in three pulled its image; a fat ML image takes its time.
+	var pulled := rng.randf() < 0.35
+	var big: bool = str(wl.get("image", "")).contains("ml") or p.ns == "ml"
+	var pull := (rng.randf_range(25.0, 70.0) if big else rng.randf_range(2.0, 9.0)) if pulled else 0.0
+	var started := init + pull + rng.randf_range(0.4, 1.2)
+	var delay := 30 if p.ns == "payments" else 5   # payments waits initialDelaySeconds: 30 "just in case"
+	var ready := started + delay + rng.randf_range(0.5, 6.0)
+	return {"scheduled": sched, "initialized": init, "started": started if running else -1.0,
+		"ready": ready if running and int(p.ready) >= int(p.total) else -1.0, "pull": pull,
+		"pull_bytes": (rng.randi_range(900, 2400) if big else rng.randi_range(40, 180)) * 1000000 if pulled else 0,
+		"pulled": 1 if pulled else 0, "cached": 0 if pulled else 1, "restarted": int(p.restarts) > 0,
+		"ready_delay": delay, "ready_period": 10, "startup_probe": false, "cpu_limit_m": 500}
 
 
 func logs(ns: String, pod: String, container: String, previous: bool) -> String:

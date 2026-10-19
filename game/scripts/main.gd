@@ -381,7 +381,13 @@ func _screenshot_and_quit(path: String) -> void:
 				await get_tree().create_timer(14.0).timeout
 				print("RADIO %s '%s' %s video=%s bridge=%s %s err=%s" % [Radio.state, Radio.title, Radio.stats, Radio.video != null, K8s.local.status, K8s.local.url, Radio.error])
 		if arg.begins_with("--level="):
-			_go_level(arg.substr(8))
+			var lv := arg.substr(8)
+			if lv.begins_with("pod:") and not "/" in lv:  # --level=pod:<ns>: its first running pod
+				for p in K8s.state.get("pods", []):
+					if p.ns == lv.substr(4) and p.status == "Running":
+						lv = "pod:%s/%s" % [p.ns, p.name]
+						break
+			_go_level(lv)
 			await get_tree().create_timer(2.5).timeout
 		if arg.begins_with("--lesson="):
 			# The engine room with a lesson open at a step: --lesson=rolling:2
@@ -1271,6 +1277,8 @@ func _go_level(l: String) -> void:
 
 func _on_level_changed(l: String) -> void:
 	_cancel_path()  # the clicked target belonged to the previous level
+	if not l.begins_with("pod:"):
+		hud.set_pod_startup({})
 	var keep := [hud.kubi.visible, hud.watch.visible]
 	hud.close_modals()
 	hud.kubi.visible = keep[0]
@@ -1385,6 +1393,7 @@ func _pod_tick(delta: float) -> void:
 				return
 			if ok:
 				world.set_pod_detail(d)
+				hud.set_pod_startup(d.get("startup", {}))
 				_zoom_target = _pod_zoom()
 			else:
 				hud.toast(tr("This pod is gone: back to the hall."), false)

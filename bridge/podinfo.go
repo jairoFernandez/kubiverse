@@ -30,6 +30,7 @@ type PodDetail struct {
 	Volumes    []VolumeInfo    `json:"volumes"`
 	Events     []EventInfo     `json:"events"`
 	Metrics    bool            `json:"metrics"` // per-container usage available
+	Startup    Startup         `json:"startup"` // where the time went until Ready
 }
 
 type PodCondition struct {
@@ -111,8 +112,10 @@ func (b *Bridge) handlePod(w http.ResponseWriter, r *http.Request) {
 	d := podDetail(p, usage)
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
+	d.Startup = startupTimeline(p, nil)
 	if evs, err := b.cs.CoreV1().Events(ns).List(ctx, metav1.ListOptions{FieldSelector: "involvedObject.name=" + name, Limit: 50}); err == nil {
 		items := evs.Items
+		d.Startup = startupTimeline(p, items)
 		sort.Slice(items, func(i, j int) bool { return eventTime(items[i]).After(eventTime(items[j])) })
 		for i, e := range items {
 			if i == 6 {

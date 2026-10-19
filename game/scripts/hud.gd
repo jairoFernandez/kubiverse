@@ -47,6 +47,7 @@ var control_room: ControlRoom   # watches every saved cluster for the CONTROL RO
 var _tv_wall: TVWall            # the wall of TVs, one per saved cluster
 var _cr_badge: Button           # blinks "ALARM in ..." while a cluster rings
 var _cr_blink := 0.0
+var startup_bar: StartupBar     # inside a pod: where its start-up time went
 var _alarm_list: VBoxContainer
 var _alarms: Array = []
 var _mission_panel: PanelContainer
@@ -1531,6 +1532,15 @@ func _build_level_strip() -> void:
 	h.add_child(_alarm_btn)
 	_build_search()
 	_build_control_room()
+	startup_bar = StartupBar.new()
+	startup_bar.anchor_left = 1.0
+	startup_bar.anchor_right = 1.0
+	startup_bar.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	startup_bar.offset_right = -10
+	startup_bar.offset_top = TOP + 6
+	startup_bar.custom_minimum_size = Vector2(620, 0)
+	startup_bar.add_theme_stylebox_override("panel", _flat(Color(0.05, 0.05, 0.09, 0.88), Vox.LAVENDER.darkened(0.4), 2, 10))
+	_game_root.add_child(startup_bar)
 	# Alarm dropdown
 	_alarm_panel = PanelContainer.new()
 	_alarm_panel.anchor_left = 1.0
@@ -1603,6 +1613,11 @@ func _sync_badge() -> void:
 		var names := ", ".join(r.map(func(f): return f.name))
 		_cr_badge.text = (tr("ALARM: %s  [I]") % names) if r.size() == 1 else (tr("%d CLUSTERS IN ALARM  [I]") % r.size())
 		_cr_badge.tooltip_text = names
+
+
+## Inside a pod: its start-up timeline ({} hides it, outside pods).
+func set_pod_startup(s) -> void:
+	startup_bar.show_startup(s)
 
 
 ## A TV clicked: go to that cluster (the one on screen just closes the room).
