@@ -27,6 +27,7 @@ class Monitor extends Control:
 	var feed: Dictionary = {}
 	var live := false
 	var _flash := 0.0
+	var _redraw_t := 0.0
 
 	func _init() -> void:
 		custom_minimum_size = Vector2(300, 196)
@@ -40,6 +41,13 @@ class Monitor extends Control:
 
 	func _process(delta: float) -> void:
 		_flash += delta
+		_redraw_t -= delta
+		# Only on screen, and at ~20 fps: hidden TVs asking to be redrawn
+		# every frame kept the frame from ever being drawn (frame_post_draw
+		# never came, the --shot captures hung).
+		if _redraw_t > 0.0 or not is_visible_in_tree():
+			return
+		_redraw_t = 0.05
 		var lv: String = feed.get("level", "wait")
 		if lv in ["alarm", "off", "wait"]:
 			queue_redraw()   # flashing, snow, tuning
