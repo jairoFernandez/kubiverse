@@ -99,6 +99,7 @@ test-game:
 	$(call godot_test,120,res://tests/test_startup_bar.gd,ok)
 	$(call godot_test,120,res://tests/test_kubeconfig_input.gd,ok)
 	$(call godot_test,120,res://tests/test_arcade.gd,ok)
+	$(call godot_test,120,res://tests/test_party.gd,ok)
 
 ## Existing tests and baselines only get stronger (see CONTRIBUTING.md):
 ## what this branch changes since main; CI checks the pushed / PR range.

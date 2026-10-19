@@ -207,6 +207,42 @@ func _process(delta: float) -> void:
 		_watch_tick()
 
 
+## Party drill: a bad moment on purpose (a node down and two apps crashing,
+## an ALARM on the control room's scale), and its fix.
+var _drill := {}   # what the drill changed: "node" -> name, workload key -> old behaviour
+
+func drill(on: bool) -> void:
+	if on and _drill.is_empty():
+		var workers := nodes.keys().filter(func(n): return not "control-plane" in nodes[n].get("roles", []) and nodes[n].ready)
+		if not workers.is_empty():
+			_drill["node"] = workers[-1]
+			nodes[workers[-1]].ready = false
+		var apps := workloads.keys().filter(func(k): return workloads[k].kind == "Deployment" and workloads[k].behaviour == "ok")
+		for k in apps.slice(0, 2):
+			_drill[k] = workloads[k].behaviour
+			workloads[k].behaviour = "crash"
+			for p in pods.values():
+				if p._wl == k and p.status == "Running":
+					p.status = "Error"
+					p.ready = 0
+					p._t = 0.0
+		_ev("default", "Node", str(_drill.get("node", "")), "NodeNotReady", "Drill: node stopped posting status", "Warning")
+	elif not on and not _drill.is_empty():
+		for k in _drill:
+			if k == "node":
+				if nodes.has(_drill.node):
+					nodes[_drill.node].ready = true
+			elif workloads.has(k):
+				workloads[k].behaviour = _drill[k]
+				_roll(k, workloads[k])
+		_drill.clear()
+	_dirty = true
+
+
+func drilling() -> bool:
+	return not _drill.is_empty()
+
+
 func _random_chaos() -> void:
 	# Occasionally something happens on its own, like in a real cluster.
 	var running := pods.values().filter(func(p): return p.status == "Running" and not p.deleting)

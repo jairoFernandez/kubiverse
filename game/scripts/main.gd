@@ -22,6 +22,7 @@ var _arcade_back := Vector3.INF   # where the player typed the code: the elevato
 var _arcade_zoom := 22.0          # the room's zoom while a cabinet's screen is in front
 var _arcade_walk := ""            # clicked cabinet: play it once the walk there ends
 var missions: Missions
+var party_view: PartyView     # multiplayer (F4): other players, paintball, shared missions
 
 var _vpc: SubViewportContainer
 var _vp: SubViewport
@@ -248,6 +249,9 @@ func _ready() -> void:
 	add_child(missions)
 	hud.missions = missions
 	missions.progress_changed.connect(hud.refresh_missions)
+	party_view = PartyView.new()
+	add_child(party_view)
+	party_view.setup(self)
 	missions.kubi_found.connect(func(m): hud.toast(tr("Kubi found a new mission: %s") % m.title, false))
 	missions.completed.connect(func(m):
 		Sfx.play("jingle")
@@ -1861,6 +1865,8 @@ func _update_labels() -> void:
 			extra.append({"pos": _kubi.global_position + Vector3(0, 0.7, 0), "text": _kubi.bubble.left(80), "color": _kubi.bubble_color, "big": false})
 		for g in _ghosts.values():
 			extra.append({"pos": g.global_position + Vector3(0, 1.9, 0), "text": g.label, "color": g.color, "big": false, "small": true})
+		if party_view:
+			extra.append_array(party_view.tags())
 		for l in extra:
 			if not cam.is_position_behind(l.pos):
 				l.screen = cam.unproject_position(l.pos) * _px / _ui
@@ -2037,7 +2043,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_N: hud.toggle_minimap()
 			KEY_TAB: _cycle_pods()
 			KEY_H: hud.toggle_system()
-			KEY_C: hud.toggle_chaos()
+			KEY_C:
+				if party_view.active():
+					hud.toast(tr("Chaos mode is off during a party: weapons are paintball"), false)
+				else:
+					hud.toggle_chaos()
+			KEY_F4: party_view.toggle_panel()
 			KEY_B: hud.open_build()
 			KEY_G: hud.toggle_legend()
 			KEY_V: hud.toggle_view()
@@ -2362,6 +2373,11 @@ func _select_weapon(i: int) -> void:
 ## range); only a hit on a real target performs the Kubernetes operation,
 ## at the moment the shot lands.
 func _blast() -> void:
+	if party_view.active():   # paintball: shots only ever hurt players
+		if _cooldown <= 0.0:
+			_cooldown = Weapons.LIST[_weapon].cooldown
+			party_view.fire(Weapons.LIST[_weapon])
+		return
 	if not hud.chaos:
 		hud.toast(tr("Blaster locked. Press C to enable CHAOS MODE."), false)
 		return
@@ -3000,7 +3016,7 @@ func _touch_tick() -> void:
 	player.touch_dir = tc.stick if show else Vector2.ZERO
 	player.touch_up = tc.jump_held and show
 	player.touch_down = tc.down_held and show
-	tc.show_fire = hud.chaos
+	tc.show_fire = hud.chaos or party_view.active()
 	if tc.flying != player.flying:
 		tc.flying = player.flying
 		tc.queue_redraw()

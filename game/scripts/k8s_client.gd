@@ -14,6 +14,7 @@ signal prod_confirm_requested(req: Dictionary)  # a change on a production clust
 signal team_user_changed(user: String)    # team mode: who the bridge acts as
 signal kind_refused(message: String)     # the bridge didn't accept a kind change
 signal forwards_updated(list: Array)    # port-forwards open on the bridge (with traffic counters)
+signal guest_change(req: Dictionary)     # party guest: a change the bridge would refuse (the host applies it)
 
 enum Mode { OFFLINE, BRIDGE, DEMO }
 
@@ -35,6 +36,8 @@ var kind_locked := false
 ## Team mode (bridge in the cluster behind the company login): who we are.
 ## Changes go through as this person, with their RBAC. "" otherwise.
 var team_user := ""
+## Party guest (invitation code): read-only, changes go to the host.
+var guest := false
 
 ## Port-forwards: [{id, kind, ns, name, port, pod, target, local, url,
 ## bytes_in, bytes_out, conns, total, status, error}]
@@ -568,8 +571,18 @@ func is_demo() -> bool:
 	return mode == Mode.DEMO
 
 
+## Demo party: breaks (on) or heals (off) the demo cluster, to show the
+## switch to a shared mission.
+func demo_drill(on: bool) -> void:
+	if _mock:
+		_mock.drill(on)
+
+
 ## Performs a mutating action. req = {action, kind?, ns?, name, replicas?, image?}
 func action(req: Dictionary) -> void:
+	if guest:
+		guest_change.emit(req)
+		return
 	# Production: every change goes through a confirmation that says so.
 	if is_prod() and not prod_ok:
 		prod_confirm_requested.emit(req)
