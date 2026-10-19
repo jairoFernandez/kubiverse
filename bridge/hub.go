@@ -38,6 +38,8 @@ type Hub struct {
 	gh           *githubConn       // GitHub for GitOps (token kept by the bridge)
 	userHeader   string            // team mode: the proxy's user header
 	groupsHeader string
+	invites      *invites // party: codes that let friends in, read-only
+	shareURLs    []string // --lan: the bridge's addresses on the local network
 
 	mu       sync.Mutex
 	clusters map[string]*Bridge
@@ -64,7 +66,7 @@ func defaultDataDir() string {
 
 func newHub(root context.Context, explicit, defaultCtx, dir string, readOnly bool, token string) *Hub {
 	h := &Hub{root: root, explicit: explicit, dir: dir, readOnly: readOnly, token: token,
-		clusters: map[string]*Bridge{}, starting: map[string]chan struct{}{}, errs: map[string]error{}}
+		invites: newInvites(), clusters: map[string]*Bridge{}, starting: map[string]chan struct{}{}, errs: map[string]error{}}
 	h.defaultCtx = defaultCtx
 	if h.defaultCtx == "" {
 		if raw, err := h.defaultRules().Load(); err == nil {
@@ -246,15 +248,22 @@ func (h *Hub) auth(next http.HandlerFunc) http.HandlerFunc {
 			}
 			r = withIdentity(r, id)
 		}
-		if h.token != "" {
-			t := r.Header.Get("X-Bridge-Token")
-			if t == "" {
-				t = r.URL.Query().Get("token")
-			}
-			if t != h.token {
-				http.Error(w, "invalid token", http.StatusUnauthorized)
+		t := r.Header.Get("X-Bridge-Token")
+		if t == "" {
+			t = r.URL.Query().Get("token")
+		}
+		if h.token == "" || t != h.token {
+			// An invitation code (party): a guest, read-only, one cluster.
+			if in, ok := h.invites.valid(t); ok {
+				if r = asGuest(w, r, in); r != nil {
+					next(w, r)
+				}
 				return
 			}
+		}
+		if h.token != "" && t != h.token {
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
 		}
 		next(w, r)
 	}

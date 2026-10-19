@@ -83,6 +83,7 @@ type Bridge struct {
 	diff    stateDiff // what the games have, to send them only the changes
 	clients map[*client]struct{}
 	watch   *watchState
+	party   *party // multiplayer relay (made on first use)
 }
 
 type client struct {
@@ -150,6 +151,10 @@ func main() {
 	}
 
 	hub := newHub(ctx, *kubeconfig, *kubectx, *dataDir, *readOnly, *token)
+	for _, u := range lanURLs { // where friends reach this bridge (without our token)
+		base, _, _ := strings.Cut(u, "/?")
+		hub.shareURLs = append(hub.shareURLs, base)
+	}
 	hub.pol = newPolicy(filepath.Dir(*dataDir), strings.Split(*production, ","))
 	hub.inCluster, hub.userHeader, hub.groupsHeader = *inCluster, *userHeader, *groupsHeader
 	hub.obsFlags = map[string]string{"prometheus": *promURL, "alertmanager": *amURL, "loki": *lokiURL}
@@ -178,6 +183,8 @@ func main() {
 	mux.HandleFunc("GET /api/state", hub.cluster((*Bridge).handleState))
 	mux.HandleFunc("GET /api/summary", hub.cluster((*Bridge).handleSummary))
 	mux.HandleFunc("GET /api/ws", hub.cluster((*Bridge).handleWS))
+	mux.HandleFunc("GET /api/play", hub.cluster((*Bridge).handlePlay))
+	mux.HandleFunc("/api/party/invite", hub.auth(hub.handleInvite))
 	mux.HandleFunc("GET /api/logs", hub.cluster((*Bridge).handleLogs))
 	mux.HandleFunc("POST /api/action", hub.cluster((*Bridge).handleAction))
 	mux.HandleFunc("POST /api/kubectl", hub.cluster((*Bridge).handleKubectl))

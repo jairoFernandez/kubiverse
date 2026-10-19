@@ -112,7 +112,9 @@ func (b *Bridge) kubectlBase(ctx context.Context, timeout string) []string {
 // GET /api/whoami: who the game is acting as.
 func (h *Hub) handleWhoami(w http.ResponseWriter, r *http.Request) {
 	id := identityFrom(r.Context())
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "team": h.userHeader != "", "user": id.User, "groups": id.Groups, "in_cluster": h.inCluster})
+	in, guest := guestFrom(r.Context())
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "team": h.userHeader != "", "user": id.User, "groups": id.Groups, "in_cluster": h.inCluster,
+		"guest": guest, "guest_context": in.Context})
 }
 
 // inClusterKubeconfig writes a kubeconfig for kubectl that points at the
