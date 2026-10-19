@@ -9,6 +9,12 @@ signal lang_changed
 const LANGS := {"en": "English", "es": "Español"}
 
 const ES := {
+	"The browser can't open file paths: use LOAD FILE... or paste the file's content.": "El navegador no puede abrir rutas de archivo: usa CARGAR ARCHIVO... o pega el contenido del archivo.",
+	"%s is a folder: pick the kubeconfig file inside it (usually config).": "%s es una carpeta: elige el archivo kubeconfig dentro (normalmente config).",
+	"There is no file at %s.": "No hay ningún archivo en %s.",
+	"macOS didn't let Kubiverse read %s. Allow it in System Settings > Privacy & Security > Files and Folders (or Full Disk Access), or paste the file's content here.": "macOS no dejó a Kubiverse leer %s. Permítelo en Ajustes del Sistema > Privacidad y seguridad > Archivos y carpetas (o Acceso total al disco), o pega aquí el contenido del archivo.",
+	"Could not read %s (%s). Paste the file's content here instead.": "No se pudo leer %s (%s). Pega aquí el contenido del archivo.",
+	"%s is empty.": "%s está vacío.",
 	"Running but not Ready: its readiness probe doesn't pass yet (check that endpoint and the app's logs).": "Corre pero no está Ready: su readiness probe aún no pasa (revisa ese endpoint y los logs de la app).",
 	"Still starting: the containers are not running yet (see the pod's events).": "Todavía arrancando: los contenedores aún no corren (mira los eventos del pod).",
 	"scheduling": "scheduling",

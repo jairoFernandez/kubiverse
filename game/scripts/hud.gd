@@ -347,6 +347,12 @@ func _ready() -> void:
 		f.hinting = TextServer.HINTING_NONE
 		f.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_DISABLED
 	_theme = _make_theme()
+	# A kubeconfig dropped on the window (native builds) loads into the box.
+	if not OS.has_feature("web"):
+		get_window().files_dropped.connect(func(files: PackedStringArray):
+			if _connect_root and _connect_root.visible and not files.is_empty():
+				_kc_box.visible = true
+				_on_kubeconfig_picked(true, files, 0))
 
 	overlay = LabelOverlay.new()
 	overlay.font = _font
@@ -960,6 +966,21 @@ func _upload_kubeconfig() -> void:
 	if _kc_text.text.strip_edges() == "":
 		_status(tr("Paste the kubeconfig or load its file first."), Vox.RED)
 		return
+	# The path of the file instead of its content: read it here (the bridge
+	# only takes the YAML, and would answer with a parse error).
+	var path := KubeconfigInput.path_in(_kc_text.text)
+	if path != "":
+		if OS.has_feature("web"):
+			_status(tr("The browser can't open file paths: use LOAD FILE... or paste the file's content."), Vox.RED)
+			return
+		var got := KubeconfigInput.read(path)
+		if got.has("error"):
+			_status(got.error, Vox.RED)
+			return
+		_kc_text.text = got.text
+		if name == "":
+			name = KubeconfigInput.name_for(path)
+			_kc_name.text = name
 	if name == "":
 		name = "cluster-%d" % (Settings.servers.size() + 1)
 		_kc_name.text = name
@@ -1038,13 +1059,13 @@ func _on_kubeconfig_picked(ok: bool, paths: PackedStringArray, _filter: int) -> 
 	if not ok or paths.is_empty():
 		return
 	var path := paths[0]
-	var text := FileAccess.get_file_as_string(path)
-	if text == "":
-		_status(tr("Could not read %s") % path, Vox.RED)
+	var got := KubeconfigInput.read(path)
+	if got.has("error"):
+		_status(got.error, Vox.RED)
 		return
-	_kc_text.text = text
+	_kc_text.text = got.text
 	if _kc_name.text == "":
-		_kc_name.text = path.get_file().get_basename().replace(" ", "-")
+		_kc_name.text = KubeconfigInput.name_for(path)
 	_status(tr("File loaded: %s. Now press ADD CLUSTER.") % path.get_file(), Vox.GREEN)
 
 
